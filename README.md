@@ -22,11 +22,30 @@ software-to-hardware compatibility management.
 
 - Ported the Licensing feature from v2: per-software single-select licensing
   offer, shown as a storefront badge next to the product name, selectable in the
-  software create form, and managed in Parameter Center → Licensing Options
-  (`SOFTWARE_LICENSE_OPTIONS` is persisted and covered by state rollback).
+  software create form. Since 2026-07-22 the offers are static (`SW_LICENSE_TYPES`
+  in app.js): First year free (green), N-day free trial (blue, day count entered
+  per product), Free during POC (purple), or Not specified — the former
+  Parameter Center → Licensing Options module was removed.
 - Re-synced all other shared code with v2's latest working tree; the remaining
   differences between the two prototypes are v3's compatibility centralization,
   the permission scaffold, and the separate storage key.
+
+## Official Website field (2026-07-27)
+
+- Software products expose an optional **Official Website** field in the create
+  and edit forms, stored on the existing `officialUrl` property that was
+  previously carried in seed data but never surfaced.
+- The value is normalised on save (`www.example.com` becomes
+  `https://www.example.com`); a filled-in value must parse as an `http`/`https`
+  URL or the form is blocked.
+- Both live previews render it under the storefront action button, showing the
+  domain without the scheme. A blank or still-invalid value
+  keeps a grey placeholder row so the footer never shifts while typing, and the
+  preview stays non-interactive like the rest of the storefront mock-up.
+- The software detail page shows it as a clickable `Website` row in Product
+  Info, or `—` when unset.
+- The storefront action footer no longer carries the "Request a custom quote
+  for this add-on" line.
 
 ## Current policy
 
