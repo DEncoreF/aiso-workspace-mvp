@@ -95,7 +95,7 @@ let PRODUCTS = [
     // === SOFTWARE ===
     {
         id: 'sw1', product_type: 'software', vendor_id: 'v-tpi', vendor_name: 'TPIsoftware Corporation',
-        name: 'digiRunner', brand: 'TPIsoftware', sub_category: 'AI Governance Platform', categories: ['AI Governance Platform', 'Cybersecurity'], display_order: 1,
+        name: 'digiRunner', sub_category: 'AI Governance Platform', categories: ['AI Governance Platform', 'Cybersecurity'], display_order: 1,
         short_description: 'AI Governance Platform for Enhanced Security and Cost Observability',
         status: 'published', created_at: '2025-11-20', updated_at: '2026-03-12',
         tagline: 'AI Governance Platform for Enhanced Security and Cost Observability',
@@ -113,7 +113,7 @@ let PRODUCTS = [
     },
     {
         id: 'sw2', product_type: 'software', vendor_id: 'v-tpi', vendor_name: 'TPIsoftware Corporation',
-        name: 'SysTalk.VIKI', brand: 'TPIsoftware', sub_category: 'Enterprise GenAI Platform', categories: ['Enterprise GenAI Platform', 'Business Applications'], display_order: 2,
+        name: 'SysTalk.VIKI', sub_category: 'Enterprise GenAI Platform', categories: ['Enterprise GenAI Platform', 'Business Applications'], display_order: 2,
         short_description: 'Enterprise Generative AI Application Platform for knowledge management',
         status: 'published', created_at: '2025-10-15', updated_at: '2026-03-10',
         tagline: 'Enterprise Generative AI Application Platform',
@@ -131,12 +131,12 @@ let PRODUCTS = [
     },
     {
         id: 'sw3', product_type: 'software', vendor_id: 'v-tpi', vendor_name: 'TPIsoftware Corporation',
-        name: 'OrientAI Express', brand: 'TPIsoftware', sub_category: 'AI Knowledge & Assistant Platform', categories: ['AI Knowledge & Assistant Platform'], display_order: 3,
+        name: 'OrientAI Express', sub_category: 'AI Knowledge & Assistant Platform', categories: ['AI Knowledge & Assistant Platform'], display_order: 3,
         short_description: 'Agile AI Knowledge & Assistant Platform',
         status: 'draft', created_at: '2026-02-10', updated_at: '2026-03-19',
         tagline: 'Agile AI Knowledge & Assistant Platform',
         sw_category: 'optional',
-        license_offer: 'Other - see appendix',
+        license_offer: 'First year free',
         compatible_hardware: ['hw1', 'hw2'],
         features: [
             'Agile knowledge management with rapid, zero-configuration deployment.',
@@ -150,7 +150,7 @@ let PRODUCTS = [
     },
     {
         id: 'sw4', product_type: 'software', vendor_id: 'v-tpi', vendor_name: 'TPIsoftware Corporation',
-        name: 'digiFlexis', brand: 'TPIsoftware', sub_category: 'BPM Platform', categories: ['BPM Platform'], display_order: 4,
+        name: 'digiFlexis', sub_category: 'BPM Platform', categories: ['BPM Platform'], display_order: 4,
         short_description: 'Business Process Management Platform for Integrated Workflow Automation',
         status: 'draft', created_at: '2026-03-15', updated_at: '2026-03-20',
         tagline: 'Business Process Management Platform for Integrated Workflow Automation',
@@ -168,7 +168,7 @@ let PRODUCTS = [
     },
     {
         id: 'sw5', product_type: 'software', vendor_id: 'v-kdan', vendor_name: 'KDAN',
-        name: 'ComPDF AI', brand: 'KDAN', sub_category: 'Document Processing', categories: ['Document Processing'], display_order: 5,
+        name: 'ComPDF AI', sub_category: 'Document Processing', categories: ['Document Processing'], display_order: 5,
         short_description: 'Intelligent Document Processing & Automation Platform',
         status: 'published', created_at: '2026-01-05', updated_at: '2026-03-15',
         tagline: 'Intelligent Document Processing & Automation Platform',
@@ -186,7 +186,7 @@ let PRODUCTS = [
     },
     {
         id: 'sw6', product_type: 'software', vendor_id: 'v-tpi', vendor_name: 'TPIsoftware Corporation',
-        name: 'GreenSwift', brand: 'TPIsoftware', sub_category: 'ESG / Carbon Management', categories: ['ESG / Carbon Management'], display_order: 6,
+        name: 'GreenSwift', sub_category: 'ESG / Carbon Management', categories: ['ESG / Carbon Management'], display_order: 6,
         short_description: 'AI-Driven Greenhouse Gas Emissions Management Platform',
         status: 'draft', created_at: '2026-03-18', updated_at: '2026-03-22',
         tagline: 'AI-Driven Greenhouse Gas Emissions Management Platform',
@@ -262,7 +262,6 @@ const MOCK_SOFTWARE_PRODUCTS = [
     vendor_id: item.vendorId,
     vendor_name: item.vendor,
     name: item.name,
-    brand: item.vendor.split(' ')[0],
     sub_category: item.category,
     categories: [item.category],
     display_order: index + 7,
@@ -360,16 +359,8 @@ let SOFTWARE_INDUSTRY_OPTIONS = [
     { label: 'Manufacturing', is_active: true },
     { label: 'Government & Public Sector', is_active: true },
 ];
-// Licensing offers for software sold with an all-in-one appliance, per the
-// alliance agreement clause. Single-select; labels and badge colors are
-// Parameter Center-managed. `color` is a LICENSE_BADGE_COLORS palette key.
-let SOFTWARE_LICENSE_OPTIONS = [
-    { label: 'Free during POC', is_active: true, color: 'green' },
-    { label: '30-day free trial', is_active: true, color: 'green' },
-    { label: '90-day free trial', is_active: true, color: 'green' },
-    { label: 'First year free', is_active: true, color: 'green' },
-    { label: 'Other - see appendix', is_active: true, color: 'green' },
-];
+// Licensing offers are static (SW_LICENSE_TYPES in app.js), no longer a
+// Parameter Center-managed list. Products store the label in `license_offer`.
 const HW_KEY_SPEC_MAX_ITEMS = 8;
 const HW_KEY_SPEC_MIN_ITEMS = 3;
 const HW_KEY_SPEC_MAX_CHARS = 150;

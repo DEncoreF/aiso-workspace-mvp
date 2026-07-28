@@ -27,7 +27,6 @@ function capturePortalState() {
         HARDWARE_PRODUCT_TYPES,
         SOFTWARE_CATEGORY_OPTIONS,
         SOFTWARE_INDUSTRY_OPTIONS,
-        SOFTWARE_LICENSE_OPTIONS,
     }));
 }
 
@@ -37,7 +36,6 @@ function restorePortalState(snapshot) {
     HARDWARE_PRODUCT_TYPES = snapshot.HARDWARE_PRODUCT_TYPES;
     SOFTWARE_CATEGORY_OPTIONS = snapshot.SOFTWARE_CATEGORY_OPTIONS;
     SOFTWARE_INDUSTRY_OPTIONS = snapshot.SOFTWARE_INDUSTRY_OPTIONS;
-    SOFTWARE_LICENSE_OPTIONS = snapshot.SOFTWARE_LICENSE_OPTIONS;
 }
 
 // Treat each UI mutation like an API transaction. If persistence fails, roll the
@@ -647,7 +645,7 @@ function renderProductPagination(type, totalItems, currentPage, totalPages) {
     const pageButtons = Array.from({ length: pageEnd - pageStart + 1 }, (_, i) => pageStart + i).map(page =>
         `<button type="button" onclick="setProductPage('${type}',${page})" class="${page === currentPage ? 'btn-primary' : 'btn-ghost'}" style="min-width:32px;height:32px;padding:0 9px;justify-content:center">${page}</button>`
     ).join('');
-    const navButton = (label, page, disabled = false) => `<button type="button" ${disabled ? 'disabled' : `onclick="setProductPage('${type}',${page})"`} class="btn-ghost" style="font-size:12px;${disabled ? 'opacity:.35;cursor:not-allowed' : ''}">${label}</button>`;
+    const navButton = (label, page, disabled = false) => `<button type="button" ${disabled ? 'disabled' : `onclick="setProductPage('${type}',${page})"`} class="btn-ghost" style="font-size:12px">${label}</button>`;
 
     target.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 4px;border-top:1px solid var(--border-light);flex-wrap:wrap">
         <span style="font-size:12px;color:#86868b;font-weight:500">${firstItem}-${lastItem} of ${totalItems} items</span>
@@ -698,9 +696,9 @@ function renderSwProducts() {
             <td>
                 <div class="flex items-center gap-3">
                     <div style="width:36px;height:36px;border-radius:10px;background:#f5f5f7;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#86868b;flex-shrink:0">${esc(p.name.slice(0,2).toUpperCase())}</div>
-                    <div>
+                    <div style="min-width:0">
                         <div style="font-weight:600;font-size:13.5px;color:#1d1d1f">${esc(p.name)}</div>
-                        <div style="font-size:12px;color:#86868b;margin-top:1px">${esc(getSwCategories(p).join(', '))}</div>
+                        ${p.tagline ? `<div style="font-size:12px;color:#86868b;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px">${esc(p.tagline)}</div>` : ''}
                     </div>
                 </div>
             </td>
@@ -728,11 +726,11 @@ function productActionBtns(p) {
         btns += `<button onclick="restoreProduct('${p.id}')" class="btn-ghost" style="color:#059669" title="Restore"><i class="ph ph-arrow-counter-clockwise"></i></button>`;
         btns += `<button onclick="confirmDeleteProduct('${p.id}')" class="btn-ghost" style="color:#dc2626" title="Delete permanently"><i class="ph ph-trash"></i></button>`;
     } else if (p.status === 'published') {
+        // Published products must be unpublished first — no direct Archive.
         btns += `<button onclick="confirmUnpublish('${p.id}')" class="btn-ghost" style="color:#d97706" title="Unpublish"><i class="ph ph-arrow-line-down"></i></button>`;
-        btns += `<button onclick="archiveProduct('${p.id}')" class="btn-ghost" style="color:#7c3aed" title="Archive"><i class="ph ph-archive"></i></button>`;
     } else {
         btns += `<button onclick="togglePublish('${p.id}')" class="btn-ghost" style="color:#059669" title="Publish"><i class="ph ph-arrow-line-up"></i></button>`;
-        btns += `<button onclick="archiveProduct('${p.id}')" class="btn-ghost" style="color:#7c3aed" title="Archive"><i class="ph ph-archive"></i></button>`;
+        btns += `<button onclick="confirmArchive('${p.id}')" class="btn-ghost" style="color:#7c3aed" title="Archive"><i class="ph ph-archive"></i></button>`;
     }
     return btns;
 }
@@ -783,6 +781,23 @@ function confirmUnpublish(pid) {
             <div style="display:flex;gap:10px;justify-content:center">
                 <button onclick="closeModal()" class="btn-secondary">Cancel</button>
                 <button onclick="doUnpublish('${p.id}')" class="btn-primary" style="background:#d97706"><i class="ph ph-arrow-line-down"></i> Unpublish</button>
+            </div>
+        </div>`);
+}
+
+// ── Confirm Archive ──
+// nav: view key to navigate to after a successful archive (used from detail pages).
+function confirmArchive(pid, nav = '') {
+    const p = PRODUCTS.find(x => x.id === pid);
+    if (!p) return;
+    showModal(`
+        <div style="text-align:center;padding:1rem 0">
+            <div style="width:56px;height:56px;border-radius:16px;background:#f3f0ff;display:inline-flex;align-items:center;justify-content:center;margin-bottom:16px"><i class="ph ph-archive" style="font-size:28px;color:#7c3aed"></i></div>
+            <h3 style="font-size:1.1rem;font-weight:700;margin:0 0 8px">Archive "${esc(p.name)}"?</h3>
+            <p style="font-size:13px;color:#86868b;margin:0 0 24px;line-height:1.6">Archived products can no longer be edited. You can restore it as a draft anytime to make changes.</p>
+            <div style="display:flex;gap:10px;justify-content:center">
+                <button onclick="closeModal()" class="btn-secondary">Cancel</button>
+                <button onclick="archiveProduct('${p.id}', false, '${nav}')" class="btn-primary" style="background:#7c3aed"><i class="ph ph-archive"></i> Archive</button>
             </div>
         </div>`);
 }
@@ -841,11 +856,11 @@ function doUnpublish(pid, force = false) {
 }
 
 // ── Archive ──
-function archiveProduct(pid, force = false) {
+function archiveProduct(pid, force = false, nav = '') {
     const p = PRODUCTS.find(x => x.id === pid);
     if (!p) return;
     if (p.product_type === 'hardware' && findCompatRefs(pid).length) {
-        if (!force) { showHwCompatConflictModal(pid, 'Archive', `archiveProduct('${pid}', true)`); return; }
+        if (!force) { showHwCompatConflictModal(pid, 'Archive', `archiveProduct('${pid}', true, '${nav}')`); return; }
     }
     const prevLabel = p.status === 'published' ? 'Published' : 'Draft';
     const saved = commitPortalMutation(() => {
@@ -857,7 +872,8 @@ function archiveProduct(pid, force = false) {
     if (!saved) return;
     closeModal();
     showToast(`${p.name} has been archived.`, 'success');
-    reRenderCurrentList();
+    if (nav) navigate(nav);
+    else reRenderCurrentList();
 }
 
 function restoreProduct(pid) {
@@ -886,12 +902,19 @@ function confirmDeleteProduct(pid) {
             <div style="width:56px;height:56px;border-radius:16px;background:#fef2f2;display:inline-flex;align-items:center;justify-content:center;margin-bottom:16px"><i class="ph ph-trash" style="font-size:28px;color:#dc2626"></i></div>
             <h3 style="font-size:1.1rem;font-weight:700;margin:0 0 8px">Permanently delete "${esc(p.name)}"?</h3>
             <p style="font-size:13px;color:#86868b;margin:0 0 16px;line-height:1.6">This archived product will be permanently removed and cannot be recovered. Type the product name to confirm.</p>
-            <input id="delete-confirm-input" type="text" class="input-field" style="max-width:320px;margin:0 auto 20px;text-align:center" placeholder="${esc(p.name)}">
+            <input id="delete-confirm-input" type="text" class="input-field" style="max-width:320px;margin:0 auto 20px;text-align:center" placeholder="${esc(p.name)}" oninput="updateDeleteConfirmState('${p.id}')">
             <div style="display:flex;gap:10px;justify-content:center">
                 <button onclick="closeModal()" class="btn-secondary">Cancel</button>
-                <button onclick="doDeleteProduct('${p.id}')" class="btn-primary" style="background:#dc2626"><i class="ph ph-trash"></i> Delete Forever</button>
+                <button id="delete-confirm-btn" onclick="doDeleteProduct('${p.id}')" class="btn-primary" style="background:#dc2626" disabled><i class="ph ph-trash"></i> Delete Forever</button>
             </div>
         </div>`);
+}
+
+function updateDeleteConfirmState(pid) {
+    const p = PRODUCTS.find(x => x.id === pid);
+    const button = document.getElementById('delete-confirm-btn');
+    if (!p || !button) return;
+    button.disabled = (document.getElementById('delete-confirm-input')?.value || '').trim() !== p.name;
 }
 
 function doDeleteProduct(pid, force = false) {
@@ -943,7 +966,7 @@ function renderHwProducts() {
     let list = all.filter(p => {
         if (!filterS && p.status === 'archived') return false;
         if (filterS && p.status !== filterS) return false;
-        if (searchQ && !p.name.toLowerCase().includes(searchQ) && !p.vendor_name.toLowerCase().includes(searchQ) && !(p.model || '').toLowerCase().includes(searchQ)) return false;
+        if (searchQ && !p.name.toLowerCase().includes(searchQ) && !p.vendor_name.toLowerCase().includes(searchQ) && !(p.model || '').toLowerCase().includes(searchQ) && !(p.brand || '').toLowerCase().includes(searchQ)) return false;
         return true;
     });
     list = applySorting(list, 'hardware');
@@ -1091,28 +1114,28 @@ function showSwDetail(pid) {
     const compatHW = (p.compatible_hardware || []).map(hid => PRODUCTS.find(x => x.id === hid)).filter(Boolean);
     const canEdit = canManageProduct(p);
 
-    const detailRow = (label, value) => `<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border-light)"><span style="color:#86868b;font-size:13px">${label}</span><span style="font-weight:600;font-size:13px">${value}</span></div>`;
+    const detailRow = (label, value) => `<div style="display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--border-light)"><span style="color:#86868b;font-size:13px;flex-shrink:0">${label}</span><span style="font-weight:600;font-size:13px;text-align:right">${value}</span></div>`;
 
     document.getElementById('sw-detail-content').innerHTML = `
-        <button onclick="navigate('sw-products')" style="display:inline-flex;align-items:center;gap:4px;font-size:13px;color:#86868b;font-weight:500;margin-bottom:24px;background:none;border:none;cursor:pointer"><i class="ph ph-arrow-left"></i> Back to Software</button>
+        <button onclick="navigate('sw-products')" class="btn-link" style="margin-bottom:24px"><i class="ph ph-arrow-left"></i> Back to Software</button>
 
         <!-- Header -->
         <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:32px">
             <div style="display:flex;align-items:center;gap:16px">
                 ${p.icon_data ? `<img src="${p.icon_data}" alt="${esc(p.name)}" style="width:48px;height:48px;border-radius:14px;object-fit:cover;flex-shrink:0">` : `<div style="width:48px;height:48px;border-radius:14px;background:#f5f5f7;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:#86868b">${esc(p.name.slice(0,2).toUpperCase())}</div>`}
-                <div>
+                <div style="min-width:0">
                     <div style="display:flex;align-items:center;gap:10px">
                         <h2 style="font-size:1.4rem;font-weight:700;letter-spacing:-0.03em;margin:0">${esc(p.name)}</h2>
                         ${statusBadge(p.status)}
                     </div>
-                    <div style="font-size:13px;color:#86868b;margin-top:3px">${esc(p.vendor_name)} · ${esc(getSwCategories(p).join(', '))}</div>
+                    ${p.tagline ? `<p style="font-size:14px;color:#6e6e73;line-height:1.5;margin:6px 0 0;max-width:640px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden" title="${esc(p.tagline)}">${esc(p.tagline)}</p>` : ''}
                 </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px">
                 ${canEdit && p.status !== 'archived' ? `<button onclick="showEditProductModal('${p.id}', 'detail')" class="btn-secondary"><i class="ph ph-pencil-simple"></i> Edit</button>` : ''}
                 ${canEdit && p.status === 'published' ? `<button onclick="confirmUnpublish('${p.id}')" class="btn-secondary" style="color:#d97706"><i class="ph ph-arrow-down"></i> Unpublish</button>` : ''}
-                ${canEdit && p.status !== 'published' && p.status !== 'archived' ? `<button onclick="togglePublish('${p.id}');showSwDetail('${p.id}')" class="btn-primary"><i class="ph ph-arrow-up"></i> Publish</button>` : ''}
-                ${canEdit && p.status !== 'archived' ? `<button onclick="archiveProduct('${p.id}');navigate('sw-products')" class="btn-secondary" style="color:#7c3aed"><i class="ph ph-archive"></i> Archive</button>` : ''}
+                ${canEdit && p.status !== 'published' && p.status !== 'archived' ? `<button onclick="togglePublish('${p.id}');showSwDetail('${p.id}')" class="btn-primary" style="background:#059669"><i class="ph ph-arrow-up"></i> Publish</button>` : ''}
+                ${canEdit && p.status !== 'published' && p.status !== 'archived' ? `<button onclick="confirmArchive('${p.id}', 'sw-products')" class="btn-secondary" style="color:#7c3aed"><i class="ph ph-archive"></i> Archive</button>` : ''}
                 ${canEdit && p.status === 'archived' ? `<button onclick="restoreProduct('${p.id}');showSwDetail('${p.id}')" class="btn-primary" style="background:#059669"><i class="ph ph-arrow-counter-clockwise"></i> Restore</button>` : ''}
                 ${canEdit && p.status === 'archived' ? `<button onclick="confirmDeleteProduct('${p.id}')" class="btn-secondary" style="color:#dc2626"><i class="ph ph-trash"></i> Delete</button>` : ''}
             </div>
@@ -1142,8 +1165,13 @@ function showSwDetail(pid) {
                 <!-- Product Info -->
                 <section style="margin-bottom:32px">
                     <div style="font-size:11px;font-weight:600;color:#86868b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Product Info</div>
-                    ${detailRow('Brand', esc(p.brand))}
+                    ${detailRow('Vendor', esc(p.vendor_name || '—'))}
+                    ${detailRow('Website', p.officialUrl
+                        ? `<a href="${esc(normalizeProductUrl(p.officialUrl))}" target="_blank" rel="noopener noreferrer" title="${esc(normalizeProductUrl(p.officialUrl))}" style="color:#1d2e7b;text-decoration:underline;text-underline-offset:3px;word-break:break-all">${esc(formatProductUrlLabel(p.officialUrl))}</a>`
+                        : '—')}
                     ${detailRow('Category', esc(getSwCategories(p).join(', ')))}
+                    ${detailRow('Packaging', p.sw_category === 'included' ? 'Bundled' : 'Add-on')}
+                    ${detailRow('License', p.license_offer ? esc(p.license_offer) : '—')}
                     ${detailRow('Created', esc(p.created_at))}
                     ${detailRow('Updated', esc(p.updated_at))}
                 </section>
@@ -1172,10 +1200,10 @@ function showHwDetail(pid) {
     if (!p) return;
     const canEdit = canManageProduct(p);
 
-    const detailRow = (label, value) => `<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border-light)"><span style="color:#86868b;font-size:13px">${label}</span><span style="font-weight:600;font-size:13px">${value}</span></div>`;
+    const detailRow = (label, value) => `<div style="display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--border-light)"><span style="color:#86868b;font-size:13px;flex-shrink:0">${label}</span><span style="font-weight:600;font-size:13px;text-align:right">${value}</span></div>`;
 
     document.getElementById('hw-detail-content').innerHTML = `
-        <button onclick="navigate('hw-products')" style="display:inline-flex;align-items:center;gap:4px;font-size:13px;color:#86868b;font-weight:500;margin-bottom:24px;background:none;border:none;cursor:pointer"><i class="ph ph-arrow-left"></i> Back to Hardware</button>
+        <button onclick="navigate('hw-products')" class="btn-link" style="margin-bottom:24px"><i class="ph ph-arrow-left"></i> Back to Hardware</button>
 
         <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:32px">
             <div style="display:flex;align-items:center;gap:16px">
@@ -1192,8 +1220,8 @@ function showHwDetail(pid) {
             <div style="display:flex;align-items:center;gap:8px">
                 ${canEdit && p.status !== 'archived' ? `<button onclick="showEditProductModal('${p.id}', 'detail')" class="btn-secondary"><i class="ph ph-pencil-simple"></i> Edit</button>` : ''}
                 ${canEdit && p.status === 'published' ? `<button onclick="confirmUnpublish('${p.id}')" class="btn-secondary" style="color:#d97706"><i class="ph ph-arrow-down"></i> Unpublish</button>` : ''}
-                ${canEdit && p.status !== 'published' && p.status !== 'archived' ? `<button onclick="togglePublish('${p.id}');showHwDetail('${p.id}')" class="btn-primary"><i class="ph ph-arrow-up"></i> Publish</button>` : ''}
-                ${canEdit && p.status !== 'archived' ? `<button onclick="archiveProduct('${p.id}');navigate('hw-products')" class="btn-secondary" style="color:#7c3aed"><i class="ph ph-archive"></i> Archive</button>` : ''}
+                ${canEdit && p.status !== 'published' && p.status !== 'archived' ? `<button onclick="togglePublish('${p.id}');showHwDetail('${p.id}')" class="btn-primary" style="background:#059669"><i class="ph ph-arrow-up"></i> Publish</button>` : ''}
+                ${canEdit && p.status !== 'published' && p.status !== 'archived' ? `<button onclick="confirmArchive('${p.id}', 'hw-products')" class="btn-secondary" style="color:#7c3aed"><i class="ph ph-archive"></i> Archive</button>` : ''}
                 ${canEdit && p.status === 'archived' ? `<button onclick="restoreProduct('${p.id}');showHwDetail('${p.id}')" class="btn-primary" style="background:#059669"><i class="ph ph-arrow-counter-clockwise"></i> Restore</button>` : ''}
                 ${canEdit && p.status === 'archived' ? `<button onclick="confirmDeleteProduct('${p.id}')" class="btn-secondary" style="color:#dc2626"><i class="ph ph-trash"></i> Delete</button>` : ''}
             </div>
@@ -1309,8 +1337,7 @@ function showSwPreview(pid) {
             <p class="sd-action-helper">This software is bundled automatically with compatible hardware.</p>`;
     } else {
         actionHtml = `
-            <button class="sd-action-primary">Select Add-on</button>
-            <span class="sd-quote-link">Request a custom quote for this add-on</span>`;
+            <button class="sd-action-primary">Select Add-on</button>`;
     }
 
     sdDrawer.innerHTML = `
@@ -1538,55 +1565,129 @@ function updateSwCategoryLimit(containerId) {
 
 const SW_LICENSE_NONE = '';
 
-// Preset badge palette for licensing offers. Options store the `key`; the
-// Parameter Center lets Super Admin pick per label, storefront badges follow.
-const LICENSE_BADGE_COLORS = [
-    { key: 'green', name: 'Green', bg: '#ecfdf5', text: '#047857' },
-    { key: 'blue', name: 'Blue', bg: 'rgba(29,46,123,0.08)', text: '#1d2e7b' },
-    { key: 'sky', name: 'Sky', bg: '#eff6ff', text: '#1d4ed8' },
-    { key: 'purple', name: 'Purple', bg: '#f5f3ff', text: '#6d28d9' },
-    { key: 'amber', name: 'Amber', bg: '#fffbeb', text: '#b45309' },
-    { key: 'rose', name: 'Rose', bg: '#fff1f2', text: '#be123c' },
-    { key: 'zinc', name: 'Gray', bg: '#f5f5f7', text: '#52525b' },
+// Licensing offers are static per the alliance agreement clause — three fixed
+// choices plus "Not specified", hardcoded in the software form (no longer
+// Parameter Center-managed). `license_offer` stores the storefront label; the
+// trial option embeds the vendor-entered day count (e.g. "30-day free trial").
+const SW_LICENSE_TRIAL_KEY = 'trial';
+const SW_LICENSE_TRIAL_PATTERN = /^(\d+)-day free trial$/;
+const SW_LICENSE_TYPES = [
+    { key: 'first-year', label: 'First year free', bg: '#ecfdf5', text: '#047857' },
+    { key: SW_LICENSE_TRIAL_KEY, label: 'N-day free trial', bg: 'rgba(29,46,123,0.08)', text: '#1d2e7b' },
+    { key: 'poc', label: 'Free during POC', bg: '#f5f3ff', text: '#6d28d9' },
 ];
-const LICENSE_BADGE_DEFAULT_COLOR = 'green';
+// Offers saved before the palette became static render in neutral gray.
+const SW_LICENSE_FALLBACK_COLOR = { bg: '#f5f5f7', text: '#52525b' };
 
-// Falls back to the default (green) for legacy options saved without a color.
-function getLicenseBadgeColor(key) {
-    return LICENSE_BADGE_COLORS.find(c => c.key === key)
-        || LICENSE_BADGE_COLORS.find(c => c.key === LICENSE_BADGE_DEFAULT_COLOR);
-}
-
-function getLicenseOptionColor(label) {
-    return getLicenseBadgeColor(SOFTWARE_LICENSE_OPTIONS.find(o => o.label === label)?.color);
+function getLicenseOfferColor(offer) {
+    if (SW_LICENSE_TRIAL_PATTERN.test(offer)) return SW_LICENSE_TYPES.find(t => t.key === SW_LICENSE_TRIAL_KEY);
+    return SW_LICENSE_TYPES.find(t => t.label === offer) || SW_LICENSE_FALLBACK_COLOR;
 }
 
 function renderSwLicenseRadios(containerId, selected = '') {
-    const labels = SOFTWARE_LICENSE_OPTIONS.filter(o => o.is_active).map(o => o.label);
-    // Keep an already-assigned offer visible even if it was later disabled or
-    // deleted in the Parameter Center, so editing a product never drops it.
-    if (selected && !labels.includes(selected)) labels.push(selected);
-    const radio = (value, text, checked, withDot = false) => {
-        const dot = withDot
-            ? `<span style="width:8px;height:8px;border-radius:50%;background:${getLicenseOptionColor(value).text};margin-right:6px;flex-shrink:0"></span>`
-            : '';
-        return `<label class="preview-pill cursor-pointer"><input type="radio" name="${containerId}" value="${esc(value)}" class="mr-2 accent-aiso" ${checked ? 'checked' : ''}>${dot}${esc(text)}</label>`;
-    };
+    const trialDays = (selected.match(SW_LICENSE_TRIAL_PATTERN) || [])[1] || '';
+    const selectedKey = trialDays
+        ? SW_LICENSE_TRIAL_KEY
+        : (SW_LICENSE_TYPES.find(t => t.label === selected)?.key || SW_LICENSE_NONE);
+    const radio = (value, inner, checked) => `<label class="preview-pill cursor-pointer" style="align-items:center"><input type="radio" name="${containerId}" value="${value}" class="mr-2 accent-aiso" ${checked ? 'checked' : ''} onchange="setCreateError('${containerId}', '')">${inner}</label>`;
+    const dot = t => `<span style="width:8px;height:8px;border-radius:50%;background:${t.text};margin-right:6px;flex-shrink:0"></span>`;
+    // Focusing or typing in the day-count field implicitly picks the trial offer.
+    const typeInner = t => t.key === SW_LICENSE_TRIAL_KEY
+        ? `${dot(t)}<input id="${containerId}-days" type="number" min="1" max="999" value="${trialDays}" placeholder="N" style="width:46px;border:1px solid #e8eaed;border-radius:6px;padding:1px 4px;font-size:12px;text-align:center;margin-right:4px" onfocus="selectSwLicenseTrial('${containerId}')" oninput="selectSwLicenseTrial('${containerId}')">-day free trial`
+        : `${dot(t)}${esc(t.label)}`;
     return `<div id="${containerId}" class="flex flex-wrap gap-2">
-        ${radio(SW_LICENSE_NONE, 'Not specified', !selected)}
-        ${labels.map(l => radio(l, l, l === selected, true)).join('')}
+        ${SW_LICENSE_TYPES.map(t => radio(t.key, typeInner(t), t.key === selectedKey)).join('')}
+        ${radio(SW_LICENSE_NONE, 'Not specified', selectedKey === SW_LICENSE_NONE)}
     </div>
     <div id="${containerId}-error" class="field-error-text"></div>`;
 }
 
+function selectSwLicenseTrial(containerId) {
+    const radio = document.querySelector(`#${containerId} input[value="${SW_LICENSE_TRIAL_KEY}"]`);
+    if (radio && !radio.checked) {
+        radio.checked = true;
+        // Fire the same change event a manual click would, so the live preview
+        // bindings attached in setup*Bindings re-render.
+        radio.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    setCreateError(containerId, '');
+}
+
 function getSelectedLicense(containerId) {
-    return document.querySelector(`#${containerId} input[type="radio"]:checked`)?.value || '';
+    const key = document.querySelector(`#${containerId} input[type="radio"]:checked`)?.value || SW_LICENSE_NONE;
+    if (key === SW_LICENSE_NONE) return '';
+    if (key === SW_LICENSE_TRIAL_KEY) {
+        const days = parseInt(document.getElementById(`${containerId}-days`)?.value, 10);
+        return days > 0 ? `${days}-day free trial` : '';
+    }
+    return SW_LICENSE_TYPES.find(t => t.key === key)?.label || '';
+}
+
+// The trial offer needs a day count before the form can be submitted.
+function validateSwLicenseSelection(containerId) {
+    const key = document.querySelector(`#${containerId} input[type="radio"]:checked`)?.value;
+    const ok = key !== SW_LICENSE_TRIAL_KEY
+        || parseInt(document.getElementById(`${containerId}-days`)?.value, 10) > 0;
+    setCreateError(containerId, ok ? '' : 'Please enter the number of trial days.');
+    return ok;
 }
 
 function renderSwLicenseBadge(offer) {
     if (!offer) return '';
-    const color = getLicenseOptionColor(offer);
+    const color = getLicenseOfferColor(offer);
     return `<span class="sd-license-badge" style="background:${color.bg};color:${color.text}">${esc(offer)}</span>`;
+}
+
+/* ── Official website URL ── */
+const SW_URL_MAX_CHARS = 200;
+
+// Accepts what people actually type ("www.example.com") and stores a complete
+// URL. Returns '' for blank input — the field is optional.
+function normalizeProductUrl(raw) {
+    const value = String(raw ?? '').trim();
+    if (!value) return '';
+    return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+}
+
+function isValidProductUrl(raw) {
+    const value = String(raw ?? '').trim();
+    if (!value) return true; // optional field
+    try {
+        const url = new URL(normalizeProductUrl(value));
+        return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.hostname.includes('.');
+    } catch {
+        return false;
+    }
+}
+
+// Drops the scheme and any trailing slash so the storefront shows a domain
+// rather than a full URL. The complete URL stays in href/title.
+function formatProductUrlLabel(url) {
+    return String(url ?? '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+}
+
+const SVG_GLOBE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;flex-shrink:0"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>';
+
+// The live preview mirrors the storefront layout, where nothing is clickable —
+// so it renders a non-interactive span and keeps a placeholder row while the
+// field is empty, so typing a URL never shifts the footer.
+function renderSwSiteLink(url, { placeholder = '' } = {}) {
+    const value = String(url ?? '').trim();
+    // A half-typed or malformed value can never reach the storefront (save is
+    // blocked), so the preview keeps the placeholder rather than mocking up a
+    // link that will not exist.
+    if (!isValidProductUrl(value)) {
+        return placeholder
+            ? `<span class="sd-site-link is-empty">${SVG_GLOBE}<span>${esc(placeholder)}</span></span>`
+            : '';
+    }
+    if (!value) {
+        return placeholder
+            ? `<span class="sd-site-link is-empty">${SVG_GLOBE}<span>${esc(placeholder)}</span></span>`
+            : '';
+    }
+    const full = normalizeProductUrl(value);
+    return `<span class="sd-site-link" title="${esc(full)}">${SVG_GLOBE}<span>${esc(formatProductUrlLabel(full))}</span></span>`;
 }
 
 function updateCharCounter(inputId) {
@@ -2069,6 +2170,7 @@ function renderSoftwareCreatePreview() {
     const name = valueOf('new-p-name');
     const vendor = valueOf('new-p-vendor');
     const pitch = valueOf('new-p-pitch');
+    const siteUrl = valueOf('new-p-url');
     const features = collectSoftwareFeatures();
     const industries = getCheckedValues('new-p-industries');
     const images = createProductState.softwareImages;
@@ -2122,7 +2224,7 @@ function renderSoftwareCreatePreview() {
             </div>
             <div class="sd-action-footer" style="margin-top:auto">
                 <button class="sd-action-primary" type="button">Select Add-on</button>
-                <span class="sd-quote-link">Request a custom quote for this add-on</span>
+                ${renderSwSiteLink(siteUrl, { placeholder: 'Official website link...' })}
             </div>
         </div>`;
 }
@@ -2217,6 +2319,14 @@ function validateCreateProductForm(type) {
         const features = collectSoftwareFeatures();
         if (features.length < 1) {
             setCreateError('new-p-feature-0', 'At least 1 Key Feature is recommended.');
+            ok = false;
+        }
+        ok = validateSwLicenseSelection('new-p-license') && ok;
+        // Optional field: only a filled-in value has to look like a URL.
+        if (isValidProductUrl(valueOf('new-p-url'))) {
+            setCreateError('new-p-url', '');
+        } else {
+            setCreateError('new-p-url', 'Please enter a valid URL, e.g. https://www.example.com');
             ok = false;
         }
     }
@@ -2332,6 +2442,7 @@ function showCreateProductModal(type) {
         ${createFormSection('ph-identification-card', 'Basic Info', 'Product identity shown in lists and storefront preview.', `
         ${createField('new-p-name', 'Product Name', { required: true, maxlength: 100, placeholder: 'e.g. OrientAI Express' })}
         ${createField('new-p-vendor', 'Vendor', { required: true, maxlength: 100, placeholder: 'e.g. TPIsoftware Corporation' })}
+        ${createField('new-p-url', 'Official Website', { type: 'url', maxlength: SW_URL_MAX_CHARS, placeholder: 'e.g. https://www.tpisoftware.com', hint: 'Optional. Shown as a link on the storefront preview.' })}
         <div>
             <label class="field-label">Product Icon</label>
             <label class="file-upload-wrap">
@@ -2427,7 +2538,7 @@ function createProduct(type) {
         vendor_id: isNsHw ? null : getMatchingVendorId(vendorName, type),
         vendor_name: vendorName,
         name,
-        brand: isSW ? vendorName : valueOf('new-p-brand'),
+        brand: isSW ? '' : valueOf('new-p-brand'),
         sub_category: isSW ? (newCategories[0] || '') : valueOf('new-p-product-type'),
         short_description: '',
         status: 'draft',
@@ -2442,6 +2553,7 @@ function createProduct(type) {
         newP.sw_category = 'optional';
         newP.features = collectSoftwareFeatures();
         newP.license_offer = getSelectedLicense('new-p-license');
+        newP.officialUrl = normalizeProductUrl(valueOf('new-p-url'));
         newP.industries = getCheckedValues('new-p-industries');
         // Compatibility is maintained independently in Parameter Center.
         newP.compatible_hardware = [];
@@ -2499,6 +2611,10 @@ function showEditProductModal(pid, source) {
     editHwImage = p.image_data ? { name: p.image_name || p.photos?.[0] || 'Product image', url: p.image_data, dataUrl: p.image_data, isExisting: true } : null;
     editHwFormat = p.product_format || 'standard';
     const activeIndustries = SOFTWARE_INDUSTRY_OPTIONS.filter(o => o.is_active);
+    // Keep currently-assigned industries visible even if no longer an active
+    // option, so opening Edit and saving never silently drops them.
+    const editIndustryLabels = activeIndustries.map(o => o.label);
+    (p.industries || []).forEach(v => { if (!editIndustryLabels.includes(v)) editIndustryLabels.push(v); });
     const activeHwTypes = HARDWARE_PRODUCT_TYPES.filter(o => o.is_active);
 
     const featureInputs = Array.from({ length: SOFTWARE_FEATURE_MAX_ITEMS }, (_, i) => {
@@ -2520,6 +2636,7 @@ function showEditProductModal(pid, source) {
         ${createFormSection('ph-identification-card', 'Basic Info', 'Core product identity.', `
             ${createField('edit-p-name', 'Product Name', { required: true, maxlength: 100 })}
             ${createField('edit-p-vendor', 'Vendor', { required: true, maxlength: 100 })}
+            ${createField('edit-p-url', 'Official Website', { type: 'url', maxlength: SW_URL_MAX_CHARS, placeholder: 'e.g. https://www.tpisoftware.com', hint: 'Optional. Shown as a link on the storefront preview.' })}
         `)}
         ${createFormSection('ph-chat-centered-text', 'Positioning', 'Customer-facing copy, category, and features.', `
             <div>
@@ -2537,9 +2654,13 @@ function showEditProductModal(pid, source) {
             <div>
                 <div class="field-label mb-3">Applicable Industries</div>
                 <div id="edit-p-industries" class="flex flex-wrap gap-2">
-                    ${activeIndustries.map(o => `<label class="preview-pill cursor-pointer"><input type="checkbox" value="${esc(o.label)}" class="mr-2 accent-aiso" ${(p.industries || []).includes(o.label) ? 'checked' : ''}>${esc(o.label)}</label>`).join('')}
+                    ${editIndustryLabels.map(label => `<label class="preview-pill cursor-pointer"><input type="checkbox" value="${esc(label)}" class="mr-2 accent-aiso" ${(p.industries || []).includes(label) ? 'checked' : ''}>${esc(label)}</label>`).join('')}
                 </div>
             </div>
+        `)}
+        ${createFormSection('ph-certificate', 'Licensing', 'Licensing offer shown as a badge next to the product name.', `
+            <div class="field-label mb-3">Licensing Options</div>
+            ${renderSwLicenseRadios('edit-p-license', p.license_offer || '')}
         `)}
         ${createFormSection('ph-images', 'Product Images', 'Upload up to five images for the storefront preview.', `
             <div>
@@ -2690,7 +2811,9 @@ function showEditProductModal(pid, source) {
     updateCharCounter('edit-p-vendor');
     if (isSW) {
         setVal('edit-p-tagline', p.tagline);
+        setVal('edit-p-url', p.officialUrl);
         updateCharCounter('edit-p-tagline');
+        updateCharCounter('edit-p-url');
         updateSwCategoryLimit('edit-p-categories');
     } else {
         setVal('edit-p-brand', p.brand);
@@ -2743,6 +2866,7 @@ function renderEditSwPreview(target) {
     const name = val('edit-p-name');
     const vendor = val('edit-p-vendor');
     const pitch = val('edit-p-tagline');
+    const siteUrl = val('edit-p-url');
     const features = Array.from({ length: 5 }, (_, i) => val(`edit-p-feat-${i}`)).filter(Boolean);
     const industries = Array.from(document.querySelectorAll('#edit-p-industries input:checked')).map(cb => cb.value);
     const images = editSwImages;
@@ -2772,6 +2896,7 @@ function renderEditSwPreview(target) {
                     <div style="min-width:0;flex:1">
                         <p class="sd-company">${vendor ? esc(vendor) : `<span style="${PLACEHOLDER}">Company Name</span>`}</p>
                         <h2 class="sd-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name ? esc(name) : `<span style="${PLACEHOLDER};font-weight:500">Product Name</span>`}</h2>
+                        ${renderSwLicenseBadge(getSelectedLicense('edit-p-license'))}
                     </div>
                 </div>
                 <p class="sd-tagline">${pitch ? esc(pitch) : `<span style="${PLACEHOLDER}">Short product description...</span>`}</p>
@@ -2783,7 +2908,7 @@ function renderEditSwPreview(target) {
             </div>
             <div class="sd-action-footer" style="margin-top:auto">
                 <button class="sd-action-primary" type="button">Select Add-on</button>
-                <span class="sd-quote-link">Request a custom quote for this add-on</span>
+                ${renderSwSiteLink(siteUrl, { placeholder: 'Official website link...' })}
             </div>
         </div>`;
 }
@@ -2864,7 +2989,7 @@ function renderEditSwImageStatus() {
     container.innerHTML = `
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
             <span style="font-size:11px;color:#86868b;font-weight:600">${photos.length}/${PRODUCT_IMAGE_MAX_COUNT} images</span>
-            <button type="button" onclick="clearEditSwImages()" style="font-size:11px;color:#d97706;font-weight:600;background:none;border:none;cursor:pointer">Clear all</button>
+            <button type="button" class="btn-ghost py-1 px-2" onclick="clearEditSwImages()"><i class="ph ph-trash"></i> Delete all</button>
         </div>
         <div class="product-image-sort-list">${photos.map((img, i) => renderSortableProductImage(img, i, 'edit')).join('')}</div>
         ${photos.length > 1 ? '<div class="product-image-sort-hint"><i class="ph ph-arrows-out-line-horizontal"></i> Drag images to reorder. The first image is the main image.</div>' : ''}`;
@@ -2972,6 +3097,8 @@ async function saveProduct(pid) {
     if (!val('edit-p-name')) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-name', 'Please enter Product Name.'); return; }
     if (!isNsHw && !val('edit-p-vendor')) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-vendor', 'Please enter Vendor.'); return; }
     if (isSW && !getCheckedValues('edit-p-categories').length) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-categories', 'Please select Category.'); return; }
+    if (isSW && !validateSwLicenseSelection('edit-p-license')) { showToast('Please fix the highlighted fields', 'error'); return; }
+    if (isSW && !isValidProductUrl(val('edit-p-url'))) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-url', 'Please enter a valid URL, e.g. https://www.example.com'); return; }
     if (!isSW && (p.product_format || 'standard') === 'standard') {
         if (!val('edit-p-brand')) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-brand', 'Please enter Brand.'); return; }
         if (!val('edit-p-model')) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-model', 'Please enter Model.'); return; }
@@ -3004,6 +3131,8 @@ async function saveProduct(pid) {
             p.categories = getCheckedValues('edit-p-categories').slice(0, SW_CATEGORY_MAX);
             p.sub_category = p.categories[0] || p.sub_category;
             p.tagline = val('edit-p-tagline');
+            p.officialUrl = normalizeProductUrl(val('edit-p-url'));
+            p.license_offer = getSelectedLicense('edit-p-license');
             p.features = Array.from({ length: SOFTWARE_FEATURE_MAX_ITEMS }, (_, i) => val(`edit-p-feat-${i}`)).filter(Boolean);
             p.industries = Array.from(document.querySelectorAll('#edit-p-industries input:checked')).map(cb => cb.value);
             const photoData = editSwImages.map(img => img.dataUrl || img.url || '').filter(Boolean);
@@ -3117,9 +3246,9 @@ function showModalFailureDemo(action) {
             <label class="field-label" for="modal-failure-demo-input">${esc(fieldLabel)}</label>
             <input id="modal-failure-demo-input" class="input-field" value="${esc(fieldValue)}" autocomplete="off">
             <div id="modal-failure-demo-status" style="min-height:36px;margin-top:10px;padding:9px 12px;border-radius:10px;background:#f5f5f7;color:#86868b;font-size:12px;line-height:1.5">
-                This test always simulates a 500 response. No portal data will be changed.
+                This test always simulates a 500 response. No workspace data will be changed.
             </div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px">
+            <div style="display:flex;gap:10px;justify-content:center;margin-top:22px">
                 <button type="button" onclick="closeModal()" class="btn-secondary">Cancel</button>
                 <button type="submit" class="btn-primary" style="${buttonStyle}"><i class="ph ${config.icon}"></i> ${esc(config.submitLabel)}</button>
             </div>
@@ -3181,7 +3310,6 @@ function renderParamCenter() {
     renderParamPackaging();
     renderParamTagList('param-sw-categories', SOFTWARE_CATEGORY_OPTIONS, 'sw-cat');
     renderParamTagList('param-sw-industries', SOFTWARE_INDUSTRY_OPTIONS, 'sw-ind');
-    renderParamTagList('param-sw-license', SOFTWARE_LICENSE_OPTIONS, 'sw-lic');
     renderParamTagList('param-hw-types', HARDWARE_PRODUCT_TYPES, 'hw-type');
     renderDisplayOrder('software');
     renderDisplayOrder('hardware');
@@ -3247,7 +3375,7 @@ function renderCompatibilityCenter() {
             <td><span class="badge ${isBundled ? 'badge-green' : 'badge-zinc'}"><i class="ph ${isBundled ? 'ph-package' : 'ph-plus-circle'}"></i> ${isBundled ? 'Bundled' : 'Add-on'}</span></td>
             <td>${hardwareHtml}</td>
             <td class="text-right">
-                <button type="button" class="btn-ghost" onclick="showCompatibilityModal('${product.id}')" ${canEdit ? '' : 'disabled'} title="${canEdit ? 'Edit compatibility' : 'Permission required'}" style="${canEdit ? '' : 'opacity:.4;cursor:not-allowed'}"><i class="ph ph-pencil-simple"></i> Edit</button>
+                <button type="button" class="btn-ghost" onclick="showCompatibilityModal('${product.id}')" ${canEdit ? '' : 'disabled'} title="${canEdit ? 'Edit' : 'Permission required'}"><i class="ph ph-pencil-simple"></i></button>
             </td>
         </tr>`;
     }).join('') : `<tr><td colspan="4" class="text-center py-16">${emptyState('ph-arrows-left-right', search ? EMPTY_STATE_NO_RESULTS : EMPTY_STATE_NO_DATA)}</td></tr>`;
@@ -3272,9 +3400,10 @@ function showCompatibilityModal(softwareId) {
     const unavailableSelected = Array.from(selectedIds)
         .map(hardwareId => PRODUCTS.find(product => product.id === hardwareId && product.product_type === 'hardware'))
         .filter(product => product && product.status !== 'published');
+    const hardwareCategories = Array.from(new Set(publishedHardware.map(hardware => hardware.sub_category).filter(Boolean))).sort((a, b) => a.localeCompare(b));
     const hardwareRows = publishedHardware.map(hardware => {
         const searchValue = [hardware.name, hardware.vendor_name, hardware.brand, hardware.model, hardware.sub_category].filter(Boolean).join(' ').toLowerCase();
-        return `<label class="compatibility-hardware-row" data-compat-search="${esc(searchValue)}" style="display:flex;align-items:center;gap:12px;padding:11px 12px;border:1px solid var(--border-light);border-radius:12px;cursor:pointer;background:#fff">
+        return `<label class="compatibility-hardware-row" data-compat-search="${esc(searchValue)}" data-compat-category="${esc(hardware.sub_category || '')}" style="display:flex;align-items:center;gap:12px;padding:11px 12px;border:1px solid var(--border-light);border-radius:12px;cursor:pointer;background:#fff">
             <input type="checkbox" name="compat-hardware" value="${esc(hardware.id)}" class="w-4 h-4 accent-aiso" ${selectedIds.has(hardware.id) ? 'checked' : ''} onchange="updateCompatibilitySelectionCount()">
             <span style="width:34px;height:34px;border-radius:10px;background:#f5f5f7;display:grid;place-items:center;flex-shrink:0"><i class="ph ph-hard-drives" style="color:#1d2e7b"></i></span>
             <span style="min-width:0;flex:1">
@@ -3294,16 +3423,24 @@ function showCompatibilityModal(softwareId) {
                 </div>
                 <button type="button" class="btn-ghost" onclick="closeModal()" aria-label="Close"><i class="ph ph-x" style="font-size:18px"></i></button>
             </div>
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
                 <div class="filter-search" style="flex:1;max-width:none">
                     <i class="ph ph-magnifying-glass"></i>
-                    <input id="compat-hardware-search" type="text" placeholder="Search hardware, brand, or model..." oninput="filterCompatibilityHardware(this.value)">
+                    <input id="compat-hardware-search" type="text" placeholder="Search hardware, brand, or model..." oninput="applyCompatibilityHardwareFilters()">
                 </div>
                 <span id="compat-selected-count" style="font-size:12px;font-weight:600;color:#1d2e7b">${publishedHardware.filter(item => selectedIds.has(item.id)).length} selected</span>
             </div>
+            ${hardwareCategories.length ? `<div id="compat-cat-tabs" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:12px">
+                <button type="button" class="filter-tab active" data-val="" onclick="setCompatCategoryFilter(this)">All</button>
+                ${hardwareCategories.map(category => `<button type="button" class="filter-tab" data-val="${esc(category)}" onclick="setCompatCategoryFilter(this)">${esc(category)}</button>`).join('')}
+            </div>` : ''}
             ${unavailableSelected.length ? `<div style="font-size:12px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:9px 11px;margin-bottom:12px"><i class="ph ph-warning-circle"></i> ${unavailableSelected.length} unavailable mapping${unavailableSelected.length === 1 ? '' : 's'} will be removed when you save.</div>` : ''}
             <div id="compat-hardware-list" style="display:grid;gap:8px;max-height:360px;overflow-y:auto;padding-right:3px">
                 ${hardwareRows || '<div style="font-size:13px;color:#86868b;text-align:center;padding:28px 0">No published hardware products available.</div>'}
+                <div id="compat-filter-empty" style="display:none;text-align:center;padding:28px 0">
+                    <div style="font-size:13px;color:#86868b;margin-bottom:10px">No hardware matches the current filters.</div>
+                    <button type="button" class="btn-ghost" onclick="clearCompatibilityFilters()"><i class="ph ph-x-circle"></i> Clear filters</button>
+                </div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light)">
                 <span style="font-size:11px;color:#86868b">Changes take effect immediately on the storefront.</span>
@@ -3315,17 +3452,40 @@ function showCompatibilityModal(softwareId) {
         </div>`);
 }
 
-function filterCompatibilityHardware(query) {
-    const normalized = String(query || '').trim().toLowerCase();
+function applyCompatibilityHardwareFilters() {
+    const query = (document.getElementById('compat-hardware-search')?.value || '').trim().toLowerCase();
+    const category = document.querySelector('#compat-cat-tabs .filter-tab.active')?.dataset.val || '';
+    let visibleCount = 0;
     document.querySelectorAll('.compatibility-hardware-row').forEach(row => {
-        row.style.display = !normalized || (row.dataset.compatSearch || '').includes(normalized) ? 'flex' : 'none';
+        const matchesSearch = !query || (row.dataset.compatSearch || '').includes(query);
+        const matchesCategory = !category || row.dataset.compatCategory === category;
+        const visible = matchesSearch && matchesCategory;
+        row.style.display = visible ? 'flex' : 'none';
+        if (visible) visibleCount++;
     });
+    const emptyState = document.getElementById('compat-filter-empty');
+    if (emptyState) emptyState.style.display = visibleCount ? 'none' : 'block';
+    updateCompatibilitySelectionCount();
+}
+
+function setCompatCategoryFilter(button) {
+    document.querySelectorAll('#compat-cat-tabs .filter-tab').forEach(tab => tab.classList.toggle('active', tab === button));
+    applyCompatibilityHardwareFilters();
+}
+
+function clearCompatibilityFilters() {
+    const searchInput = document.getElementById('compat-hardware-search');
+    if (searchInput) searchInput.value = '';
+    document.querySelectorAll('#compat-cat-tabs .filter-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.val === ''));
+    applyCompatibilityHardwareFilters();
 }
 
 function updateCompatibilitySelectionCount() {
-    const count = document.querySelectorAll('input[name="compat-hardware"]:checked').length;
+    const checked = Array.from(document.querySelectorAll('input[name="compat-hardware"]:checked'));
+    const hiddenCount = checked.filter(input => input.closest('.compatibility-hardware-row')?.style.display === 'none').length;
     const target = document.getElementById('compat-selected-count');
-    if (target) target.textContent = `${count} selected`;
+    // Selections on rows hidden by search/category filters stay counted and are saved.
+    if (target) target.textContent = `${checked.length} selected${hiddenCount ? ` (${hiddenCount} hidden by filters)` : ''}`;
 }
 
 function saveCompatibility(softwareId) {
@@ -3420,12 +3580,6 @@ function renderParamTagList(containerId, dataArr, prefix) {
                     ${item.is_active
                         ? 'bg-white border-[#e8eaed] text-[#1d1d1f]'
                         : 'bg-[#fafbfc] border-dashed border-[#e8eaed] text-[#86868b] line-through'}">
-                    ${prefix === 'sw-lic' ? `<button type="button" class="w-5 h-5 rounded-full flex items-center justify-center transition hover:scale-110"
-                        style="background:${getLicenseBadgeColor(item.color).bg};border:1px solid rgba(0,0,0,0.06)"
-                        onclick="showLicenseBadgeColorModal(${idx})"
-                        title="Badge color: ${getLicenseBadgeColor(item.color).name}">
-                        <span style="width:8px;height:8px;border-radius:50%;background:${getLicenseBadgeColor(item.color).text}"></span>
-                    </button>` : ''}
                     <span>${esc(item.label)}</span>
                     <button type="button" class="ml-1 w-5 h-5 rounded-full flex items-center justify-center text-xs transition
                         ${item.is_active
@@ -3460,7 +3614,6 @@ function renderParamTagList(containerId, dataArr, prefix) {
 function getParamDataArr(prefix) {
     if (prefix === 'sw-cat') return SOFTWARE_CATEGORY_OPTIONS;
     if (prefix === 'sw-ind') return SOFTWARE_INDUSTRY_OPTIONS;
-    if (prefix === 'sw-lic') return SOFTWARE_LICENSE_OPTIONS;
     if (prefix === 'hw-type') return HARDWARE_PRODUCT_TYPES;
     return [];
 }
@@ -3468,7 +3621,6 @@ function getParamDataArr(prefix) {
 function getParamContainerId(prefix) {
     if (prefix === 'sw-cat') return 'param-sw-categories';
     if (prefix === 'sw-ind') return 'param-sw-industries';
-    if (prefix === 'sw-lic') return 'param-sw-license';
     if (prefix === 'hw-type') return 'param-hw-types';
     return '';
 }
@@ -3492,51 +3644,10 @@ function addParamTag(prefix) {
         return;
     }
     const newItem = { label: value, is_active: true };
-    if (prefix === 'sw-lic') newItem.color = LICENSE_BADGE_DEFAULT_COLOR;
     if (!commitPortalMutation(() => { arr.push(newItem); })) return;
     input.value = '';
     renderParamTagList(getParamContainerId(prefix), arr, prefix);
     showToast(`${value} has been added successfully.`);
-}
-
-/* ── Licensing badge color (sw-lic only) ── */
-function showLicenseBadgeColorModal(idx) {
-    const item = SOFTWARE_LICENSE_OPTIONS[idx];
-    if (!item) return;
-    const currentKey = getLicenseBadgeColor(item.color).key;
-    const swatches = LICENSE_BADGE_COLORS.map(c => `
-        <button type="button" onclick="setLicenseBadgeColor(${idx}, '${c.key}')"
-            style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 6px;border-radius:12px;cursor:pointer;background:${c.key === currentKey ? '#fafbfc' : 'transparent'};border:1.5px solid ${c.key === currentKey ? '#1d2e7b' : 'var(--border-light)'}">
-            <span style="width:26px;height:26px;border-radius:50%;background:${c.bg};border:1px solid rgba(0,0,0,0.06);display:grid;place-items:center">
-                <span style="width:11px;height:11px;border-radius:50%;background:${c.text}"></span>
-            </span>
-            <span style="font-size:10.5px;font-weight:600;color:${c.key === currentKey ? '#1d2e7b' : '#86868b'}">${c.name}</span>
-        </button>`).join('');
-    showModal(`
-        <div>
-            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px">
-                <div>
-                    <div style="font-size:11px;font-weight:700;color:#86868b;text-transform:uppercase;letter-spacing:.06em">Licensing Options</div>
-                    <h3 style="font-size:1.1rem;font-weight:700;color:#1d1d1f;margin:4px 0">Badge Color</h3>
-                    <p style="font-size:12px;color:#86868b;margin:0">Pick the storefront badge color for this licensing offer.</p>
-                </div>
-                <button type="button" class="btn-ghost" onclick="closeModal()" aria-label="Close"><i class="ph ph-x" style="font-size:18px"></i></button>
-            </div>
-            <div style="display:flex;align-items:center;justify-content:center;padding:18px;border:1px solid var(--border-light);border-radius:12px;background:#fafbfc;margin-bottom:16px">
-                ${renderSwLicenseBadge(item.label).replace('style="', 'style="margin-top:0;')}
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:8px">${swatches}</div>
-        </div>`);
-}
-
-function setLicenseBadgeColor(idx, key) {
-    const item = SOFTWARE_LICENSE_OPTIONS[idx];
-    if (!item || !LICENSE_BADGE_COLORS.some(c => c.key === key)) return;
-    if (getLicenseBadgeColor(item.color).key === key) { closeModal(); return; }
-    if (!commitPortalMutation(() => { item.color = key; })) return;
-    closeModal();
-    renderParamTagList('param-sw-license', SOFTWARE_LICENSE_OPTIONS, 'sw-lic');
-    showToast(`"${item.label}" badge color changed to ${getLicenseBadgeColor(key).name}.`);
 }
 
 // Products currently using a given parameter value (so deletion can be blocked).
@@ -3636,7 +3747,7 @@ function renderDisplayOrder(type) {
             ${icon}
             <div class="order-product-info">
                 <div class="order-product-name">${esc(p.name)}</div>
-                <div class="order-product-sub">${esc(p.vendor_name || '—')} · ${esc(p.sub_category || '')}${isDraft ? ' · <span style="color:#f59e0b;font-weight:600">' + esc(p.status.charAt(0).toUpperCase() + p.status.slice(1)) + '</span>' : ''}</div>
+                <div class="order-product-sub">${[esc(p.vendor_name || '—'), esc(p.sub_category || '')].filter(Boolean).join(' · ')}${isDraft ? ' · <span style="color:#f59e0b;font-weight:600">' + esc(p.status.charAt(0).toUpperCase() + p.status.slice(1)) + '</span>' : ''}</div>
             </div>
             ${statusBadge(p.status)}
         </div>`;
