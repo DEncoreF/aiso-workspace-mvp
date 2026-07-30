@@ -1041,7 +1041,7 @@ function togglePublish(pid, force = false) {
             logActivity('Published', p.name, 'Listed on storefront');
         });
         if (!saved) return;
-        showToast(`${p.name} is now published!`, 'success');
+        showToast(`${p.name} is now published.`, 'success');
     }
     reRenderCurrentList();
 }
