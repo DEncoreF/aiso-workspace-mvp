@@ -107,7 +107,7 @@ let PRODUCTS = [
             'Access control through encryption and authentication',
             'Real-time token consumption insights',
         ],
-        industries: ['IoT', 'Banking & Finance', 'Healthcare', 'E-commerce & Retail', 'IT', 'Manufacturing', 'Government'],
+        industries: ['IoT', 'Banking & Finance', 'Healthcare', 'E-commerce & Retail', 'Information Technology', 'Manufacturing', 'Government & Public Sector'],
         officialUrl: 'https://www.tpisoftware.com',
         videoUrl: 'https://www.youtube.com/watch?v=demo1',
     },
@@ -125,7 +125,7 @@ let PRODUCTS = [
             'Natural Language Interaction with High-Accuracy Knowledge Retrieval',
             'Scalable, Modular Architecture for Rapid AI Adoption',
         ],
-        industries: ['Banking & Finance', 'Healthcare', 'E-commerce & Retail', 'IT', 'Manufacturing', 'Government'],
+        industries: ['Banking & Finance', 'Healthcare', 'E-commerce & Retail', 'Information Technology', 'Manufacturing', 'Government & Public Sector'],
         officialUrl: 'https://www.tpisoftware.com',
         videoUrl: '',
     },
@@ -162,7 +162,7 @@ let PRODUCTS = [
             'Automated Notifications with deadline alerts',
             'Cloud-based API Integration',
         ],
-        industries: ['Banking & Finance', 'Healthcare', 'E-commerce & Retail', 'IT', 'Manufacturing', 'Government'],
+        industries: ['Banking & Finance', 'Healthcare', 'E-commerce & Retail', 'Information Technology', 'Manufacturing', 'Government & Public Sector'],
         officialUrl: 'https://www.tpisoftware.com',
         videoUrl: '',
     },
@@ -180,7 +180,7 @@ let PRODUCTS = [
             'AI + Rule Hybrid Models combining NLP, CV, OCR',
             'High-speed processing with up to 99% accuracy',
         ],
-        industries: ['Government', 'Finance', 'Healthcare', 'Logistics', 'Education', 'Legal', 'Manufacturing'],
+        industries: ['Government & Public Sector', 'Banking & Finance', 'Healthcare', 'Logistics & Transportation', 'Education', 'Legal & Consulting', 'Manufacturing'],
         officialUrl: 'https://www.compdf.com',
         videoUrl: 'https://www.youtube.com/watch?v=demo2',
     },
@@ -198,7 +198,7 @@ let PRODUCTS = [
             'Multi-national emissions factor databases',
             'Group-wide aggregated GHG data reporting',
         ],
-        industries: ['Banking & Finance', 'Healthcare', 'E-commerce & Retail', 'IT', 'Manufacturing', 'Government'],
+        industries: ['Banking & Finance', 'Healthcare', 'E-commerce & Retail', 'Information Technology', 'Manufacturing', 'Government & Public Sector'],
         officialUrl: 'https://www.tpisoftware.com',
         videoUrl: '',
     },
@@ -358,7 +358,29 @@ let SOFTWARE_INDUSTRY_OPTIONS = [
     { label: 'Information Technology', is_active: true },
     { label: 'Manufacturing', is_active: true },
     { label: 'Government & Public Sector', is_active: true },
+    { label: 'Logistics & Transportation', is_active: true },
+    { label: 'Education', is_active: true },
+    { label: 'Legal & Consulting', is_active: true },
 ];
+// Earlier seed data stored abbreviated industry labels ('IT', 'Government')
+// that are not in SOFTWARE_INDUSTRY_OPTIONS, so the same industry appeared
+// twice: abbreviated on the product, spelled out in the option list. Saves
+// written before that fix are normalized on load (see Store.load).
+const LEGACY_INDUSTRY_ALIASES = {
+    'IT': 'Information Technology',
+    'Government': 'Government & Public Sector',
+    'Finance': 'Banking & Finance',
+    'Logistics': 'Logistics & Transportation',
+    'Legal': 'Legal & Consulting',
+};
+function normalizeIndustryLabels(labels) {
+    const seen = new Set();
+    return (labels || []).reduce((out, label) => {
+        const canonical = LEGACY_INDUSTRY_ALIASES[label] || label;
+        if (!seen.has(canonical)) { seen.add(canonical); out.push(canonical); }
+        return out;
+    }, []);
+}
 // Licensing offers are static (SW_LICENSE_TYPES in app.js), no longer a
 // Parameter Center-managed list. Products store the label in `license_offer`.
 const HW_KEY_SPEC_MAX_ITEMS = 8;

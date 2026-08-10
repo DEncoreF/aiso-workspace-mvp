@@ -902,19 +902,18 @@ function confirmDeleteProduct(pid) {
             <div style="width:56px;height:56px;border-radius:16px;background:#fef2f2;display:inline-flex;align-items:center;justify-content:center;margin-bottom:16px"><i class="ph ph-trash" style="font-size:28px;color:#dc2626"></i></div>
             <h3 style="font-size:1.1rem;font-weight:700;margin:0 0 8px">Permanently delete "${esc(p.name)}"?</h3>
             <p style="font-size:13px;color:#86868b;margin:0 0 16px;line-height:1.6">This archived product will be permanently removed and cannot be recovered. Type the product name to confirm.</p>
-            <input id="delete-confirm-input" type="text" class="input-field" style="max-width:320px;margin:0 auto 20px;text-align:center" placeholder="${esc(p.name)}" oninput="updateDeleteConfirmState('${p.id}')">
+            <input id="delete-confirm-input" type="text" class="input-field" style="max-width:320px;margin:0 auto 20px;text-align:center" placeholder="${esc(p.name)}" oninput="clearDeleteConfirmError()">
             <div style="display:flex;gap:10px;justify-content:center">
                 <button onclick="closeModal()" class="btn-secondary">Cancel</button>
-                <button id="delete-confirm-btn" onclick="doDeleteProduct('${p.id}')" class="btn-primary" style="background:#dc2626" disabled><i class="ph ph-trash"></i> Delete Forever</button>
+                <button id="delete-confirm-btn" onclick="doDeleteProduct('${p.id}')" class="btn-primary" style="background:#dc2626"><i class="ph ph-trash"></i> Delete Forever</button>
             </div>
         </div>`);
 }
 
-function updateDeleteConfirmState(pid) {
-    const p = PRODUCTS.find(x => x.id === pid);
-    const button = document.getElementById('delete-confirm-btn');
-    if (!p || !button) return;
-    button.disabled = (document.getElementById('delete-confirm-input')?.value || '').trim() !== p.name;
+// The confirm button stays clickable so a wrong name produces the spec'd
+// "Product name does not match." toast instead of a silently dead button.
+function clearDeleteConfirmError() {
+    document.getElementById('delete-confirm-input')?.classList.remove('field-error');
 }
 
 function doDeleteProduct(pid, force = false) {
@@ -930,8 +929,13 @@ function doDeleteProduct(pid, force = false) {
         return;
     }
     if (!force) {
-        const confirmVal = (document.getElementById('delete-confirm-input')?.value || '').trim();
-        if (confirmVal !== p.name) { showToast('Product name does not match', 'error'); return; }
+        const confirmInput = document.getElementById('delete-confirm-input');
+        if ((confirmInput?.value || '').trim() !== p.name) {
+            confirmInput?.classList.add('field-error');
+            confirmInput?.focus();
+            showToast('Product name does not match.', 'error');
+            return;
+        }
     }
     if (p.product_type === 'hardware' && findCompatRefs(pid).length) {
         if (!force) { showHwCompatConflictModal(pid, 'Delete', `doDeleteProduct('${pid}', true)`); return; }

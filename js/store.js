@@ -73,6 +73,18 @@ const Store = (function () {
                 PRODUCTS = data.PRODUCTS;
             }
         }
+        // Old saves may still hold abbreviated industry labels; map them onto the
+        // Parameter Center vocabulary so a product never shows 'IT' next to the
+        // option list's 'Information Technology'.
+        let industriesNormalized = false;
+        PRODUCTS.forEach(product => {
+            if (!product.industries?.length) return;
+            const normalized = normalizeIndustryLabels(product.industries);
+            if (normalized.join('|') === product.industries.join('|')) return;
+            product.industries = normalized;
+            industriesNormalized = true;
+        });
+
         if (Array.isArray(data.ACTIVITY_LOG)) {
             if (data.mockDataVersion !== MOCK_DATA_VERSION) {
                 const createdProductNames = new Set(
@@ -91,7 +103,7 @@ const Store = (function () {
         if (Array.isArray(data.HARDWARE_PRODUCT_TYPES)) HARDWARE_PRODUCT_TYPES = data.HARDWARE_PRODUCT_TYPES;
         if (Array.isArray(data.SOFTWARE_CATEGORY_OPTIONS)) SOFTWARE_CATEGORY_OPTIONS = data.SOFTWARE_CATEGORY_OPTIONS;
         if (Array.isArray(data.SOFTWARE_INDUSTRY_OPTIONS)) SOFTWARE_INDUSTRY_OPTIONS = data.SOFTWARE_INDUSTRY_OPTIONS;
-        if (mockDataMigrated) {
+        if (mockDataMigrated || industriesNormalized) {
             try { localStorage.setItem(KEY, serialize()); } catch (e) { /* retry on the next normal save */ }
         }
         return true;
