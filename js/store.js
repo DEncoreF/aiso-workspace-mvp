@@ -33,7 +33,9 @@ const Store = (function () {
         } catch (e) {
             console.error('Store.save failed:', e);
             if (notify && typeof showToast === 'function') {
-                showToast('Unable to save changes. Please try again.', 'error');
+                // Same copy as app.js's TOAST_SAVE_FAILURE, inlined because
+                // store.js loads first and must not depend on app.js.
+                showToast('Changes could not be saved. Please try again.', 'error');
             }
             return false;
         }

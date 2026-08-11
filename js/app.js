@@ -43,7 +43,7 @@ function restorePortalState(snapshot) {
 // after this function returns true, so the user's input remains available.
 function commitPortalMutation(
     mutate,
-    failureMessage = 'Unable to save changes. Please try again.',
+    failureMessage = TOAST_SAVE_FAILURE,
     persist = () => Store.save({ notify: false })
 ) {
     const snapshot = capturePortalState();
@@ -100,6 +100,12 @@ function statusBadge(s) {
     };
     return m[s] || `<span class="badge badge-zinc">${esc(s)}</span>`;
 }
+
+// The matched pair of toasts every save attempt ends in. Keep them in sync
+// with the copy in store.js, which reports the same failure from the
+// persistence layer. Both are previewable under Settings → Save Toasts.
+const TOAST_SAVE_SUCCESS = 'Changes saved.';
+const TOAST_SAVE_FAILURE = 'Changes could not be saved. Please try again.';
 
 function showToast(msg, type = 'success') {
     const el = document.createElement('div');
@@ -537,6 +543,9 @@ function logout() {
     closeModal();
     if (typeof closeSwPreview === 'function') closeSwPreview();
     if (typeof closeUserMenu === 'function') closeUserMenu();
+    // Staged edits never survive a session.
+    paramDraft = null;
+    compatDraft = null;
     currentUser = null;
     const screen = document.getElementById('login-screen');
     if (screen) screen.style.display = 'flex';
@@ -566,6 +575,16 @@ function navigate(key) {
         showToast('You do not have permission to view compatibility mappings.', 'error');
         return;
     }
+    // Drafts live only while their view is open, so leaving one with staged
+    // edits needs an explicit decision from the user.
+    const dirtyScope = getDirtyScope();
+    if (dirtyScope && dirtyScope !== key) {
+        confirmLeavePending(dirtyScope, key);
+        return;
+    }
+    // Rebuild the draft on entry so it starts from the current saved state.
+    paramDraft = null;
+    compatDraft = null;
     currentView = key;
     // Toggle views
     document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
@@ -581,8 +600,8 @@ function navigate(key) {
     const meta = {
         'sw-products': { title: 'Software Products', action: `<button onclick="showCreateProductModal('software')" class="btn-primary" id="sw-create-btn"><i class="ph ph-plus"></i> Add Software</button>` },
         'hw-products': { title: 'Hardware Products', action: `<button onclick="showCreateProductModal('hardware')" class="btn-primary" id="hw-create-btn"><i class="ph ph-plus"></i> Add Hardware</button>` },
-        'compatibility': { title: 'Compatibility Mapping', subtitle: 'Manage which published hardware products can be paired with each published software product. Changes take effect immediately.' },
-        'param-center': { title: 'Parameter Center', subtitle: 'System-level parameters managed exclusively by Super Admin.' },
+        'compatibility': { title: 'Compatibility Mapping', subtitle: 'Manage which published hardware products can be paired with each published software product. Edits are staged until you save them.' },
+        'param-center': { title: 'Parameter Center', subtitle: 'System-level parameters managed exclusively by Super Admin. Edits are staged until you save them.' },
         'activity-log': { title: 'Activity Log', subtitle: 'Recent actions performed in this session.', action: `<button onclick="ACTIVITY_LOG=[];Store.save();renderActivityLog();showToast('Log cleared')" class="btn-secondary"><i class="ph ph-trash"></i> Clear</button>` },
         'settings': { title: 'Settings' },
     }[key] || {};
@@ -1115,7 +1134,6 @@ function showHwPreview(pid) {
 function showSwDetail(pid) {
     const p = PRODUCTS.find(x => x.id === pid);
     if (!p) return;
-    const compatHW = (p.compatible_hardware || []).map(hid => PRODUCTS.find(x => x.id === hid)).filter(Boolean);
     const canEdit = canManageProduct(p);
 
     const detailRow = (label, value) => `<div style="display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--border-light)"><span style="color:#86868b;font-size:13px;flex-shrink:0">${label}</span><span style="font-weight:600;font-size:13px;text-align:right">${value}</span></div>`;
@@ -1174,17 +1192,9 @@ function showSwDetail(pid) {
                         ? `<a href="${esc(normalizeProductUrl(p.officialUrl))}" target="_blank" rel="noopener noreferrer" title="${esc(normalizeProductUrl(p.officialUrl))}" style="color:#1d2e7b;text-decoration:underline;text-underline-offset:3px;word-break:break-all">${esc(formatProductUrlLabel(p.officialUrl))}</a>`
                         : '—')}
                     ${detailRow('Category', esc(getSwCategories(p).join(', ')))}
-                    ${detailRow('Packaging', p.sw_category === 'included' ? 'Bundled' : 'Add-on')}
                     ${detailRow('License', p.license_offer ? esc(p.license_offer) : '—')}
                     ${detailRow('Created', esc(p.created_at))}
                     ${detailRow('Updated', esc(p.updated_at))}
-                </section>
-                <div style="border-top:1px solid var(--border-light)"></div>
-
-                <!-- Compatible Hardware -->
-                <section style="margin-top:32px;margin-bottom:32px">
-                    <div style="font-size:11px;font-weight:600;color:#86868b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:12px">Compatible Hardware</div>
-                    ${compatHW.length ? `<div style="display:flex;flex-direction:column;gap:10px">${compatHW.map(h => `<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:#1d1d1f"><i class="ph ph-hard-drives" style="color:#86868b"></i><span style="font-weight:500">${esc(h.name)}</span></div>`).join('')}</div>` : '<div style="font-size:13px;color:#c7c7cc">No hardware selected</div>'}
                 </section>
             </div>
         </div>
@@ -1299,7 +1309,6 @@ function showSwPreview(pid) {
     const p = PRODUCTS.find(x => x.id === pid);
     if (!p) return;
     ensurePreviewDrawer();
-    const compatHW = (p.compatible_hardware || []).map(hid => PRODUCTS.find(x => x.id === hid)).filter(Boolean);
     const initials = p.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
 
     const SVG_FEATURES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px;color:#7c8ec8;flex-shrink:0"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>';
@@ -1333,16 +1342,8 @@ function showSwPreview(pid) {
             ${savedPhotos.length > 1 ? `<div class="sd-gallery-dots" id="sd-saved-gallery-dots">${savedPhotos.map((_, i) => `<span class="sd-gallery-dot${i === 0 ? ' active' : ''}"></span>`).join('')}</div>` : ''}
         </div>` : '';
 
-    const isBundled = p.sw_category === 'included';
-    let actionHtml;
-    if (isBundled) {
-        actionHtml = `
-            <button class="sd-action-primary" style="background:rgba(20,46,123,0.08);color:#1d2e7b;box-shadow:none;font-weight:700">Included</button>
-            <p class="sd-action-helper">This software is bundled automatically with compatible hardware.</p>`;
-    } else {
-        actionHtml = `
-            <button class="sd-action-primary">Select Add-on</button>`;
-    }
+    // Packaging no longer differentiates the storefront call to action.
+    const actionHtml = '<button class="sd-action-primary">Select</button>';
 
     sdDrawer.innerHTML = `
         <button class="sd-close" type="button" onclick="closeSwPreview()" aria-label="Close preview">&times;</button>
@@ -2227,7 +2228,7 @@ function renderSoftwareCreatePreview() {
                 </section>
             </div>
             <div class="sd-action-footer" style="margin-top:auto">
-                <button class="sd-action-primary" type="button">Select Add-on</button>
+                <button class="sd-action-primary" type="button">Select</button>
                 ${renderSwSiteLink(siteUrl, { placeholder: 'Official website link...' })}
             </div>
         </div>`;
@@ -2911,7 +2912,7 @@ function renderEditSwPreview(target) {
                 <section class="sd-meta-block"><div class="sd-meta-title">${SVG_I} Applicable Industries</div>${indHtml}</section>
             </div>
             <div class="sd-action-footer" style="margin-top:auto">
-                <button class="sd-action-primary" type="button">Select Add-on</button>
+                <button class="sd-action-primary" type="button">Select</button>
                 ${renderSwSiteLink(siteUrl, { placeholder: 'Official website link...' })}
             </div>
         </div>`;
@@ -3299,6 +3300,246 @@ function submitModalFailureDemo(action, pid) {
 
 
 // ═══════════════════════════════════════════════════════════════════
+// PENDING CHANGES — shared draft layer for Parameter Center and
+// Compatibility Mapping. Every edit on those two views is staged in a
+// draft; nothing is written to PRODUCTS or localStorage until the user
+// presses Save and confirms.
+// ═══════════════════════════════════════════════════════════════════
+
+const PENDING_SCOPES = ['param-center', 'compatibility'];
+
+// Draft state, one per scope. null means the view is not currently open.
+let paramDraft = null;
+let compatDraft = null;
+
+function publishedOrderIds(type) {
+    return PRODUCTS
+        .filter(p => p.product_type === type && p.status === 'published')
+        .sort((a, b) => (a.display_order || 999) - (b.display_order || 999))
+        .map(p => p.id);
+}
+
+function startParamDraft() {
+    paramDraft = {
+        'sw-cat': SOFTWARE_CATEGORY_OPTIONS.map(o => ({ ...o })),
+        'sw-ind': SOFTWARE_INDUSTRY_OPTIONS.map(o => ({ ...o })),
+        'hw-type': HARDWARE_PRODUCT_TYPES.map(o => ({ ...o })),
+        order: { software: publishedOrderIds('software'), hardware: publishedOrderIds('hardware') },
+    };
+}
+
+function startCompatDraft() {
+    compatDraft = {};
+    PRODUCTS
+        .filter(p => p.product_type === 'software' && p.status === 'published')
+        .forEach(p => { compatDraft[p.id] = Array.from(new Set(p.compatible_hardware || [])); });
+}
+
+/* ── Change detection ──
+   Each entry is { label, apply } so the confirmation modal, the counter and
+   the commit all read from a single description of what changed. */
+
+const PARAM_LIST_LABELS = {
+    'sw-cat': 'Software category',
+    'sw-ind': 'Applicable industry',
+    'hw-type': 'Hardware product type',
+};
+
+function paramLiveArr(prefix) {
+    if (prefix === 'sw-cat') return SOFTWARE_CATEGORY_OPTIONS;
+    if (prefix === 'sw-ind') return SOFTWARE_INDUSTRY_OPTIONS;
+    if (prefix === 'hw-type') return HARDWARE_PRODUCT_TYPES;
+    return [];
+}
+
+function getParamPendingChanges() {
+    if (!paramDraft) return [];
+    const changes = [];
+    Object.keys(PARAM_LIST_LABELS).forEach(prefix => {
+        const noun = PARAM_LIST_LABELS[prefix];
+        const live = paramLiveArr(prefix);
+        const draft = paramDraft[prefix];
+        const liveByLabel = new Map(live.map(o => [o.label, o]));
+        const draftByLabel = new Map(draft.map(o => [o.label, o]));
+        draft.forEach(item => {
+            const before = liveByLabel.get(item.label);
+            if (!before) changes.push({ label: `${noun} "${item.label}" added` });
+            else if (before.is_active !== item.is_active) {
+                changes.push({ label: `${noun} "${item.label}" ${item.is_active ? 'enabled' : 'disabled'}` });
+            }
+        });
+        live.forEach(item => {
+            if (!draftByLabel.has(item.label)) changes.push({ label: `${noun} "${item.label}" deleted` });
+        });
+    });
+    ['software', 'hardware'].forEach(type => {
+        const before = publishedOrderIds(type);
+        const after = paramDraft.order[type];
+        if (before.length !== after.length || before.some((id, i) => id !== after[i])) {
+            changes.push({ label: `${type === 'software' ? 'Software' : 'Hardware'} display order reordered` });
+        }
+    });
+    return changes;
+}
+
+function getCompatPendingChanges() {
+    if (!compatDraft) return [];
+    const changes = [];
+    Object.keys(compatDraft).forEach(softwareId => {
+        const software = PRODUCTS.find(p => p.id === softwareId);
+        if (!software) return;
+        const before = Array.from(new Set(software.compatible_hardware || []));
+        const after = compatDraft[softwareId];
+        const added = after.filter(id => !before.includes(id));
+        const removed = before.filter(id => !after.includes(id));
+        if (!added.length && !removed.length) return;
+        const nameOf = id => PRODUCTS.find(p => p.id === id)?.name || id;
+        const parts = [];
+        if (added.length) parts.push(`+${added.map(nameOf).join(', ')}`);
+        if (removed.length) parts.push(`−${removed.map(nameOf).join(', ')}`);
+        changes.push({ label: `${software.name}: ${parts.join(' · ')}`, softwareId, added, removed });
+    });
+    return changes;
+}
+
+function getPendingChanges(scope) {
+    return scope === 'param-center' ? getParamPendingChanges() : getCompatPendingChanges();
+}
+
+function hasPendingChanges(scope) {
+    return getPendingChanges(scope).length > 0;
+}
+
+function getDirtyScope() {
+    return PENDING_SCOPES.find(scope => hasPendingChanges(scope)) || null;
+}
+
+/* ── Shared Save bar ── */
+
+function pendingBarHost(scope) {
+    return document.getElementById(scope === 'param-center' ? 'param-pending-bar' : 'compat-pending-bar');
+}
+
+function renderPendingBar(scope) {
+    const host = pendingBarHost(scope);
+    if (!host) return;
+    const count = getPendingChanges(scope).length;
+    if (!count) { host.innerHTML = ''; host.hidden = true; return; }
+    host.hidden = false;
+    host.innerHTML = `
+        <div class="pending-bar-inner">
+            <span class="pending-bar-label"><i class="ph ph-warning-circle"></i> ${count} unsaved change${count === 1 ? '' : 's'}</span>
+            <div style="display:flex;gap:8px">
+                <button type="button" class="btn-secondary" onclick="discardPendingChanges('${scope}')">Discard</button>
+                <button type="button" class="btn-primary" onclick="confirmPendingChanges('${scope}')"><i class="ph ph-floppy-disk"></i> Save</button>
+            </div>
+        </div>`;
+}
+
+function rerenderScope(scope) {
+    if (scope === 'param-center') renderParamCenter();
+    else renderCompatibilityCenter();
+}
+
+function discardPendingChanges(scope) {
+    if (scope === 'param-center') startParamDraft();
+    else startCompatDraft();
+    rerenderScope(scope);
+    showToast('Unsaved changes discarded.');
+}
+
+function confirmPendingChanges(scope) {
+    const changes = getPendingChanges(scope);
+    if (!changes.length) return;
+    showModal(`
+        <div>
+            <div style="width:52px;height:52px;border-radius:16px;background:#eef1ff;display:grid;place-items:center;margin-bottom:16px"><i class="ph ph-floppy-disk" style="font-size:26px;color:#1432E6"></i></div>
+            <h3 style="font-size:1.1rem;font-weight:700;margin:0 0 6px">Save these changes?</h3>
+            <p style="font-size:13px;color:#86868b;margin:0 0 16px;line-height:1.6">${changes.length} change${changes.length === 1 ? '' : 's'} will be applied and take effect immediately.</p>
+            <div style="display:grid;gap:6px;max-height:260px;overflow-y:auto;margin:0 0 22px">
+                ${changes.map(c => `<div style="font-size:13px;color:#1d1d1f;padding:9px 12px;border:1px solid #f1f3f5;border-radius:10px;background:#fafbfc">${esc(c.label)}</div>`).join('')}
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end">
+                <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="button" class="btn-primary" onclick="savePendingChanges('${scope}')"><i class="ph ph-check"></i> Confirm &amp; Save</button>
+            </div>
+        </div>`);
+}
+
+function savePendingChanges(scope) {
+    const changes = getPendingChanges(scope);
+    if (!changes.length) { closeModal(); return; }
+    const saved = scope === 'param-center' ? applyParamDraft(changes) : applyCompatDraft(changes);
+    if (!saved) return;
+    closeModal();
+    if (scope === 'param-center') startParamDraft(); else startCompatDraft();
+    rerenderScope(scope);
+    showToast(TOAST_SAVE_SUCCESS);
+}
+
+function replaceArrayContents(target, source) {
+    target.length = 0;
+    source.forEach(item => target.push({ ...item }));
+}
+
+function applyParamDraft(changes) {
+    const draft = paramDraft;
+    return commitPortalMutation(() => {
+        replaceArrayContents(SOFTWARE_CATEGORY_OPTIONS, draft['sw-cat']);
+        replaceArrayContents(SOFTWARE_INDUSTRY_OPTIONS, draft['sw-ind']);
+        replaceArrayContents(HARDWARE_PRODUCT_TYPES, draft['hw-type']);
+        ['software', 'hardware'].forEach(type => {
+            // Published products take positions 1..N in the drafted order; the
+            // rest keep their relative order behind them.
+            const ordered = draft.order[type].map(id => PRODUCTS.find(p => p.id === id)).filter(Boolean);
+            const others = PRODUCTS
+                .filter(p => p.product_type === type && p.status !== 'published')
+                .sort((a, b) => (a.display_order || 999) - (b.display_order || 999));
+            [...ordered, ...others].forEach((p, i) => { p.display_order = i + 1; });
+        });
+        changes.forEach(change => logActivity('Parameter updated', 'Parameter Center', change.label));
+    });
+}
+
+function applyCompatDraft(changes) {
+    const today = new Date().toISOString().slice(0, 10);
+    return commitPortalMutation(() => {
+        changes.forEach(change => {
+            const software = PRODUCTS.find(p => p.id === change.softwareId);
+            if (!software) return;
+            software.compatible_hardware = [...compatDraft[change.softwareId]];
+            software.updated_at = today;
+            const nameOf = id => PRODUCTS.find(p => p.id === id)?.name || id;
+            const detailParts = [];
+            if (change.added.length) detailParts.push(`Added: ${change.added.map(nameOf).join(', ')}`);
+            if (change.removed.length) detailParts.push(`Removed: ${change.removed.map(nameOf).join(', ')}`);
+            logActivity('Compatibility updated', software.name, detailParts.join(' · ') || 'Mapping cleared', software.id);
+        });
+    });
+}
+
+/* ── Leaving a view with unsaved changes ── */
+
+function confirmLeavePending(scope, nextKey) {
+    const count = getPendingChanges(scope).length;
+    showModal(`
+        <div>
+            <div style="width:52px;height:52px;border-radius:16px;background:#fffbeb;display:grid;place-items:center;margin-bottom:16px"><i class="ph ph-warning-circle" style="font-size:26px;color:#d97706"></i></div>
+            <h3 style="font-size:1.1rem;font-weight:700;margin:0 0 6px">Leave without saving?</h3>
+            <p style="font-size:13px;color:#86868b;margin:0 0 22px;line-height:1.6">You have ${count} unsaved change${count === 1 ? '' : 's'} on this page. Leaving will discard ${count === 1 ? 'it' : 'them'}.</p>
+            <div style="display:flex;gap:10px;justify-content:flex-end">
+                <button type="button" class="btn-secondary" onclick="closeModal()">Stay on page</button>
+                <button type="button" class="btn-primary" style="background:#dc2626" onclick="closeModal();leavePendingScope('${scope}','${nextKey}')"><i class="ph ph-arrow-right"></i> Discard &amp; Leave</button>
+            </div>
+        </div>`);
+}
+
+function leavePendingScope(scope, nextKey) {
+    if (scope === 'param-center') paramDraft = null; else compatDraft = null;
+    navigate(nextKey);
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // PARAMETER CENTER
 // ═══════════════════════════════════════════════════════════════════
 
@@ -3311,26 +3552,36 @@ function switchParamTab(tab) {
 }
 
 function renderParamCenter() {
-    renderParamPackaging();
-    renderParamTagList('param-sw-categories', SOFTWARE_CATEGORY_OPTIONS, 'sw-cat');
-    renderParamTagList('param-sw-industries', SOFTWARE_INDUSTRY_OPTIONS, 'sw-ind');
-    renderParamTagList('param-hw-types', HARDWARE_PRODUCT_TYPES, 'hw-type');
+    if (!paramDraft) startParamDraft();
+    // Software Packaging is disabled: its section is hidden and never rendered.
+    renderParamTagList('param-sw-categories', getParamDataArr('sw-cat'), 'sw-cat');
+    renderParamTagList('param-sw-industries', getParamDataArr('sw-ind'), 'sw-ind');
+    renderParamTagList('param-hw-types', getParamDataArr('hw-type'), 'hw-type');
     renderDisplayOrder('software');
     renderDisplayOrder('hardware');
+    renderPendingBar('param-center');
 }
 
 // ═══════════════════════════════════════════════════════════════════
 // COMPATIBILITY MAPPING — standalone view, parallel to Parameter Center
 // ═══════════════════════════════════════════════════════════════════
 
+// Reads the drafted mapping while the view is open so the table shows staged
+// edits; falls back to the saved mapping otherwise.
+function getCompatibilityMapping(product) {
+    if (compatDraft && compatDraft[product.id]) return compatDraft[product.id];
+    return product.compatible_hardware || [];
+}
+
 function getCompatibilityHardware(product) {
-    return (product.compatible_hardware || [])
+    return getCompatibilityMapping(product)
         .map(hardwareId => PRODUCTS.find(item => item.id === hardwareId && item.product_type === 'hardware'))
         .filter(Boolean);
 }
 
 function renderCompatibilityCenter() {
     if (!canViewCompatibility()) return;
+    if (!compatDraft) startCompatDraft();
     const target = document.getElementById('compat-tbody');
     const summary = document.getElementById('compat-summary');
     if (!target) return;
@@ -3357,32 +3608,34 @@ function renderCompatibilityCenter() {
             .some(value => String(value || '').toLowerCase().includes(search)))
         .sort((a, b) => a.name.localeCompare(b.name));
 
+    const pendingChangeIds = new Set(getCompatPendingChanges().map(change => change.softwareId));
     target.innerHTML = rows.length ? rows.map(product => {
         const hardware = getCompatibilityHardware(product);
         const shown = hardware.slice(0, 2);
         const remaining = hardware.length - shown.length;
-        const isBundled = product.sw_category === 'included';
         const canEdit = canManageCompatibility();
+        const isPending = pendingChangeIds.has(product.id);
         const hardwareHtml = hardware.length
-            ? `<div class="flex flex-wrap gap-1.5">${shown.map(item => `<span class="badge badge-zinc"><i class="ph ph-hard-drives"></i> ${esc(item.name)}</span>`).join('')}${remaining > 0 ? `<span class="badge badge-zinc">+${remaining}</span>` : ''}</div>`
-            : `<span style="font-size:12px;color:${isBundled ? '#d97706' : '#86868b'};font-weight:${isBundled ? '600' : '400'}"><i class="ph ${isBundled ? 'ph-warning-circle' : 'ph-minus-circle'}"></i> ${isBundled ? 'Bundled · mapping needed' : 'Not configured'}</span>`;
+            ? `<div class="flex flex-wrap gap-1.5">${shown.map(item => `<span class="badge badge-zinc">${esc(item.name)}</span>`).join('')}${remaining > 0 ? `<span class="badge badge-zinc">+${remaining}</span>` : ''}</div>`
+            : '<span style="font-size:12px;color:#86868b"><i class="ph ph-minus-circle"></i> Not configured</span>';
         return `<tr>
             <td>
                 <div class="flex items-center gap-3">
                     <div style="width:36px;height:36px;border-radius:10px;background:#f5f5f7;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#86868b;flex-shrink:0">${esc(product.name.slice(0, 2).toUpperCase())}</div>
                     <div>
-                        <div style="font-weight:600;font-size:13.5px;color:#1d1d1f">${esc(product.name)}</div>
+                        <div style="font-weight:600;font-size:13.5px;color:#1d1d1f">${esc(product.name)}${isPending ? ' <span class="badge badge-orange">Unsaved</span>' : ''}</div>
                         <div style="font-size:12px;color:#86868b;margin-top:1px">${esc(product.vendor_name || '—')} · ${esc(product.sub_category || 'Software')}</div>
                     </div>
                 </div>
             </td>
-            <td><span class="badge ${isBundled ? 'badge-green' : 'badge-zinc'}"><i class="ph ${isBundled ? 'ph-package' : 'ph-plus-circle'}"></i> ${isBundled ? 'Bundled' : 'Add-on'}</span></td>
             <td>${hardwareHtml}</td>
             <td class="text-right">
                 <button type="button" class="btn-ghost" onclick="showCompatibilityModal('${product.id}')" ${canEdit ? '' : 'disabled'} title="${canEdit ? 'Edit' : 'Permission required'}"><i class="ph ph-pencil-simple"></i></button>
             </td>
         </tr>`;
-    }).join('') : `<tr><td colspan="4" class="text-center py-16">${emptyState('ph-arrows-left-right', search ? EMPTY_STATE_NO_RESULTS : EMPTY_STATE_NO_DATA)}</td></tr>`;
+    }).join('') : `<tr><td colspan="3" class="text-center py-16">${emptyState('ph-arrows-left-right', search ? EMPTY_STATE_NO_RESULTS : EMPTY_STATE_NO_DATA)}</td></tr>`;
+
+    renderPendingBar('compatibility');
 }
 
 function showCompatibilityModal(softwareId) {
@@ -3397,7 +3650,8 @@ function showCompatibilityModal(softwareId) {
         return;
     }
 
-    const selectedIds = new Set(software.compatible_hardware || []);
+    if (!compatDraft) startCompatDraft();
+    const selectedIds = new Set(getCompatibilityMapping(software));
     const publishedHardware = PRODUCTS
         .filter(product => product.product_type === 'hardware' && product.status === 'published')
         .sort((a, b) => a.name.localeCompare(b.name));
@@ -3409,7 +3663,6 @@ function showCompatibilityModal(softwareId) {
         const searchValue = [hardware.name, hardware.vendor_name, hardware.brand, hardware.model, hardware.sub_category].filter(Boolean).join(' ').toLowerCase();
         return `<label class="compatibility-hardware-row" data-compat-search="${esc(searchValue)}" data-compat-category="${esc(hardware.sub_category || '')}" style="display:flex;align-items:center;gap:12px;padding:11px 12px;border:1px solid var(--border-light);border-radius:12px;cursor:pointer;background:#fff">
             <input type="checkbox" name="compat-hardware" value="${esc(hardware.id)}" class="w-4 h-4 accent-aiso" ${selectedIds.has(hardware.id) ? 'checked' : ''} onchange="updateCompatibilitySelectionCount()">
-            <span style="width:34px;height:34px;border-radius:10px;background:#f5f5f7;display:grid;place-items:center;flex-shrink:0"><i class="ph ph-hard-drives" style="color:#1d2e7b"></i></span>
             <span style="min-width:0;flex:1">
                 <span style="display:block;font-size:13px;font-weight:600;color:#1d1d1f">${esc(hardware.name)}</span>
                 <span style="display:block;font-size:11px;color:#86868b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc([hardware.vendor_name, hardware.brand, hardware.model || hardware.sub_category].filter(Boolean).join(' · '))}</span>
@@ -3442,15 +3695,14 @@ function showCompatibilityModal(softwareId) {
             <div id="compat-hardware-list" style="display:grid;gap:8px;max-height:360px;overflow-y:auto;padding-right:3px">
                 ${hardwareRows || '<div style="font-size:13px;color:#86868b;text-align:center;padding:28px 0">No published hardware products available.</div>'}
                 <div id="compat-filter-empty" style="display:none;text-align:center;padding:28px 0">
-                    <div style="font-size:13px;color:#86868b;margin-bottom:10px">No hardware matches the current filters.</div>
-                    <button type="button" class="btn-ghost" onclick="clearCompatibilityFilters()"><i class="ph ph-x-circle"></i> Clear filters</button>
+                    <div style="font-size:13px;color:#86868b">No hardware matches the current filters.</div>
                 </div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light)">
-                <span style="font-size:11px;color:#86868b">Changes take effect immediately on the storefront.</span>
+                <span style="font-size:11px;color:#86868b">Staged until you press Save on the Compatibility Mapping page.</span>
                 <div style="display:flex;gap:8px;flex-shrink:0">
                     <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
-                    <button type="button" class="btn-primary" onclick="saveCompatibility('${software.id}')"><i class="ph ph-floppy-disk"></i> Save Mapping</button>
+                    <button type="button" class="btn-primary" onclick="applyCompatibilityMapping('${software.id}')"><i class="ph ph-check"></i> Apply</button>
                 </div>
             </div>
         </div>`);
@@ -3477,13 +3729,6 @@ function setCompatCategoryFilter(button) {
     applyCompatibilityHardwareFilters();
 }
 
-function clearCompatibilityFilters() {
-    const searchInput = document.getElementById('compat-hardware-search');
-    if (searchInput) searchInput.value = '';
-    document.querySelectorAll('#compat-cat-tabs .filter-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.val === ''));
-    applyCompatibilityHardwareFilters();
-}
-
 function updateCompatibilitySelectionCount() {
     const checked = Array.from(document.querySelectorAll('input[name="compat-hardware"]:checked'));
     const hiddenCount = checked.filter(input => input.closest('.compatibility-hardware-row')?.style.display === 'none').length;
@@ -3492,15 +3737,18 @@ function updateCompatibilitySelectionCount() {
     if (target) target.textContent = `${checked.length} selected${hiddenCount ? ` (${hiddenCount} hidden by filters)` : ''}`;
 }
 
-function saveCompatibility(softwareId) {
+// Stages the modal's selection into the draft. Nothing is persisted here; the
+// page-level Save bar commits every staged mapping at once.
+function applyCompatibilityMapping(softwareId) {
     if (!canManageCompatibility()) {
         showToast('You do not have permission to update compatibility mappings.', 'error');
         return;
     }
     const software = PRODUCTS.find(product => product.id === softwareId && product.product_type === 'software');
     if (!software || software.status !== 'published') return;
+    if (!compatDraft) startCompatDraft();
 
-    const previousIds = Array.from(new Set(software.compatible_hardware || []));
+    const previousIds = Array.from(new Set(getCompatibilityMapping(software)));
     const nextIds = Array.from(document.querySelectorAll('input[name="compat-hardware"]:checked')).map(input => input.value);
     const unchanged = previousIds.length === nextIds.length && previousIds.every(id => nextIds.includes(id));
     if (unchanged) {
@@ -3509,22 +3757,11 @@ function saveCompatibility(softwareId) {
         return;
     }
 
-    const hardwareName = id => PRODUCTS.find(product => product.id === id)?.name || id;
-    const added = nextIds.filter(id => !previousIds.includes(id)).map(hardwareName);
-    const removed = previousIds.filter(id => !nextIds.includes(id)).map(hardwareName);
-    const detailParts = [];
-    if (added.length) detailParts.push(`Added: ${added.join(', ')}`);
-    if (removed.length) detailParts.push(`Removed: ${removed.join(', ')}`);
-    const saved = commitPortalMutation(() => {
-        software.compatible_hardware = nextIds;
-        software.updated_at = new Date().toISOString().slice(0, 10);
-        logActivity('Compatibility updated', software.name, detailParts.join(' · ') || 'Mapping cleared', software.id);
-    });
-    if (!saved) return;
-
+    // No toast here: staging is not a save, and the closed modal, the row's
+    // "Unsaved" flag and the sticky Save bar already report the new state.
+    compatDraft[softwareId] = nextIds;
     closeModal();
     renderCompatibilityCenter();
-    showToast(`${software.name} compatibility updated and applied immediately.`);
 }
 
 /* ── Packaging table ── */
@@ -3615,11 +3852,11 @@ function renderParamTagList(containerId, dataArr, prefix) {
         </div>`;
 }
 
+// While Parameter Center is open every read and write goes through the draft,
+// so the UI reflects staged edits and the live arrays stay untouched until Save.
 function getParamDataArr(prefix) {
-    if (prefix === 'sw-cat') return SOFTWARE_CATEGORY_OPTIONS;
-    if (prefix === 'sw-ind') return SOFTWARE_INDUSTRY_OPTIONS;
-    if (prefix === 'hw-type') return HARDWARE_PRODUCT_TYPES;
-    return [];
+    if (paramDraft && paramDraft[prefix]) return paramDraft[prefix];
+    return paramLiveArr(prefix);
 }
 
 function getParamContainerId(prefix) {
@@ -3632,10 +3869,9 @@ function getParamContainerId(prefix) {
 function toggleParamTag(prefix, idx) {
     const arr = getParamDataArr(prefix);
     if (!arr[idx]) return;
-    const nextState = !arr[idx].is_active;
-    if (!commitPortalMutation(() => { arr[idx].is_active = nextState; })) return;
+    arr[idx].is_active = !arr[idx].is_active;
     renderParamTagList(getParamContainerId(prefix), arr, prefix);
-    showToast(`"${arr[idx].label}" ${arr[idx].is_active ? 'enabled' : 'disabled'}`);
+    renderPendingBar('param-center');
 }
 
 function addParamTag(prefix) {
@@ -3647,11 +3883,10 @@ function addParamTag(prefix) {
         showToast('This item already exists', 'warning');
         return;
     }
-    const newItem = { label: value, is_active: true };
-    if (!commitPortalMutation(() => { arr.push(newItem); })) return;
+    arr.push({ label: value, is_active: true });
     input.value = '';
     renderParamTagList(getParamContainerId(prefix), arr, prefix);
-    showToast(`${value} has been added successfully.`);
+    renderPendingBar('param-center');
 }
 
 // Products currently using a given parameter value (so deletion can be blocked).
@@ -3712,10 +3947,10 @@ function doDeleteParamTag(prefix, idx) {
         showParamTagUsageBlockedModal(item, used);
         return;
     }
-    if (!commitPortalMutation(() => { arr.splice(idx, 1); })) return;
+    arr.splice(idx, 1);
     closeModal();
     renderParamTagList(getParamContainerId(prefix), arr, prefix);
-    showToast(`${label} has been deleted successfully.`);
+    renderPendingBar('param-center');
 }
 
 /* ── Display Order ── */
@@ -3723,35 +3958,28 @@ function renderDisplayOrder(type) {
     const containerId = type === 'software' ? 'param-sw-order' : 'param-hw-order';
     const target = document.getElementById(containerId);
     if (!target) return;
-    const items = PRODUCTS
-        .filter(p => p.product_type === type)
-        .sort((a, b) => (a.display_order || 999) - (b.display_order || 999));
+    // Only published products reach the storefront, so only they are listed here.
+    // The order comes from the draft; display_order itself is rewritten only when
+    // the user saves.
+    const orderIds = paramDraft ? paramDraft.order[type] : publishedOrderIds(type);
+    const items = orderIds.map(id => PRODUCTS.find(p => p.id === id)).filter(Boolean);
     if (!items.length) {
         target.innerHTML = `<div class="py-8">${emptyState(type === 'software' ? 'ph-app-window' : 'ph-hard-drives', EMPTY_STATE_NO_DATA)}</div>`;
         return;
     }
-    const publishedItems = items.filter(p => p.status === 'published');
-    const otherItems = items.filter(p => p.status !== 'published');
-    const sortedAll = [...publishedItems, ...otherItems];
-    // Reassign display_order based on sorted position
-    sortedAll.forEach((p, i) => { p.display_order = i + 1; });
 
-    target.innerHTML = `<div class="order-list">${sortedAll.map((p, idx) => {
-        const isDraft = p.status !== 'published';
-        const isPublished = !isDraft;
+    target.innerHTML = `<div class="order-list">${items.map((p, idx) => {
+        // Hardware rows carry no icon; software keeps its initials mark.
         const icon = type === 'software'
             ? `<div style="width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg,#0f173a,#1d2e7b);color:#fff;font-size:0.55rem;font-weight:800;letter-spacing:0.06em;flex-shrink:0">${esc(p.name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2))}</div>`
-            : `<div style="width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:#f5f5f7;flex-shrink:0"><i class="ph ph-hard-drives" style="font-size:16px;color:#86868b"></i></div>`;
-        const dragAttrs = isPublished
-            ? ` draggable="true" ondragstart="onOrderDragStart(event,'${type}','${p.id}')" ondragover="onOrderDragOver(event)" ondragleave="onOrderDragLeave(event)" ondrop="onOrderDrop(event,'${type}','${p.id}')" ondragend="onOrderDragEnd(event)"`
             : '';
-        return `<div class="order-item${isDraft ? ' is-draft' : ' is-draggable'}"${dragAttrs}>
-            ${isPublished ? '<span class="order-grip" title="Drag to reorder"><i class="ph ph-dots-six-vertical" style="font-size:16px"></i></span>' : '<span class="order-grip" style="visibility:hidden"><i class="ph ph-dots-six-vertical" style="font-size:16px"></i></span>'}
-            <div class="order-rank">${isPublished ? idx + 1 : '—'}</div>
+        return `<div class="order-item is-draggable" draggable="true" ondragstart="onOrderDragStart(event,'${type}','${p.id}')" ondragover="onOrderDragOver(event)" ondragleave="onOrderDragLeave(event)" ondrop="onOrderDrop(event,'${type}','${p.id}')" ondragend="onOrderDragEnd(event)">
+            <span class="order-grip" title="Drag to reorder"><i class="ph ph-dots-six-vertical" style="font-size:16px"></i></span>
+            <div class="order-rank">${idx + 1}</div>
             ${icon}
             <div class="order-product-info">
                 <div class="order-product-name">${esc(p.name)}</div>
-                <div class="order-product-sub">${[esc(p.vendor_name || '—'), esc(p.sub_category || '')].filter(Boolean).join(' · ')}${isDraft ? ' · <span style="color:#f59e0b;font-weight:600">' + esc(p.status.charAt(0).toUpperCase() + p.status.slice(1)) + '</span>' : ''}</div>
+                <div class="order-product-sub">${[esc(p.vendor_name || '—'), esc(p.sub_category || '')].filter(Boolean).join(' · ')}</div>
             </div>
             ${statusBadge(p.status)}
         </div>`;
@@ -3790,27 +4018,14 @@ function onOrderDrop(e, type, targetPid) {
     const pid = orderDragPid;
     orderDragPid = null;
     if (!pid || pid === targetPid) return;
-    const published = PRODUCTS
-        .filter(p => p.product_type === type && p.status === 'published')
-        .sort((a, b) => (a.display_order || 999) - (b.display_order || 999));
-    const fromIdx = published.findIndex(p => p.id === pid);
-    const toIdx = published.findIndex(p => p.id === targetPid);
+    if (!paramDraft) startParamDraft();
+    const order = paramDraft.order[type];
+    const fromIdx = order.indexOf(pid);
+    const toIdx = order.indexOf(targetPid);
     if (fromIdx < 0 || toIdx < 0) return;
-    const [moved] = published.splice(fromIdx, 1);
-    published.splice(toIdx, 0, moved);
-    const others = PRODUCTS
-        .filter(p => p.product_type === type && p.status !== 'published')
-        .sort((a, b) => (a.display_order || 999) - (b.display_order || 999));
-    const saved = commitPortalMutation(() => {
-        [...published, ...others].forEach((p, i) => { p.display_order = i + 1; });
-        logActivity('Reordered', moved.name, `Reordered to position ${toIdx + 1}`, moved.id);
-    });
-    if (!saved) {
-        renderDisplayOrder(type);
-        return;
-    }
+    order.splice(toIdx, 0, order.splice(fromIdx, 1)[0]);
     renderDisplayOrder(type);
-    showToast('Product order updated.');
+    renderPendingBar('param-center');
 }
 
 function renderSettings() {

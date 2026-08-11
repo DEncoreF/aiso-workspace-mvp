@@ -35,26 +35,32 @@ software-to-hardware compatibility management.
 - Software products expose an optional **Official Website** field in the create
   and edit forms, stored on the existing `officialUrl` property that was
   previously carried in seed data but never surfaced.
-- The value is normalised on save (`www.example.com` becomes
+- The value is normalized on save (`www.example.com` becomes
   `https://www.example.com`); a filled-in value must parse as an `http`/`https`
   URL or the form is blocked.
 - Both live previews render it under the storefront action button, showing the
   domain without the scheme. A blank or still-invalid value
-  keeps a grey placeholder row so the footer never shifts while typing, and the
+  keeps a gray placeholder row so the footer never shifts while typing, and the
   preview stays non-interactive like the rest of the storefront mock-up.
 - The software detail page shows it as a clickable `Website` row in Product
   Info, or `—` when unset.
-- The storefront action footer no longer carries the "Request a custom quote
-  for this add-on" line.
+- The storefront action footer carries a single neutral `Select` action; there
+  is no bundled/add-on distinction and no custom-quote line.
 
 ## Current policy
 
 - Only published hardware can be added to a mapping.
 - Draft and published software can be configured.
 - Archived software mappings are read-only.
-- Changes to published software take effect immediately.
-- Bundled software without a mapping is highlighted as needing configuration,
-  but remains allowed until the final business rule is confirmed.
+- Parameter Center and Compatibility Mapping stage every edit in a draft. A
+  shared Save bar appears once something changes; Save opens a confirmation
+  listing the pending changes, and only then are they written and logged.
+  Discard, or leaving the view, throws the draft away.
+- The binding modal's `Apply` stages a mapping — the page-level Save commits it.
+- Software without a mapping is shown as `Not configured`.
+- Packaging (bundled vs add-on) is retired: the Parameter Center section is
+  disabled and hidden, and no view reads `sw_category`. The field is still kept
+  on the product record for v2 data compatibility.
 
 ## Run locally
 
