@@ -64,9 +64,20 @@ const Store = (function () {
                 const seedProductsById = new Map(PRODUCTS.map(product => [product.id, product]));
                 const migratedProducts = data.PRODUCTS.map(product => {
                     const seedProduct = seedProductsById.get(product.id);
-                    const seedCreatedEntry = seedProduct?.history?.find(entry => entry.action === 'Created');
-                    if (!seedCreatedEntry || product.history?.some(entry => entry.action === 'Created')) return product;
-                    return { ...product, history: [...(product.history || []), { ...seedCreatedEntry }] };
+                    if (!seedProduct) return product;
+                    // A newer seed may introduce fields the save predates (a product
+                    // icon, a licensing offer). Fill in only what is absent: a field
+                    // the user cleared holds '' or [], not undefined, so their edits
+                    // are never overwritten.
+                    let merged = product;
+                    Object.keys(seedProduct).forEach(key => {
+                        if (merged[key] !== undefined) return;
+                        if (merged === product) merged = { ...product };
+                        merged[key] = seedProduct[key];
+                    });
+                    const seedCreatedEntry = seedProduct.history?.find(entry => entry.action === 'Created');
+                    if (!seedCreatedEntry || merged.history?.some(entry => entry.action === 'Created')) return merged;
+                    return { ...merged, history: [...(merged.history || []), { ...seedCreatedEntry }] };
                 });
                 const persistedIds = new Set(migratedProducts.map(product => product.id));
                 PRODUCTS = [...migratedProducts, ...seedMockProducts.filter(product => !persistedIds.has(product.id))];

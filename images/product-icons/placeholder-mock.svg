@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Shared stand-in for the fictional mock products in the seed set. Deliberately
+     neutral and unbranded so demo data never reads as a real vendor's product. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 350 350" role="img" aria-label="Mock product">
+  <rect width="350" height="350" fill="#eef1f6"/>
+  <g fill="none" stroke="#9aa3b2" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="95" y="102" width="160" height="132" rx="18"/>
+    <path d="M95 143h160"/>
+    <path d="M124 122.5h0M147 122.5h0"/>
+  </g>
+  <g fill="#9aa3b2">
+    <circle cx="124" cy="122.5" r="6.5"/>
+    <circle cx="147" cy="122.5" r="6.5"/>
+  </g>
+  <text x="175" y="272" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="3" fill="#9aa3b2">MOCK</text>
+</svg>

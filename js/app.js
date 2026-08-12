@@ -107,6 +107,14 @@ function statusBadge(s) {
 const TOAST_SAVE_SUCCESS = 'Changes saved.';
 const TOAST_SAVE_FAILURE = 'Changes could not be saved. Please try again.';
 
+// Wherever a software product is listed, show the icon the vendor uploaded.
+// `fallback` keeps each list's own placeholder look for products that predate
+// the icon requirement.
+function swListIcon(product, { size, radius }, fallback) {
+    if (!product.icon_data) return fallback;
+    return `<img src="${esc(product.icon_data)}" alt="" style="width:${size}px;height:${size}px;border-radius:${radius}px;object-fit:cover;flex-shrink:0">`;
+}
+
 function showToast(msg, type = 'success') {
     const el = document.createElement('div');
     // Toasts use only two colors: red for errors and blocking messages,
@@ -714,7 +722,7 @@ function renderSwProducts() {
         <tr class="cursor-pointer" onclick="if(!event.target.closest('button'))showSwDetail('${p.id}')">
             <td>
                 <div class="flex items-center gap-3">
-                    <div style="width:36px;height:36px;border-radius:10px;background:#f5f5f7;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#86868b;flex-shrink:0">${esc(p.name.slice(0,2).toUpperCase())}</div>
+                    ${swListIcon(p, { size: 36, radius: 10 }, `<div style="width:36px;height:36px;border-radius:10px;background:#f5f5f7;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#86868b;flex-shrink:0">${esc(p.name.slice(0,2).toUpperCase())}</div>`)}
                     <div style="min-width:0">
                         <div style="font-weight:600;font-size:13.5px;color:#1d1d1f">${esc(p.name)}</div>
                         ${p.tagline ? `<div style="font-size:12px;color:#86868b;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px">${esc(p.tagline)}</div>` : ''}
@@ -1589,22 +1597,41 @@ function getLicenseOfferColor(offer) {
     return SW_LICENSE_TYPES.find(t => t.label === offer) || SW_LICENSE_FALLBACK_COLOR;
 }
 
-function renderSwLicenseRadios(containerId, selected = '') {
+// Trial day counts are capped at four digits. Both product forms are
+// novalidate, so neither `max` nor `maxlength` is enforced by the browser —
+// onSwLicenseTrialInput does it while the vendor types, and
+// validateSwLicenseSelection re-checks on submit.
+const SW_LICENSE_TRIAL_MAX_DIGITS = 4;
+const SW_LICENSE_TRIAL_MAX_DAYS = 9999;
+
+// `selected` is the stored offer label. Pass hasOffer: true when the product
+// actually carries a license_offer property, so an empty string reads as a
+// deliberate "Not specified" rather than a field that was never filled in.
+function renderSwLicenseRadios(containerId, selected = '', { hasOffer = false } = {}) {
     const trialDays = (selected.match(SW_LICENSE_TRIAL_PATTERN) || [])[1] || '';
+    // Nothing is pre-selected on a fresh form: picking an offer is a required,
+    // explicit choice rather than a silent default.
     const selectedKey = trialDays
         ? SW_LICENSE_TRIAL_KEY
-        : (SW_LICENSE_TYPES.find(t => t.label === selected)?.key || SW_LICENSE_NONE);
+        : (selected
+            ? (SW_LICENSE_TYPES.find(t => t.label === selected)?.key ?? null)
+            : (hasOffer ? SW_LICENSE_NONE : null));
     const radio = (value, inner, checked) => `<label class="preview-pill cursor-pointer" style="align-items:center"><input type="radio" name="${containerId}" value="${value}" class="mr-2 accent-aiso" ${checked ? 'checked' : ''} onchange="setCreateError('${containerId}', '')">${inner}</label>`;
     const dot = t => `<span style="width:8px;height:8px;border-radius:50%;background:${t.text};margin-right:6px;flex-shrink:0"></span>`;
     // Focusing or typing in the day-count field implicitly picks the trial offer.
     const typeInner = t => t.key === SW_LICENSE_TRIAL_KEY
-        ? `${dot(t)}<input id="${containerId}-days" type="number" min="1" max="999" value="${trialDays}" placeholder="N" style="width:46px;border:1px solid #e8eaed;border-radius:6px;padding:1px 4px;font-size:12px;text-align:center;margin-right:4px" onfocus="selectSwLicenseTrial('${containerId}')" oninput="selectSwLicenseTrial('${containerId}')">-day free trial`
+        ? `${dot(t)}<input id="${containerId}-days" type="text" inputmode="numeric" maxlength="${SW_LICENSE_TRIAL_MAX_DIGITS}" value="${trialDays}" placeholder="N" style="width:62px;border:1px solid #e8eaed;border-radius:6px;padding:1px 4px;font-size:12px;text-align:center;margin-right:4px" onfocus="selectSwLicenseTrial('${containerId}')" oninput="onSwLicenseTrialInput(this,'${containerId}')">-day free trial`
         : `${dot(t)}${esc(t.label)}`;
     return `<div id="${containerId}" class="flex flex-wrap gap-2">
         ${SW_LICENSE_TYPES.map(t => radio(t.key, typeInner(t), t.key === selectedKey)).join('')}
         ${radio(SW_LICENSE_NONE, 'Not specified', selectedKey === SW_LICENSE_NONE)}
     </div>
     <div id="${containerId}-error" class="field-error-text"></div>`;
+}
+
+function onSwLicenseTrialInput(input, containerId) {
+    input.value = input.value.replace(/\D/g, '').slice(0, SW_LICENSE_TRIAL_MAX_DIGITS);
+    selectSwLicenseTrial(containerId);
 }
 
 function selectSwLicenseTrial(containerId) {
@@ -1628,13 +1655,23 @@ function getSelectedLicense(containerId) {
     return SW_LICENSE_TYPES.find(t => t.key === key)?.label || '';
 }
 
-// The trial offer needs a day count before the form can be submitted.
+// An offer must be picked, and the trial offer additionally needs a day count
+// of 1..SW_LICENSE_TRIAL_MAX_DAYS.
 function validateSwLicenseSelection(containerId) {
-    const key = document.querySelector(`#${containerId} input[type="radio"]:checked`)?.value;
-    const ok = key !== SW_LICENSE_TRIAL_KEY
-        || parseInt(document.getElementById(`${containerId}-days`)?.value, 10) > 0;
-    setCreateError(containerId, ok ? '' : 'Please enter the number of trial days.');
-    return ok;
+    const checked = document.querySelector(`#${containerId} input[type="radio"]:checked`);
+    if (!checked) {
+        setCreateError(containerId, 'Please select a Licensing Option.');
+        return false;
+    }
+    if (checked.value === SW_LICENSE_TRIAL_KEY) {
+        const days = parseInt(document.getElementById(`${containerId}-days`)?.value, 10);
+        if (!(days > 0 && days <= SW_LICENSE_TRIAL_MAX_DAYS)) {
+            setCreateError(containerId, `Please enter the number of trial days (1-${SW_LICENSE_TRIAL_MAX_DAYS}).`);
+            return false;
+        }
+    }
+    setCreateError(containerId, '');
+    return true;
 }
 
 function renderSwLicenseBadge(offer) {
@@ -2250,6 +2287,7 @@ function setupCreateProductBindings(type) {
         if (el.type === 'file') return;
         el.addEventListener('input', () => {
             setCreateError(el.id, '');
+            if (type === 'software') clearSoftwareGroupError(el, SW_REQUIRED_IDS.create);
             if (el.id.startsWith('new-p-feature-')) {
                 const idx = el.id.replace('new-p-feature-', '');
                 const cnt = document.getElementById(`new-p-feature-${idx}-count`);
@@ -2259,12 +2297,90 @@ function setupCreateProductBindings(type) {
         });
         el.addEventListener('change', () => {
             setCreateError(el.id, '');
+            if (type === 'software') clearSoftwareGroupError(el, SW_REQUIRED_IDS.create);
             rerender();
         });
     });
     renderImageStatus(type);
     if (type === 'hardware') updateSpecCounter();
     rerender();
+}
+
+// The create and edit forms name their inputs differently, so the shared rules
+// take an id map. Every rule runs — the caller shows all offending fields at
+// once instead of one per submit.
+const SW_REQUIRED_IDS = {
+    create: {
+        url: 'new-p-url', icon: 'new-p-icon', pitch: 'new-p-pitch',
+        categories: 'new-p-categories',
+        features: 'new-p-features', featurePrefix: 'new-p-feature-',
+        industries: 'new-p-industries', license: 'new-p-license',
+    },
+    edit: {
+        url: 'edit-p-url', icon: 'edit-p-icon', pitch: 'edit-p-tagline',
+        categories: 'edit-p-categories',
+        features: 'edit-p-features', featurePrefix: 'edit-p-feat-',
+        industries: 'edit-p-industries', license: 'edit-p-license',
+    },
+};
+
+const SW_FEATURE_MIN_ITEMS = 3;
+
+function countSoftwareFeatures(ids) {
+    return Array.from({ length: SOFTWARE_FEATURE_MAX_ITEMS }, (_, i) => valueOf(`${ids.featurePrefix}${i}`)).filter(Boolean).length;
+}
+
+// Key Features and Applicable Industries report on a group-level container, so
+// clearing by the edited element's own id would leave the message stuck.
+function clearSoftwareGroupError(el, ids) {
+    if (el.id && el.id.startsWith(ids.featurePrefix)) setCreateError(ids.features, '');
+    if (el.closest(`#${ids.industries}`)) setCreateError(ids.industries, '');
+}
+
+// Shared required-field rules for software, applied identically on create and
+// edit. `hasIcon` differs per form: a freshly picked file on create, an
+// existing or newly picked one on edit.
+function validateSoftwareRequiredFields(ids, { hasIcon }) {
+    let ok = true;
+
+    setCreateError(ids.icon, hasIcon ? '' : 'Please upload a Product Icon.');
+    if (!hasIcon) ok = false;
+
+    ok = validateRequiredField(ids.pitch, 'Please enter a Short Pitch.') && ok;
+
+    if (!getCheckedValues(ids.categories).length) {
+        setCreateError(ids.categories, 'Please select Category.');
+        ok = false;
+    } else {
+        setCreateError(ids.categories, '');
+    }
+
+    const featureCount = countSoftwareFeatures(ids);
+    if (featureCount < SW_FEATURE_MIN_ITEMS) {
+        setCreateError(ids.features, `At least ${SW_FEATURE_MIN_ITEMS} Key Features are required.`);
+        ok = false;
+    } else {
+        setCreateError(ids.features, '');
+    }
+
+    if (!getCheckedValues(ids.industries).length) {
+        setCreateError(ids.industries, 'Please select at least one Applicable Industry.');
+        ok = false;
+    } else {
+        setCreateError(ids.industries, '');
+    }
+
+    ok = validateSwLicenseSelection(ids.license) && ok;
+
+    // Optional field: only a filled-in value has to look like a URL.
+    if (isValidProductUrl(valueOf(ids.url))) {
+        setCreateError(ids.url, '');
+    } else {
+        setCreateError(ids.url, 'Please enter a valid URL, e.g. https://www.example.com');
+        ok = false;
+    }
+
+    return ok;
 }
 
 function validateRequiredField(id, message = 'This field is required.') {
@@ -2312,28 +2428,9 @@ function validateCreateProductForm(type) {
             ok = false;
         }
     } else {
-        // Software: at least 1 category required
-        const categories = getCheckedValues('new-p-categories');
-        if (!categories.length) {
-            setCreateError('new-p-categories', 'Please select Category.');
-            ok = false;
-        } else {
-            setCreateError('new-p-categories', '');
-        }
-        // Software: at least 1 feature recommended
-        const features = collectSoftwareFeatures();
-        if (features.length < 1) {
-            setCreateError('new-p-feature-0', 'At least 1 Key Feature is recommended.');
-            ok = false;
-        }
-        ok = validateSwLicenseSelection('new-p-license') && ok;
-        // Optional field: only a filled-in value has to look like a URL.
-        if (isValidProductUrl(valueOf('new-p-url'))) {
-            setCreateError('new-p-url', '');
-        } else {
-            setCreateError('new-p-url', 'Please enter a valid URL, e.g. https://www.example.com');
-            ok = false;
-        }
+        ok = validateSoftwareRequiredFields(SW_REQUIRED_IDS.create, {
+            hasIcon: !!createProductState.softwareIcon,
+        }) && ok;
     }
     return ok;
 }
@@ -2449,7 +2546,7 @@ function showCreateProductModal(type) {
         ${createField('new-p-vendor', 'Vendor', { required: true, maxlength: 100, placeholder: 'e.g. TPIsoftware Corporation' })}
         ${createField('new-p-url', 'Official Website', { type: 'url', maxlength: SW_URL_MAX_CHARS, placeholder: 'e.g. https://www.tpisoftware.com', hint: 'Optional. Shown as a link on the storefront preview.' })}
         <div>
-            <label class="field-label">Product Icon</label>
+            <label class="field-label">Product Icon <span class="req">*</span></label>
             <label class="file-upload-wrap">
                 <input id="new-p-icon" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" onchange="handleSoftwareIconUpload(this)">
                 <span class="file-upload-btn"><i class="ph ph-upload-simple"></i> Choose File</span>
@@ -2460,26 +2557,28 @@ function showCreateProductModal(type) {
         </div>
         `)}
         ${createFormSection('ph-chat-centered-text', 'Positioning', 'Customer-facing copy, category, and feature bullets.', `
-        ${createTextArea('new-p-pitch', 'Short Pitch', { maxlength: 300, rows: 2, placeholder: 'One-line pitch...' })}
+        ${createTextArea('new-p-pitch', 'Short Pitch', { required: true, maxlength: 300, rows: 2, placeholder: 'One-line pitch...' })}
         <div>
             <div class="field-label mb-3">Category <span class="req">*</span> <span class="text-[10px] text-[#86868b] font-bold" style="margin-left:4px">Max ${SW_CATEGORY_MAX}</span></div>
             ${renderSwCategoryChecks('new-p-categories')}
         </div>
         <div>
             <div class="flex items-center justify-between mb-3">
-                <div class="field-label">Key Features</div>
-                <span class="text-[10px] text-[#86868b] font-bold">Max 5 · 150 chars each</span>
+                <div class="field-label">Key Features <span class="req">*</span></div>
+                <span class="text-[10px] text-[#86868b] font-bold">Min ${SW_FEATURE_MIN_ITEMS} · Max ${SOFTWARE_FEATURE_MAX_ITEMS} · 150 chars each</span>
             </div>
             <div class="space-y-2">${renderSoftwareFeatureInputs()}</div>
+            <div id="new-p-features-error" class="field-error-text"></div>
         </div>
         <div>
-            <div class="field-label mb-3">Applicable Industries</div>
+            <div class="field-label mb-3">Applicable Industries <span class="req">*</span></div>
             <div id="new-p-industries" class="flex flex-wrap gap-2">
                 ${SOFTWARE_INDUSTRY_OPTIONS.filter(o => o.is_active).map(o => `<label class="preview-pill cursor-pointer"><input type="checkbox" value="${esc(o.label)}" class="mr-2 accent-aiso">${esc(o.label)}</label>`).join('')}
             </div>
+            <div id="new-p-industries-error" class="field-error-text"></div>
         </div>`)}
         ${createFormSection('ph-certificate', 'Licensing', 'Licensing offer shown as a badge next to the product name.', `
-            <div class="field-label mb-3">Licensing Options</div>
+            <div class="field-label mb-3">Licensing Options <span class="req">*</span></div>
             ${renderSwLicenseRadios('new-p-license')}
         `)}
         ${createFormSection('ph-images', 'Product Images', 'Upload up to five images for the storefront preview.', `
@@ -2648,24 +2747,26 @@ function showEditProductModal(pid, source) {
                 <div class="field-label mb-3">Category <span class="req">*</span> <span class="text-[10px] text-[#86868b] font-bold" style="margin-left:4px">Max ${SW_CATEGORY_MAX}</span></div>
                 ${renderSwCategoryChecks('edit-p-categories', getSwCategories(p))}
             </div>
-            ${createField('edit-p-tagline', 'Short Pitch', { maxlength: 300 })}
+            ${createField('edit-p-tagline', 'Short Pitch', { required: true, maxlength: 300 })}
             <div>
                 <div class="flex items-center justify-between mb-3">
-                    <div class="field-label">Key Features</div>
-                    <span class="text-[10px] text-[#86868b] font-bold">Max ${SOFTWARE_FEATURE_MAX_ITEMS} · 150 chars each</span>
+                    <div class="field-label">Key Features <span class="req">*</span></div>
+                    <span class="text-[10px] text-[#86868b] font-bold">Min ${SW_FEATURE_MIN_ITEMS} · Max ${SOFTWARE_FEATURE_MAX_ITEMS} · 150 chars each</span>
                 </div>
                 <div class="space-y-2">${featureInputs}</div>
+                <div id="edit-p-features-error" class="field-error-text"></div>
             </div>
             <div>
-                <div class="field-label mb-3">Applicable Industries</div>
+                <div class="field-label mb-3">Applicable Industries <span class="req">*</span></div>
                 <div id="edit-p-industries" class="flex flex-wrap gap-2">
                     ${editIndustryLabels.map(label => `<label class="preview-pill cursor-pointer"><input type="checkbox" value="${esc(label)}" class="mr-2 accent-aiso" ${(p.industries || []).includes(label) ? 'checked' : ''}>${esc(label)}</label>`).join('')}
                 </div>
+                <div id="edit-p-industries-error" class="field-error-text"></div>
             </div>
         `)}
         ${createFormSection('ph-certificate', 'Licensing', 'Licensing offer shown as a badge next to the product name.', `
-            <div class="field-label mb-3">Licensing Options</div>
-            ${renderSwLicenseRadios('edit-p-license', p.license_offer || '')}
+            <div class="field-label mb-3">Licensing Options <span class="req">*</span></div>
+            ${renderSwLicenseRadios('edit-p-license', p.license_offer || '', { hasOffer: p.license_offer !== undefined })}
         `)}
         ${createFormSection('ph-images', 'Product Images', 'Upload up to five images for the storefront preview.', `
             <div>
@@ -2679,7 +2780,7 @@ function showEditProductModal(pid, source) {
             </div>
             <div id="edit-p-images-status"></div>
             <div>
-                <label class="field-label">Product Icon</label>
+                <label class="field-label">Product Icon <span class="req">*</span></label>
                 <label class="file-upload-wrap">
                     <input id="edit-p-icon" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" onchange="handleEditSwIconUpload(this)">
                     <span class="file-upload-btn"><i class="ph ph-upload-simple"></i> Choose File</span>
@@ -2850,12 +2951,18 @@ function showEditProductModal(pid, source) {
 function setupEditPreviewBindings(type) {
     const form = document.getElementById('edit-product-form');
     if (!form) return;
-    const rerender = () => renderEditPreview(type);
+    // Editing a field clears its error, matching the create form — otherwise a
+    // required-field message stays on screen after the vendor has fixed it.
+    const rerender = el => {
+        setCreateError(el.id, '');
+        if (type === 'software') clearSoftwareGroupError(el, SW_REQUIRED_IDS.edit);
+        renderEditPreview(type);
+    };
     form.querySelectorAll('input, textarea, select').forEach(el => {
         if (el.type === 'file') return;
-        if (el.type === 'checkbox') { el.addEventListener('change', rerender); return; }
-        el.addEventListener('input', rerender);
-        el.addEventListener('change', rerender);
+        if (el.type === 'checkbox') { el.addEventListener('change', () => rerender(el)); return; }
+        el.addEventListener('input', () => rerender(el));
+        el.addEventListener('change', () => rerender(el));
     });
 }
 
@@ -3101,9 +3208,12 @@ async function saveProduct(pid) {
     // Basic validation
     if (!val('edit-p-name')) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-name', 'Please enter Product Name.'); return; }
     if (!isNsHw && !val('edit-p-vendor')) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-vendor', 'Please enter Vendor.'); return; }
-    if (isSW && !getCheckedValues('edit-p-categories').length) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-categories', 'Please select Category.'); return; }
-    if (isSW && !validateSwLicenseSelection('edit-p-license')) { showToast('Please fix the highlighted fields', 'error'); return; }
-    if (isSW && !isValidProductUrl(val('edit-p-url'))) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-url', 'Please enter a valid URL, e.g. https://www.example.com'); return; }
+    // Software required fields follow the same rules as the create form, so an
+    // edited product can never end up less complete than a newly created one.
+    if (isSW && !validateSoftwareRequiredFields(SW_REQUIRED_IDS.edit, { hasIcon: !!(editSwIcon || p.icon_data) })) {
+        showToast('Please fix the highlighted fields', 'error');
+        return;
+    }
     if (!isSW && (p.product_format || 'standard') === 'standard') {
         if (!val('edit-p-brand')) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-brand', 'Please enter Brand.'); return; }
         if (!val('edit-p-model')) { showToast('Please fix the highlighted fields', 'error'); setCreateError('edit-p-model', 'Please enter Model.'); return; }
@@ -3621,7 +3731,7 @@ function renderCompatibilityCenter() {
         return `<tr>
             <td>
                 <div class="flex items-center gap-3">
-                    <div style="width:36px;height:36px;border-radius:10px;background:#f5f5f7;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#86868b;flex-shrink:0">${esc(product.name.slice(0, 2).toUpperCase())}</div>
+                    ${swListIcon(product, { size: 36, radius: 10 }, `<div style="width:36px;height:36px;border-radius:10px;background:#f5f5f7;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#86868b;flex-shrink:0">${esc(product.name.slice(0, 2).toUpperCase())}</div>`)}
                     <div>
                         <div style="font-weight:600;font-size:13.5px;color:#1d1d1f">${esc(product.name)}${isPending ? ' <span class="badge badge-orange">Unsaved</span>' : ''}</div>
                         <div style="font-size:12px;color:#86868b;margin-top:1px">${esc(product.vendor_name || '—')} · ${esc(product.sub_category || 'Software')}</div>
@@ -3969,9 +4079,9 @@ function renderDisplayOrder(type) {
     }
 
     target.innerHTML = `<div class="order-list">${items.map((p, idx) => {
-        // Hardware rows carry no icon; software keeps its initials mark.
+        // Hardware rows carry no icon; software shows its product icon.
         const icon = type === 'software'
-            ? `<div style="width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg,#0f173a,#1d2e7b);color:#fff;font-size:0.55rem;font-weight:800;letter-spacing:0.06em;flex-shrink:0">${esc(p.name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2))}</div>`
+            ? swListIcon(p, { size: 32, radius: 10 }, `<div style="width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg,#0f173a,#1d2e7b);color:#fff;font-size:0.55rem;font-weight:800;letter-spacing:0.06em;flex-shrink:0">${esc(p.name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2))}</div>`)
             : '';
         return `<div class="order-item is-draggable" draggable="true" ondragstart="onOrderDragStart(event,'${type}','${p.id}')" ondragover="onOrderDragOver(event)" ondragleave="onOrderDragLeave(event)" ondrop="onOrderDrop(event,'${type}','${p.id}')" ondragend="onOrderDragEnd(event)">
             <span class="order-grip" title="Drag to reorder"><i class="ph ph-dots-six-vertical" style="font-size:16px"></i></span>

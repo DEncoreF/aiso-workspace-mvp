@@ -99,6 +99,7 @@ let PRODUCTS = [
         short_description: 'AI Governance Platform for Enhanced Security and Cost Observability',
         status: 'published', created_at: '2025-11-20', updated_at: '2026-03-12',
         tagline: 'AI Governance Platform for Enhanced Security and Cost Observability',
+        icon_name: 'digirunner.svg', icon_data: 'images/product-icons/digirunner.svg',
         sw_category: 'included',
         license_offer: 'Free during POC',
         features: [
@@ -117,6 +118,7 @@ let PRODUCTS = [
         short_description: 'Enterprise Generative AI Application Platform for knowledge management',
         status: 'published', created_at: '2025-10-15', updated_at: '2026-03-10',
         tagline: 'Enterprise Generative AI Application Platform',
+        icon_name: 'systalk-viki.svg', icon_data: 'images/product-icons/systalk-viki.svg',
         sw_category: 'included',
         license_offer: '30-day free trial',
         features: [
@@ -135,6 +137,7 @@ let PRODUCTS = [
         short_description: 'Agile AI Knowledge & Assistant Platform',
         status: 'draft', created_at: '2026-02-10', updated_at: '2026-03-19',
         tagline: 'Agile AI Knowledge & Assistant Platform',
+        icon_name: 'orientai-express.svg', icon_data: 'images/product-icons/orientai-express.svg',
         sw_category: 'optional',
         license_offer: 'First year free',
         compatible_hardware: ['hw1', 'hw2'],
@@ -154,6 +157,8 @@ let PRODUCTS = [
         short_description: 'Business Process Management Platform for Integrated Workflow Automation',
         status: 'draft', created_at: '2026-03-15', updated_at: '2026-03-20',
         tagline: 'Business Process Management Platform for Integrated Workflow Automation',
+        icon_name: 'digiflexis.svg', icon_data: 'images/product-icons/digiflexis.svg',
+        license_offer: '90-day free trial',
         sw_category: 'optional',
         compatible_hardware: ['hw1'],
         features: [
@@ -172,6 +177,8 @@ let PRODUCTS = [
         short_description: 'Intelligent Document Processing & Automation Platform',
         status: 'published', created_at: '2026-01-05', updated_at: '2026-03-15',
         tagline: 'Intelligent Document Processing & Automation Platform',
+        icon_name: 'compdf-ai.svg', icon_data: 'images/product-icons/compdf-ai.svg',
+        license_offer: 'First year free',
         sw_category: 'optional',
         compatible_hardware: ['hw1', 'hw2'],
         features: [
@@ -190,6 +197,8 @@ let PRODUCTS = [
         short_description: 'AI-Driven Greenhouse Gas Emissions Management Platform',
         status: 'draft', created_at: '2026-03-18', updated_at: '2026-03-22',
         tagline: 'AI-Driven Greenhouse Gas Emissions Management Platform',
+        icon_name: 'greenswift.svg', icon_data: 'images/product-icons/greenswift.svg',
+        license_offer: 'Free during POC',
         sw_category: 'optional',
         compatible_hardware: [],
         features: [
@@ -207,7 +216,7 @@ let PRODUCTS = [
 // Additional mock catalog entries keep both product lists above one page so
 // pagination, filtering, sorting, archived states, and history expansion can
 // be exercised without manually creating products.
-const MOCK_DATA_VERSION = 2;
+const MOCK_DATA_VERSION = 5;
 const MOCK_HARDWARE_PRODUCTS = [
     { name: 'EdgeCore AI MiniPC', model: 'EC-MP100', brand: 'EdgeCore', category: 'miniPC', status: 'published', aidaptiv: true, format: 'standard' },
     { name: 'VisionBox Edge AI', model: 'VB-AI200', brand: 'Aetina', category: 'AI Box', status: 'draft', aidaptiv: false, format: 'standard' },
@@ -249,12 +258,12 @@ const MOCK_HARDWARE_PRODUCTS = [
 }));
 
 const MOCK_SOFTWARE_PRODUCTS = [
-    { name: 'FraudShield AI', vendor: 'TPIsoftware Corporation', vendorId: 'v-tpi', category: 'Fraud Prevention', status: 'published', packaging: 'included' },
-    { name: 'HealthAssist Copilot', vendor: 'TPIsoftware Corporation', vendorId: 'v-tpi', category: 'Healthcare', status: 'draft', packaging: 'optional' },
-    { name: 'RetailPulse Analytics', vendor: 'KDAN', vendorId: 'v-kdan', category: 'Marketing', status: 'published', packaging: 'optional' },
-    { name: 'Factory Operations Copilot', vendor: 'TPIsoftware Corporation', vendorId: 'v-tpi', category: 'Business Applications', status: 'archived', packaging: 'optional' },
-    { name: 'GovKnowledge Hub', vendor: 'TPIsoftware Corporation', vendorId: 'v-tpi', category: 'National Defense', status: 'published', packaging: 'included' },
-    { name: 'SecureVision Monitor', vendor: 'KDAN', vendorId: 'v-kdan', category: 'Cybersecurity', status: 'draft', packaging: 'optional' },
+    { name: 'FraudShield AI', vendor: 'TPIsoftware Corporation', vendorId: 'v-tpi', category: 'Fraud Prevention', status: 'published', packaging: 'included', license: 'First year free' },
+    { name: 'HealthAssist Copilot', vendor: 'TPIsoftware Corporation', vendorId: 'v-tpi', category: 'Healthcare', status: 'draft', packaging: 'optional', license: '60-day free trial' },
+    { name: 'RetailPulse Analytics', vendor: 'KDAN', vendorId: 'v-kdan', category: 'Marketing', status: 'published', packaging: 'optional', license: 'Free during POC' },
+    { name: 'Factory Operations Copilot', vendor: 'TPIsoftware Corporation', vendorId: 'v-tpi', category: 'Business Applications', status: 'archived', packaging: 'optional', license: '1095-day free trial' },
+    { name: 'GovKnowledge Hub', vendor: 'TPIsoftware Corporation', vendorId: 'v-tpi', category: 'National Defense', status: 'published', packaging: 'included', license: 'First year free' },
+    { name: 'SecureVision Monitor', vendor: 'KDAN', vendorId: 'v-kdan', category: 'Cybersecurity', status: 'draft', packaging: 'optional', license: 'Free during POC' },
 ].map((item, index) => ({
     id: `sw${index + 7}`,
     is_mock: true,
@@ -270,6 +279,10 @@ const MOCK_SOFTWARE_PRODUCTS = [
     created_at: `2026-04-${String(index + 10).padStart(2, '0')}`,
     updated_at: `2026-06-${String(index + 18).padStart(2, '0')}`,
     tagline: `${item.name} for secure and efficient enterprise operations.`,
+    // Fictional products share one unbranded stand-in; real products carry
+    // their own logo from aisoportal.com.
+    icon_name: 'placeholder-mock.svg', icon_data: 'images/product-icons/placeholder-mock.svg',
+    license_offer: item.license,
     sw_category: item.packaging,
     compatible_hardware: item.status === 'published' ? ['hw1', 'hw2'] : [],
     features: [
