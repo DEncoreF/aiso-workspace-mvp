@@ -3714,7 +3714,7 @@ function renderCompatibilityCenter() {
 
     const search = (document.getElementById('compat-search')?.value || '').trim().toLowerCase();
     const rows = publishedSoftware
-        .filter(product => !search || [product.name, product.vendor_name, product.sub_category]
+        .filter(product => !search || [product.name, product.vendor_name, product.tagline, product.sub_category]
             .some(value => String(value || '').toLowerCase().includes(search)))
         .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -3732,9 +3732,9 @@ function renderCompatibilityCenter() {
             <td>
                 <div class="flex items-center gap-3">
                     ${swListIcon(product, { size: 36, radius: 10 }, `<div style="width:36px;height:36px;border-radius:10px;background:#f5f5f7;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#86868b;flex-shrink:0">${esc(product.name.slice(0, 2).toUpperCase())}</div>`)}
-                    <div>
+                    <div style="min-width:0">
                         <div style="font-weight:600;font-size:13.5px;color:#1d1d1f">${esc(product.name)}${isPending ? ' <span class="badge badge-orange">Unsaved</span>' : ''}</div>
-                        <div style="font-size:12px;color:#86868b;margin-top:1px">${esc(product.vendor_name || '—')} · ${esc(product.sub_category || 'Software')}</div>
+                        <div style="font-size:12px;color:#86868b;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(product.tagline || '')}">${esc(product.vendor_name || '—')} · ${esc(product.tagline || product.sub_category || 'Software')}</div>
                     </div>
                 </div>
             </td>
