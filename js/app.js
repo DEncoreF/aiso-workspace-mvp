@@ -23,6 +23,8 @@ function logActivity(action, productName, detail = '', pid = null) {
 function capturePortalState() {
     return JSON.parse(JSON.stringify({
         PRODUCTS,
+        ORDERS,
+        ORDER_LINES,
         ACTIVITY_LOG,
         HARDWARE_PRODUCT_TYPES,
         SOFTWARE_CATEGORY_OPTIONS,
@@ -32,6 +34,8 @@ function capturePortalState() {
 
 function restorePortalState(snapshot) {
     PRODUCTS = snapshot.PRODUCTS;
+    ORDERS = snapshot.ORDERS;
+    ORDER_LINES = snapshot.ORDER_LINES;
     ACTIVITY_LOG = snapshot.ACTIVITY_LOG;
     HARDWARE_PRODUCT_TYPES = snapshot.HARDWARE_PRODUCT_TYPES;
     SOFTWARE_CATEGORY_OPTIONS = snapshot.SOFTWARE_CATEGORY_OPTIONS;
@@ -72,6 +76,8 @@ const PORTAL_PERMISSIONS = Object.freeze({
     COMPATIBILITY_READ: 'compatibility.read',
     COMPATIBILITY_UPDATE: 'compatibility.update',
     COMPATIBILITY_AUDIT_READ: 'compatibility.audit.read',
+    ASSET_READ: 'asset.read',
+    ASSET_UPDATE: 'asset.update',
 });
 
 // Central permission boundary for future RBAC/API wiring. The v3 demo user has
@@ -82,6 +88,8 @@ function hasPermission(permission) {
 }
 
 function canViewCompatibility() { return hasPermission(PORTAL_PERMISSIONS.COMPATIBILITY_READ); }
+function canViewAssets() { return hasPermission(PORTAL_PERMISSIONS.ASSET_READ); }
+function canManageAssets() { return hasPermission(PORTAL_PERMISSIONS.ASSET_UPDATE); }
 function canManageCompatibility() { return hasPermission(PORTAL_PERMISSIONS.COMPATIBILITY_UPDATE); }
 function canManageProduct(p) { return true; /* Existing product permissions remain unchanged in this prototype. */ }
 function getSwCategories(p) { return p.categories?.length ? p.categories : (p.sub_category ? [p.sub_category] : []); }
@@ -583,6 +591,10 @@ function navigate(key) {
         showToast('You do not have permission to view compatibility mappings.', 'error');
         return;
     }
+    if (key === 'assets' && !canViewAssets()) {
+        showToast('You do not have permission to view the asset registry.', 'error');
+        return;
+    }
     // Drafts live only while their view is open, so leaving one with staged
     // edits needs an explicit decision from the user.
     const dirtyScope = getDirtyScope();
@@ -608,6 +620,20 @@ function navigate(key) {
     const meta = {
         'sw-products': { title: 'Software Products', action: `<button onclick="showCreateProductModal('software')" class="btn-primary" id="sw-create-btn"><i class="ph ph-plus"></i> Add Software</button>` },
         'hw-products': { title: 'Hardware Products', action: `<button onclick="showCreateProductModal('hardware')" class="btn-primary" id="hw-create-btn"><i class="ph ph-plus"></i> Add Hardware</button>` },
+        'orders': {
+            title: 'Orders',
+            subtitle: 'Purchase orders from customers. Supplier and customer stay free text until Organization Management ships.',
+            action: `<div style="white-space:nowrap"><button onclick="showOrderModal()" class="btn-primary"><i class="ph ph-plus"></i> New Order</button></div>`
+        },
+        'assets': {
+            title: 'Asset Registry',
+            subtitle: 'Serial numbers and warranty for AISO-built devices. Serials are produced by the manufacturing team and imported here; partner hardware is warranted by its own vendor and is not listed.',
+            action: `<div class="flex items-center gap-2" style="white-space:nowrap">
+                <button onclick="showAssetAddModal()" class="btn-secondary" title="Add one device by hand"><i class="ph ph-plus"></i> Add</button>
+                <button onclick="exportAssetsForPortal()" class="btn-secondary" title="Download warranty-data.js for the Portal"><i class="ph ph-download-simple"></i> Export</button>
+                <button onclick="showAssetImportModal()" class="btn-primary"><i class="ph ph-upload-simple"></i> Import</button>
+            </div>`
+        },
         'compatibility': { title: 'Compatibility Mapping', subtitle: 'Manage which published hardware products can be paired with each published software product. Edits are staged until you save them.' },
         'param-center': { title: 'Parameter Center', subtitle: 'System-level parameters managed exclusively by Super Admin. Edits are staged until you save them.' },
         'activity-log': { title: 'Activity Log', subtitle: 'Recent actions performed in this session.', action: `<button onclick="ACTIVITY_LOG=[];Store.save();renderActivityLog();showToast('Log cleared')" class="btn-secondary"><i class="ph ph-trash"></i> Clear</button>` },
@@ -618,6 +644,8 @@ function navigate(key) {
     // Render
     if (key === 'sw-products') renderSwProducts();
     else if (key === 'hw-products') renderHwProducts();
+    else if (key === 'orders') renderOrders();
+    else if (key === 'assets') renderAssets();
     else if (key === 'compatibility') renderCompatibilityCenter();
     else if (key === 'param-center') renderParamCenter();
     else if (key === 'activity-log') renderActivityLog();
@@ -4284,3 +4312,1312 @@ document.addEventListener('keydown', e => {
 });
 
 initPortal();
+
+// ═══════════════════════════════════════════════════════════════════
+// ASSET REGISTRY
+//
+// One row per AISO-built device. Serial numbers come from the manufacturing
+// team as CSV; nothing here issues them.
+//
+// Only own-brand products get devices. Partner hardware is warranted by its own
+// vendor, so it never enters this registry -- its serials live on order lines
+// instead. That is why importOwnBrandOnly() rejects a partner model outright
+// rather than quietly accepting it.
+// ═══════════════════════════════════════════════════════════════════
+
+const ASSET_PAGE_SIZE = 10;
+let assetPage = 1;
+let assetSort = { field: 'serial_no', dir: 'asc' };
+
+function resetAssetPage() { assetPage = 1; }
+
+function setAssetPage(page) {
+    const next = Number.parseInt(page, 10);
+    if (!Number.isFinite(next)) return;
+    assetPage = Math.max(1, next);
+    renderAssets();
+}
+
+function setAssetFilter(val) {
+    document.getElementById('asset-filter-status').value = val;
+    document.querySelectorAll('#asset-filter-tabs .filter-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.val === val);
+    });
+    resetAssetPage();
+    renderAssets();
+}
+
+function toggleAssetSort(field) {
+    if (assetSort.field === field) assetSort.dir = assetSort.dir === 'asc' ? 'desc' : 'asc';
+    else assetSort = { field, dir: 'asc' };
+    renderAssets();
+}
+
+// ── Own-brand lookup ──
+
+function isOwnBrandProduct(p) { return !!(p && p.is_own_brand); }
+
+function getOwnBrandProducts() {
+    return PRODUCTS.filter(p => p.product_type === 'hardware' && isOwnBrandProduct(p));
+}
+
+// Manufacturing sends the model string a human reads off the label, not our
+// internal id, so imports resolve on `model` and fall back to the product name.
+function findOwnBrandProductByModel(model) {
+    const target = String(model || '').trim().toLowerCase();
+    if (!target) return null;
+    return getOwnBrandProducts().find(p =>
+        String(p.model || '').toLowerCase() === target ||
+        String(p.name || '').toLowerCase() === target
+    ) || null;
+}
+
+function getAssetProduct(asset) {
+    return PRODUCTS.find(p => p.id === asset.product_id) || null;
+}
+
+function getAssetProductName(asset) {
+    const p = getAssetProduct(asset);
+    return p ? p.name : asset.product_id;
+}
+
+// ── Warranty ──
+
+function addMonthsToDate(iso, months) {
+    const d = new Date(iso + 'T00:00:00');
+    if (Number.isNaN(d.getTime())) return '';
+    const day = d.getDate();
+    d.setMonth(d.getMonth() + Number(months || 0));
+    // Rolling 31 Jan forward by one month lands in March unless we pull it back.
+    if (d.getDate() !== day) d.setDate(0);
+    d.setDate(d.getDate() - 1);
+    return toIsoDate(d);
+}
+
+function toIsoDate(d) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function daysUntil(iso) {
+    const end = new Date(iso + 'T00:00:00');
+    if (Number.isNaN(end.getTime())) return null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((end - today) / 86400000);
+}
+
+function getWarrantyState(asset) {
+    const left = daysUntil(asset.warranty_end);
+    if (left === null) return { key: 'unknown', label: 'Unknown', days: null };
+    if (left < 0) return { key: 'expired', label: 'Out of warranty', days: left };
+    if (left <= ASSET_EXPIRING_SOON_DAYS) return { key: 'expiring', label: 'Expiring soon', days: left };
+    return { key: 'active', label: 'In warranty', days: left };
+}
+
+function warrantyBadge(asset) {
+    const st = getWarrantyState(asset);
+    const cls = { active: 'badge-green', expiring: 'badge-amber', expired: 'badge-red', unknown: 'badge-zinc' }[st.key];
+    return `<span class="badge ${cls}">${st.label}</span>`;
+}
+
+const WARRANTY_SOURCE_LABELS = {
+    ship_date: 'Shipment date',
+    invoice: 'Invoice date',
+    manual: 'Set by AISO',
+};
+
+// The dates may only be recomputed from a shipment while nobody has overridden
+// them; warranty_source is what records that someone did.
+function warrantyIsDerived(asset) { return (asset.warranty_source || 'ship_date') === 'ship_date'; }
+
+function getClaimOrgName(asset) {
+    if (!asset.service_org_id) return null;
+    const org = ORGS.find(o => o.id === asset.service_org_id);
+    return org ? org.name : asset.service_org_id;
+}
+
+// ── List ──
+
+function getFilteredAssets() {
+    const q = (document.getElementById('asset-search')?.value || '').trim().toLowerCase();
+    const filter = document.getElementById('asset-filter-status')?.value || '';
+
+    let list = ASSETS.filter(a => {
+        if (filter === 'unclaimed' && a.service_org_id) return false;
+        if (['active', 'expiring', 'expired'].includes(filter) && getWarrantyState(a).key !== filter) return false;
+        if (q) {
+            const hay = `${a.serial_no} ${getAssetProductName(a)}`.toLowerCase();
+            if (!hay.includes(q)) return false;
+        }
+        return true;
+    });
+
+    const dir = assetSort.dir === 'asc' ? 1 : -1;
+    return list.sort((a, b) =>
+        dir * String(a[assetSort.field] || '').localeCompare(String(b[assetSort.field] || '')));
+}
+
+function renderAssetStats() {
+    const total = ASSETS.length;
+    const unclaimed = ASSETS.filter(a => !a.service_org_id).length;
+    const expiring = ASSETS.filter(a => getWarrantyState(a).key === 'expiring').length;
+    const expired = ASSETS.filter(a => getWarrantyState(a).key === 'expired').length;
+    const chip = (label, val, color) =>
+        `<div style="flex:1;background:#fafafa;border:1px solid #f0f0f0;border-radius:10px;padding:10px 14px">
+            <div style="font-size:20px;font-weight:700;color:${color}">${val}</div>
+            <div style="font-size:11px;color:#86868b;margin-top:1px">${label}</div>
+        </div>`;
+    document.getElementById('asset-stats-bar').innerHTML =
+        chip('Devices', total, '#1d1d1f') +
+        chip('Unclaimed', unclaimed, '#6b7280') +
+        chip('Expiring soon', expiring, '#b45309') +
+        chip('Out of warranty', expired, '#dc2626');
+}
+
+function renderAssets() {
+    const list = getFilteredAssets();
+    renderAssetStats();
+
+    const totalPages = Math.max(1, Math.ceil(list.length / ASSET_PAGE_SIZE));
+    assetPage = Math.min(Math.max(assetPage, 1), totalPages);
+    const start = (assetPage - 1) * ASSET_PAGE_SIZE;
+    const items = list.slice(start, start + ASSET_PAGE_SIZE);
+    const searching = !!(document.getElementById('asset-search')?.value || '').trim();
+
+    document.getElementById('assets-tbody').innerHTML = items.length ? items.map(a => {
+        const st = getWarrantyState(a);
+        const claimedBy = getClaimOrgName(a);
+        return `
+        <tr class="cursor-pointer" onclick="if(!event.target.closest('button'))showAssetDetail('${a.id}')">
+            <td><div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:600;font-size:13px;color:#1d1d1f">${esc(a.serial_no)}</div>
+                <div style="font-size:11.5px;color:#86868b;margin-top:1px">Shipped ${esc(a.shipped_at || '—')}</div></td>
+            <td><span style="font-size:13px;color:#1d1d1f">${esc(getAssetProductName(a))}</span></td>
+            <td>${warrantyBadge(a)}</td>
+            <td><div style="font-size:13px;color:#1d1d1f;font-variant-numeric:tabular-nums">${esc(a.warranty_end || '—')}</div>
+                ${st.days !== null ? `<div style="font-size:11.5px;color:#86868b;margin-top:1px">${st.days < 0 ? `${Math.abs(st.days)}d ago` : `${st.days}d left`}</div>` : ''}</td>
+            <td>${claimedBy
+                ? `<span style="font-size:13px;color:#1d1d1f">${esc(claimedBy)}</span>`
+                : '<span class="badge badge-zinc">Unclaimed</span>'}</td>
+            <td class="text-right" onclick="event.stopPropagation()">
+                <div class="flex items-center gap-0.5 justify-end">
+                    <button onclick="showAssetDetail('${a.id}')" class="btn-ghost" title="Details"><i class="ph ph-info"></i></button>
+                    ${a.service_org_id ? `<button onclick="confirmReleaseAsset('${a.id}')" class="btn-ghost" title="Release claim"><i class="ph ph-link-simple-break"></i></button>` : ''}
+                </div>
+            </td>
+        </tr>`;
+    }).join('') : `<tr><td colspan="6" class="text-center py-16">${emptyState(
+        'ph-barcode',
+        searching ? EMPTY_STATE_NO_RESULTS : EMPTY_STATE_NO_DATA,
+        !searching ? '<div class="flex items-center gap-2 justify-center mt-1"><button onclick="showAssetAddModal()" class="btn-secondary text-xs"><i class="ph ph-plus"></i> Add a device</button><button onclick="showAssetImportModal()" class="btn-primary text-xs"><i class="ph ph-upload-simple"></i> Import serials</button></div>' : ''
+    )}</td></tr>`;
+
+    renderAssetPagination(list.length, assetPage, totalPages);
+}
+
+function renderAssetPagination(totalItems, currentPage, totalPages) {
+    const el = document.getElementById('assets-pagination');
+    if (!el) return;
+    if (totalItems <= ASSET_PAGE_SIZE) { el.innerHTML = ''; return; }
+    const from = (currentPage - 1) * ASSET_PAGE_SIZE + 1;
+    const to = Math.min(currentPage * ASSET_PAGE_SIZE, totalItems);
+    el.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 4px;font-size:12.5px;color:#86868b">
+            <span>Showing ${from}–${to} of ${totalItems}</span>
+            <div class="flex items-center gap-1">
+                <button class="btn-ghost" ${currentPage === 1 ? 'disabled' : ''} onclick="setAssetPage(${currentPage - 1})"><i class="ph ph-caret-left"></i></button>
+                <span style="padding:0 8px">${currentPage} / ${totalPages}</span>
+                <button class="btn-ghost" ${currentPage === totalPages ? 'disabled' : ''} onclick="setAssetPage(${currentPage + 1})"><i class="ph ph-caret-right"></i></button>
+            </div>
+        </div>`;
+}
+
+// ── Detail ──
+
+function getAssetById(id) { return ASSETS.find(a => a.id === id) || null; }
+
+function showAssetDetail(id) {
+    const a = getAssetById(id);
+    if (!a) return;
+    const st = getWarrantyState(a);
+    const claimedBy = getClaimOrgName(a);
+    const derived = warrantyIsDerived(a);
+    const row = (label, value) => `
+        <div style="display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid #f5f5f7">
+            <span style="font-size:12.5px;color:#86868b">${label}</span>
+            <span style="font-size:13px;color:#1d1d1f;text-align:right">${value}</span>
+        </div>`;
+
+    showModal(`
+        <div style="padding:26px 28px">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:6px">
+                <div>
+                    <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:700;color:#1d1d1f">${esc(a.serial_no)}</div>
+                    <div style="font-size:13px;color:#86868b;margin-top:2px">${esc(getAssetProductName(a))}</div>
+                </div>
+                ${warrantyBadge(a)}
+            </div>
+
+            <div style="margin-top:16px">
+                ${row('Shipped', esc(a.shipped_at || '—'))}
+                ${row('Warranty starts', esc(a.warranty_start || '—'))}
+                ${row('Warranty ends', esc(a.warranty_end || '—'))}
+                ${row('Remaining', st.days === null ? '—' : (st.days < 0 ? `Ended ${Math.abs(st.days)} days ago` : `${st.days} days`))}
+                ${row('Start date based on', esc(WARRANTY_SOURCE_LABELS[a.warranty_source] || a.warranty_source))}
+                ${row('Claimed by', claimedBy ? esc(claimedBy) : '<span class="badge badge-zinc">Unclaimed</span>')}
+                ${row('Claimed at', esc(a.claimed_at || '—'))}
+                ${row('Source order', a.order_line_id ? esc(a.order_line_id) : '—')}
+                ${row('Status', esc(a.status))}
+            </div>
+
+            ${derived ? '' : `<div style="margin-top:14px;padding:10px 12px;background:#fffbeb;border-left:2px solid #b45309;border-radius:0 8px 8px 0;font-size:12.5px;color:#78350f">
+                The start date was set by hand, so a re-import will leave it alone. The end date still follows the warranty term.
+            </div>`}
+
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px;flex-wrap:wrap">
+                ${a.service_org_id ? `<button onclick="confirmReleaseAsset('${a.id}')" class="btn-secondary text-xs"><i class="ph ph-link-simple-break"></i> Release claim</button>` : ''}
+                <button onclick="showWarrantyOverrideModal('${a.id}')" class="btn-secondary text-xs"><i class="ph ph-calendar-blank"></i> Adjust warranty start</button>
+                <button onclick="closeModal()" class="btn-primary text-xs">Close</button>
+            </div>
+        </div>
+    `, true);
+}
+
+// ── Release a claim ──
+// Needed because registration only takes a serial number: a device claimed by
+// the wrong person has to be recoverable, and a resold device has to be
+// claimable again by its new owner.
+
+function confirmReleaseAsset(id) {
+    const a = getAssetById(id);
+    if (!a || !a.service_org_id) return;
+    const orgName = getClaimOrgName(a);
+    showModal(`
+        <div style="padding:26px 28px">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Release ${esc(a.serial_no)}?</h3>
+            <p style="font-size:13px;color:#86868b;line-height:1.6;margin:0">
+                ${esc(orgName)} will immediately lose sight of this device, and anyone holding it can register it again.
+                The warranty is unaffected.
+            </p>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
+                <button onclick="closeModal()" class="btn-secondary text-xs">Cancel</button>
+                <button onclick="releaseAsset('${a.id}')" class="btn-primary text-xs">Release claim</button>
+            </div>
+        </div>
+    `);
+}
+
+function releaseAsset(id) {
+    const a = getAssetById(id);
+    if (!a || !a.service_org_id) return;
+    const orgName = getClaimOrgName(a);
+    a.service_org_id = null;
+    a.claimed_at = null;
+    a.updated_at = todayIso();
+    if (!Store.save()) return;
+    logActivity('Released', a.serial_no, `Claim by ${orgName} removed — device is unclaimed again`);
+    closeModal();
+    renderAssets();
+    showToast(`${a.serial_no} released`);
+}
+
+// ── Warranty start override ──
+// Coverage runs from the date of purchase. Shipment is only the default we fall
+// back to when nobody has told us the real one.
+
+function showWarrantyOverrideModal(id) {
+    const a = getAssetById(id);
+    if (!a) return;
+    showModal(`
+        <div style="padding:26px 28px">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Adjust warranty start</h3>
+            <p style="font-size:12.5px;color:#86868b;line-height:1.6;margin:0 0 18px">
+                ${esc(a.serial_no)} · currently ${esc(a.warranty_start)} → ${esc(a.warranty_end)}
+                (${esc(WARRANTY_SOURCE_LABELS[a.warranty_source] || a.warranty_source)})
+            </p>
+
+            <label class="field-label">Start date</label>
+            <input type="date" id="wov-start" class="input-field" value="${esc(a.warranty_start)}">
+
+            <label class="field-label" style="margin-top:14px">Based on</label>
+            <select id="wov-source" class="input-field">
+                <option value="invoice" ${a.warranty_source === 'invoice' ? 'selected' : ''}>Invoice date — customer supplied proof of purchase</option>
+                <option value="manual" ${a.warranty_source === 'manual' ? 'selected' : ''}>Set by AISO — goodwill, correction or extension</option>
+                <option value="ship_date" ${a.warranty_source === 'ship_date' ? 'selected' : ''}>Shipment date — revert to the default</option>
+            </select>
+
+            <p style="font-size:12px;color:#86868b;line-height:1.6;margin-top:12px">
+                The end date is recalculated from the ${a.warranty_months} month term, and keeps following it.
+                Anything other than the shipment date also stops a re-import from moving this start date.
+            </p>
+            <p class="wov-error" id="wov-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin-top:10px"></p>
+
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
+                <button onclick="closeModal()" class="btn-secondary text-xs">Cancel</button>
+                <button onclick="saveWarrantyOverride('${a.id}')" class="btn-primary text-xs">Save</button>
+            </div>
+        </div>
+    `);
+}
+
+function saveWarrantyOverride(id) {
+    const a = getAssetById(id);
+    if (!a) return;
+    const start = document.getElementById('wov-start').value;
+    const source = document.getElementById('wov-source').value;
+    const err = document.getElementById('wov-error');
+
+    if (!start || Number.isNaN(new Date(start + 'T00:00:00').getTime())) {
+        err.textContent = 'Enter a valid start date.';
+        err.style.display = 'block';
+        return;
+    }
+
+    const before = `${a.warranty_start} → ${a.warranty_end} (${a.warranty_source})`;
+    a.warranty_start = start;
+    a.warranty_end = addMonthsToDate(start, a.warranty_months);
+    a.warranty_source = source;
+    a.updated_at = todayIso();
+    if (!Store.save()) return;
+
+    logActivity('Warranty adjusted', a.serial_no, `${before} → ${a.warranty_start} → ${a.warranty_end} (${source})`);
+    closeModal();
+    renderAssets();
+    showToast(`Warranty updated for ${a.serial_no}`);
+}
+
+function todayIso() { return toIsoDate(new Date()); }
+
+// ═══════════════════════════════════════════════════════════════════
+// ASSET IMPORT
+//
+// Rows are validated one by one and a run may partially succeed: one typo in a
+// file of five hundred should not cost the other 499.
+//
+// An existing serial is updated, not duplicated, and the update touches only the
+// columns manufacturing owns. Claims, order links and hand-set warranty dates
+// belong to this side of the system and a re-import must not undo them.
+// ═══════════════════════════════════════════════════════════════════
+
+const ASSET_CSV_COLUMNS = ['serial_no', 'model', 'shipped_at', 'warranty_months'];
+
+function parseAssetCsv(text) {
+    const lines = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return { error: 'The file is empty.' };
+
+    const header = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const missing = ASSET_CSV_COLUMNS.filter(c => !header.includes(c));
+    if (missing.length) {
+        return { error: `Missing column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. Expected header: ${ASSET_CSV_COLUMNS.join(',')}` };
+    }
+
+    const rows = lines.slice(1).map((line, i) => {
+        const cells = line.split(',').map(c => c.trim());
+        const row = { _line: i + 2 };
+        header.forEach((h, idx) => { row[h] = cells[idx] || ''; });
+        return row;
+    });
+    return { rows };
+}
+
+function isIsoDate(v) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+    return !Number.isNaN(new Date(v + 'T00:00:00').getTime());
+}
+
+function validateAssetRows(rows) {
+    const seenInFile = new Map();
+    return rows.map(row => {
+        const serial = String(row.serial_no || '').trim().toUpperCase();
+        const errors = [];
+
+        if (!serial) errors.push('serial_no is empty');
+        else if (seenInFile.has(serial)) errors.push(`serial_no repeats line ${seenInFile.get(serial)}`);
+        else seenInFile.set(serial, row._line);
+
+        const product = findOwnBrandProductByModel(row.model);
+        if (!row.model) errors.push('model is empty');
+        else if (!product) {
+            // Being explicit here matters: a partner model is a legitimate product
+            // that simply does not belong in this registry, and saying so saves
+            // whoever is importing from hunting for a typo that isn't there.
+            const anyProduct = PRODUCTS.find(p =>
+                String(p.model || '').toLowerCase() === String(row.model).trim().toLowerCase() ||
+                String(p.name || '').toLowerCase() === String(row.model).trim().toLowerCase());
+            errors.push(anyProduct
+                ? `${row.model} is partner hardware — the registry holds AISO-built devices only`
+                : `no product matches model "${row.model}"`);
+        }
+
+        if (!isIsoDate(row.shipped_at)) errors.push('shipped_at must be YYYY-MM-DD');
+
+        const months = Number(row.warranty_months);
+        if (!Number.isInteger(months) || months <= 0) errors.push('warranty_months must be a positive whole number');
+
+        const existing = ASSETS.find(a => a.serial_no === serial);
+        return {
+            line: row._line,
+            serial_no: serial,
+            model: row.model,
+            shipped_at: row.shipped_at,
+            warranty_months: months,
+            product_id: product ? product.id : null,
+            errors,
+            ok: errors.length === 0,
+            isUpdate: !!existing,
+        };
+    });
+}
+
+function applyAssetImport(validRows) {
+    let created = 0, updated = 0, datesKept = 0;
+
+    validRows.forEach(row => {
+        const existing = ASSETS.find(a => a.serial_no === row.serial_no);
+
+        if (!existing) {
+            ASSETS.push({
+                id: 'ast-' + Date.now().toString(36) + '-' + Math.floor(created + updated + 1),
+                serial_no: row.serial_no,
+                product_id: row.product_id,
+                shipped_at: row.shipped_at,
+                warranty_months: row.warranty_months,
+                warranty_start: row.shipped_at,
+                warranty_end: addMonthsToDate(row.shipped_at, row.warranty_months),
+                warranty_source: 'ship_date',
+                service_org_id: null,
+                claimed_at: null,
+                order_line_id: null,
+                status: 'ACTIVE',
+                replaced_by_asset_id: null,
+                created_at: todayIso(),
+                updated_at: todayIso(),
+            });
+            created++;
+            return;
+        }
+
+        // Manufacturing-owned columns are refreshed.
+        existing.product_id = row.product_id;
+        existing.shipped_at = row.shipped_at;
+        existing.warranty_months = row.warranty_months;
+
+        // Only the start date is protected. An override says "coverage began on
+        // this date", not "freeze the end date" -- so if manufacturing corrects
+        // the term, the end has to move with it or the record contradicts itself:
+        // 24 months on file, an end date still 36 months out.
+        if (warrantyIsDerived(existing)) {
+            existing.warranty_start = row.shipped_at;
+        } else {
+            datesKept++;
+        }
+        existing.warranty_end = addMonthsToDate(existing.warranty_start, row.warranty_months);
+
+        // service_org_id, claimed_at, order_line_id, status and
+        // replaced_by_asset_id are deliberately left untouched.
+        existing.updated_at = todayIso();
+        updated++;
+    });
+
+    return { created, updated, datesKept };
+}
+
+// ── Import UI ──
+
+let assetImportPreview = null;
+
+function showAssetImportModal() {
+    assetImportPreview = null;
+    showModal(`
+        <div style="padding:26px 28px">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Import serial numbers</h3>
+            <p style="font-size:12.5px;color:#86868b;line-height:1.6;margin:0 0 16px">
+                Paste the list from the manufacturing team. AISO-built devices only — partner hardware is warranted by its own vendor and is rejected.
+            </p>
+
+            <label class="field-label">CSV</label>
+            <textarea id="asset-csv" class="input-field" rows="8" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px"
+                placeholder="${esc(ASSET_CSV_COLUMNS.join(','))}\nAISO1-2026-2001,AISO1,2026-08-01,36"></textarea>
+            <p style="font-size:12px;color:#86868b;margin-top:8px">
+                Header must be <code>${esc(ASSET_CSV_COLUMNS.join(','))}</code>. A serial already on file is updated, never duplicated.
+            </p>
+
+            <div id="asset-import-result" style="margin-top:16px"></div>
+
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
+                <button onclick="closeModal()" class="btn-secondary text-xs">Cancel</button>
+                <button onclick="previewAssetImport()" class="btn-secondary text-xs" id="asset-preview-btn"><i class="ph ph-eye"></i> Check</button>
+                <button onclick="commitAssetImport()" class="btn-primary text-xs" id="asset-commit-btn" disabled>Import</button>
+            </div>
+        </div>
+    `, true);
+}
+
+function previewAssetImport() {
+    const text = document.getElementById('asset-csv').value;
+    const slot = document.getElementById('asset-import-result');
+    const commit = document.getElementById('asset-commit-btn');
+    assetImportPreview = null;
+    commit.disabled = true;
+
+    const parsed = parseAssetCsv(text);
+    if (parsed.error) {
+        slot.innerHTML = `<div style="padding:10px 12px;background:#fef2f2;border-left:2px solid #dc2626;border-radius:0 8px 8px 0;font-size:12.5px;color:#991b1b">${esc(parsed.error)}</div>`;
+        return;
+    }
+
+    const rows = validateAssetRows(parsed.rows);
+    const good = rows.filter(r => r.ok);
+    const bad = rows.filter(r => !r.ok);
+    assetImportPreview = good;
+    commit.disabled = good.length === 0;
+
+    const newCount = good.filter(r => !r.isUpdate).length;
+    const updCount = good.length - newCount;
+
+    slot.innerHTML = `
+        <div style="display:flex;gap:10px;margin-bottom:${bad.length ? '12px' : '0'}">
+            <div style="flex:1;background:#f0fdf4;border:1px solid #dcfce7;border-radius:8px;padding:9px 12px">
+                <div style="font-size:17px;font-weight:700;color:#15803d">${good.length}</div>
+                <div style="font-size:11.5px;color:#166534">ready — ${newCount} new, ${updCount} updated</div>
+            </div>
+            <div style="flex:1;background:${bad.length ? '#fef2f2' : '#fafafa'};border:1px solid ${bad.length ? '#fee2e2' : '#f0f0f0'};border-radius:8px;padding:9px 12px">
+                <div style="font-size:17px;font-weight:700;color:${bad.length ? '#dc2626' : '#86868b'}">${bad.length}</div>
+                <div style="font-size:11.5px;color:#86868b">rejected</div>
+            </div>
+        </div>
+        ${bad.length ? `
+        <div style="max-height:180px;overflow-y:auto;border:1px solid #f0f0f0;border-radius:8px">
+            <table class="data-table w-full" style="font-size:12.5px">
+                <thead><tr><th style="width:14%">Line</th><th style="width:30%">Serial</th><th>Why it was rejected</th></tr></thead>
+                <tbody>${bad.map(r => `
+                    <tr><td style="font-variant-numeric:tabular-nums">${r.line}</td>
+                        <td style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${esc(r.serial_no || '—')}</td>
+                        <td style="color:#991b1b">${esc(r.errors.join('; '))}</td></tr>`).join('')}
+                </tbody>
+            </table>
+        </div>
+        <p style="font-size:12px;color:#86868b;margin-top:8px">The ready rows can still be imported; fix these and run the file again.</p>` : ''}
+    `;
+}
+
+function commitAssetImport() {
+    if (!assetImportPreview || !assetImportPreview.length) return;
+    const res = applyAssetImport(assetImportPreview);
+    if (!Store.save()) return;
+
+    const parts = [`${res.created} added`, `${res.updated} updated`];
+    if (res.datesKept) parts.push(`${res.datesKept} kept an adjusted start date`);
+    logActivity('Imported', 'Asset registry', parts.join(', '));
+
+    assetImportPreview = null;
+    closeModal();
+    resetAssetPage();
+    renderAssets();
+    showToast(`${res.created + res.updated} device${res.created + res.updated === 1 ? '' : 's'} imported`);
+}
+
+// ── Export for the Portal ──
+// A format conversion, not a state export: only the manufacturing columns go
+// out. Claims and order links stay here, so the Portal copy can never disagree
+// with this one about anything it holds.
+
+function exportAssetsForPortal() {
+    const own = getOwnBrandProducts();
+    const models = own.map(p => ({ code: p.model, name: p.name }));
+    const assets = {};
+    ASSETS.filter(a => a.status === 'ACTIVE').forEach(a => {
+        const product = getAssetProduct(a);
+        if (!product) return;
+        assets[a.serial_no] = {
+            model: product.model,
+            shipped_at: a.shipped_at,
+            warranty_start: a.warranty_start,
+            warranty_end: a.warranty_end,
+            warranty_source: a.warranty_source,
+            claimed: !!a.service_org_id,
+        };
+    });
+
+    const body = `/* Generated by portal-v4-mvp — Asset Registry export.
+   Drop this into the Portal at hardware/v6/js/warranty-data.js.
+   Manufacturing columns only: no customer, order or account data crosses over. */
+
+window.AISO_WARRANTY = (function () {
+  var MODELS = ${JSON.stringify(models, null, 2)};
+
+  var ASSETS = ${JSON.stringify(assets, null, 2)};
+
+  var EXPIRING_SOON_DAYS = ${ASSET_EXPIRING_SOON_DAYS};
+
+  function modelName(code) {
+    for (var i = 0; i < MODELS.length; i++) if (MODELS[i].code === code) return MODELS[i].name;
+    return code;
+  }
+  function daysUntil(d) {
+    var end = new Date(d + 'T00:00:00'), today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((end - today) / 86400000);
+  }
+  function lookup(serial) {
+    var key = String(serial || '').trim().toUpperCase();
+    var a = ASSETS[key];
+    if (!a) return null;
+    var left = daysUntil(a.warranty_end);
+    return {
+      serial_no: key, model: a.model, product_name: modelName(a.model),
+      shipped_at: a.shipped_at, warranty_start: a.warranty_start,
+      warranty_end: a.warranty_end, warranty_source: a.warranty_source,
+      claimed: a.claimed, days_left: left,
+      state: left < 0 ? 'expired' : (left <= EXPIRING_SOON_DAYS ? 'expiring' : 'active')
+    };
+  }
+  return { models: MODELS, modelName: modelName, lookup: lookup, EXPIRING_SOON_DAYS: EXPIRING_SOON_DAYS };
+})();
+`;
+
+    const blob = new Blob([body], { type: 'text/javascript' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'warranty-data.js';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${Object.keys(assets).length} devices for the Portal`);
+}
+
+// ── Add one device by hand ──
+// Bulk import is how a production run arrives; this is for the single device
+// that arrives outside one — a replacement unit, an engineering sample, a serial
+// the manufacturing team sent through after the fact.
+//
+// It routes through the same validateAssetRows/applyAssetImport pair the import
+// uses, so a serial typed here has to clear exactly the checks a pasted one
+// does. Two entry points with two sets of rules is how a registry starts
+// disagreeing with itself.
+
+function showAssetAddModal() {
+    const own = getOwnBrandProducts();
+    if (!own.length) {
+        showToast('No AISO-built products exist yet — mark one as own-brand first.', 'error');
+        return;
+    }
+
+    showModal(`
+        <div style="padding:26px 28px">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Add a device</h3>
+            <p style="font-size:12.5px;color:#86868b;line-height:1.6;margin:0 0 18px">
+                For a single unit. Use <button onclick="closeModal();showAssetImportModal()" style="background:none;border:0;padding:0;color:#1d1d1f;font-weight:600;text-decoration:underline;cursor:pointer;font-size:12.5px">Import</button> for a production run.
+            </p>
+
+            <label class="field-label" for="aa-serial">Serial number</label>
+            <input type="text" id="aa-serial" class="input-field" autocomplete="off" spellcheck="false"
+                   placeholder="AISO1-2026-2001" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">
+
+            <label class="field-label" for="aa-model" style="margin-top:14px">Model</label>
+            <select id="aa-model" class="input-field">
+                ${own.map(p => `<option value="${esc(p.model)}">${esc(p.name)} (${esc(p.model)})</option>`).join('')}
+            </select>
+
+            <div style="display:flex;gap:12px;margin-top:14px">
+                <div style="flex:1">
+                    <label class="field-label" for="aa-shipped">Shipped</label>
+                    <input type="date" id="aa-shipped" class="input-field" value="${todayIso()}">
+                </div>
+                <div style="flex:1">
+                    <label class="field-label" for="aa-months">Warranty (months)</label>
+                    <input type="number" id="aa-months" class="input-field" min="1" step="1" value="36">
+                </div>
+            </div>
+
+            <p style="font-size:12px;color:#86868b;line-height:1.6;margin-top:12px">
+                Coverage starts on the shipping date. Adjust it afterwards from the device if the customer supplies proof of purchase.
+            </p>
+            <p id="aa-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin-top:10px"></p>
+
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
+                <button onclick="closeModal()" class="btn-secondary text-xs">Cancel</button>
+                <button onclick="saveAssetAdd()" class="btn-primary text-xs">Add device</button>
+            </div>
+        </div>
+    `);
+
+    setTimeout(() => document.getElementById('aa-serial')?.focus(), 50);
+}
+
+function saveAssetAdd() {
+    const err = document.getElementById('aa-error');
+    const fail = msg => { err.textContent = msg; err.style.display = 'block'; };
+
+    const row = {
+        _line: 1,
+        serial_no: document.getElementById('aa-serial').value,
+        model: document.getElementById('aa-model').value,
+        shipped_at: document.getElementById('aa-shipped').value,
+        warranty_months: document.getElementById('aa-months').value,
+    };
+
+    const [checked] = validateAssetRows([row]);
+    if (!checked.ok) return fail(checked.errors.join('; '));
+
+    // An existing serial would silently become an update here, which is not what
+    // "Add" says it does. The import path is where a refresh belongs.
+    if (checked.isUpdate) {
+        return fail(`${checked.serial_no} is already on file. Open it from the list to change it, or use Import to refresh it.`);
+    }
+
+    applyAssetImport([checked]);
+    if (!Store.save()) return;
+
+    logActivity('Added', checked.serial_no, `${checked.model} · shipped ${checked.shipped_at} · ${checked.warranty_months} month warranty`);
+    closeModal();
+    resetAssetPage();
+    renderAssets();
+    showToast(`${checked.serial_no} added`);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ORDERS — purchase orders with free-text customer/supplier names.
+// The *_org_id columns stay null until Organization Management ships.
+// ═══════════════════════════════════════════════════════════════════
+
+function getOrderById(id) { return ORDERS.find(o => o.id === id) || null; }
+
+function getOrderLines(orderId) {
+    return ORDER_LINES.filter(l => l.order_id === orderId).sort((a, b) => a.line_no - b.line_no);
+}
+
+function orderStatusBadge(s) {
+    const m = {
+        DRAFT: '<span class="badge badge-draft">Draft</span>',
+        CONFIRMED: '<span class="badge badge-green">Confirmed</span>',
+        CANCELLED: '<span class="badge badge-red">Cancelled</span>',
+    };
+    return m[s] || `<span class="badge badge-zinc">${esc(s)}</span>`;
+}
+
+function orderSuppliersCell(o) {
+    const parts = [];
+    if (o.hw_supplier_name) parts.push(`<span class="badge badge-hw">HW</span> <span style="font-size:13px;color:#1d1d1f">${esc(o.hw_supplier_name)}</span>`);
+    if (o.sw_supplier_name) parts.push(`<span class="badge badge-sw">SW</span> <span style="font-size:13px;color:#1d1d1f">${esc(o.sw_supplier_name)}</span>`);
+    return parts.length ? `<div class="flex items-center gap-3 flex-wrap">${parts.map(p => `<span class="flex items-center gap-1.5">${p}</span>`).join('')}</div>` : '<span style="color:#86868b">—</span>';
+}
+
+function setOrderFilter(val) {
+    document.getElementById('order-filter-status').value = val;
+    document.querySelectorAll('#order-filter-tabs .filter-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.val === val));
+    renderOrders();
+}
+
+function getFilteredOrders() {
+    const status = document.getElementById('order-filter-status')?.value || '';
+    const q = (document.getElementById('order-search')?.value || '').trim().toLowerCase();
+    return ORDERS.filter(o => {
+        if (status && o.status !== status) return false;
+        if (q && ![o.order_no, o.customer_name, o.hw_supplier_name, o.sw_supplier_name]
+            .some(v => (v || '').toLowerCase().includes(q))) return false;
+        return true;
+    }).sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
+}
+
+function renderOrders() {
+    const list = getFilteredOrders();
+    const searching = !!(document.getElementById('order-search')?.value || '').trim();
+
+    document.getElementById('orders-tbody').innerHTML = list.length ? list.map(o => `
+        <tr class="cursor-pointer" onclick="if(!event.target.closest('button'))showOrderDetail('${o.id}')">
+            <td><span style="font-weight:600;font-size:13px;color:#1d1d1f">${esc(o.order_no)}</span>
+                ${o.contract_no ? `<div style="font-size:11.5px;color:#86868b;margin-top:1px">${esc(o.contract_no)}</div>` : ''}</td>
+            <td><span style="font-size:13px;color:#1d1d1f">${esc(o.customer_name)}</span></td>
+            <td>${orderSuppliersCell(o)}</td>
+            <td><span style="font-size:13px;color:#86868b;font-variant-numeric:tabular-nums">${esc(o.order_date || '—')}</span></td>
+            <td><span style="font-size:13px;color:#86868b">${getOrderLines(o.id).length}</span></td>
+            <td>${orderStatusBadge(o.status)}</td>
+            <td class="text-right" onclick="event.stopPropagation()">
+                <div class="flex items-center gap-0.5 justify-end">
+                    <button onclick="showOrderDetail('${o.id}')" class="btn-ghost" title="Details"><i class="ph ph-info"></i></button>
+                    ${o.status === 'DRAFT' ? `<button onclick="showOrderModal('${o.id}')" class="btn-ghost" title="Edit"><i class="ph ph-pencil-simple"></i></button>` : ''}
+                </div>
+            </td>
+        </tr>`).join('') : `<tr><td colspan="7" class="text-center py-16">${emptyState(
+        'ph-shopping-cart',
+        searching ? EMPTY_STATE_NO_RESULTS : EMPTY_STATE_NO_DATA,
+        !searching ? '<div class="flex items-center gap-2 justify-center mt-1"><button onclick="showOrderModal()" class="btn-primary text-xs"><i class="ph ph-plus"></i> New Order</button></div>' : ''
+    )}</td></tr>`;
+}
+
+// ── Create / Edit ──
+// The modal edits a draft copy; nothing touches ORDERS/ORDER_LINES until save.
+// Inputs write straight into the draft; only structural changes (add/remove
+// line, qty, scope, product pick) re-render the line cards.
+
+let orderDraft = null;
+
+function newOrderLineDraft(lineNo) {
+    return {
+        id: null, line_no: lineNo, scope: 'HW', product_id: '', product_name: '', qty: 1,
+        sla_plan: '',
+        serial_nos: [''], bom: [],
+        license_keys: [], version: '', license_start: '', license_end: '',
+        notes: '',
+    };
+}
+
+function showOrderModal(orderId = null) {
+    const existing = orderId ? getOrderById(orderId) : null;
+    if (orderId && !existing) return;
+    if (existing && existing.status !== 'DRAFT') {
+        showToast('Only draft orders can be edited.', 'error');
+        return;
+    }
+    orderDraft = existing ? {
+        ...JSON.parse(JSON.stringify(existing)),
+        lines: JSON.parse(JSON.stringify(getOrderLines(orderId))),
+    } : {
+        id: null, order_no: '', contract_no: '', customer_name: '', customer_org_id: null,
+        hw_supplier_name: '', hw_supplier_org_id: null, sw_supplier_name: '', sw_supplier_org_id: null,
+        sales_contact: '', order_date: todayIso(), status: 'DRAFT', notes: '',
+        lines: [newOrderLineDraft(1)],
+    };
+
+    const d = orderDraft;
+    const field = (id, label, key, opts = {}) => `
+        <div>
+            <label class="field-label" for="${id}">${label}${opts.required ? ' <span class="req">*</span>' : ''}</label>
+            <input type="${opts.type || 'text'}" id="${id}" class="input-field" autocomplete="off"
+                   value="${esc(d[key])}" ${opts.placeholder ? `placeholder="${esc(opts.placeholder)}"` : ''}
+                   oninput="orderDraft.${key}=this.value.trim()">
+            ${opts.hint ? `<div class="field-hint">${esc(opts.hint)}</div>` : ''}
+        </div>`;
+
+    showModal(`
+        <div style="padding:26px 28px;max-height:82vh;overflow-y:auto">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 18px">${existing ? `Edit ${esc(existing.order_no)}` : 'New Order'}</h3>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px 18px">
+                ${field('ord-no', 'Order No', 'order_no', { required: true, placeholder: 'PO-2026-0001' })}
+                ${field('ord-contract', 'Contract No', 'contract_no', { placeholder: 'Optional' })}
+                ${field('ord-date', 'Order Date', 'order_date', { required: true, type: 'date' })}
+                ${field('ord-sales', 'Sales Contact', 'sales_contact', { placeholder: 'Optional' })}
+                ${field('ord-customer', 'Customer', 'customer_name', { required: true, placeholder: 'Type the customer name', hint: 'Free text. Links to an organization later.' })}
+                <div></div>
+                ${field('ord-hw-sup', 'HW Supplier', 'hw_supplier_name', { placeholder: 'Required when the order has HW lines', hint: 'Free text. Required if any line is HW.' })}
+                ${field('ord-sw-sup', 'SW Supplier', 'sw_supplier_name', { placeholder: 'Required when the order has SW lines', hint: 'Free text. Required if any line is SW.' })}
+            </div>
+
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:22px 0 10px">Order Lines</div>
+            <div id="ord-lines"></div>
+            <button onclick="ordAddLine()" class="btn-secondary text-xs" style="width:100%"><i class="ph ph-plus"></i> Add Line</button>
+
+            <p id="ord-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin-top:12px"></p>
+
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
+                <button onclick="closeModal()" class="btn-secondary text-xs">Cancel</button>
+                <button onclick="saveOrder('DRAFT')" class="btn-secondary text-xs">Save as Draft</button>
+                <button onclick="saveOrder('CONFIRMED')" class="btn-primary text-xs">Confirm Order</button>
+            </div>
+        </div>
+    `, true);
+
+    renderOrderDraftLines();
+    setTimeout(() => document.getElementById('ord-no')?.focus(), 50);
+}
+
+function renderOrderDraftLines() {
+    const host = document.getElementById('ord-lines');
+    if (!host) return;
+    host.innerHTML = orderDraft.lines.map((l, i) => {
+        const products = getVisibleProducts(l.scope === 'HW' ? 'hardware' : 'software').filter(p => p.status === 'published');
+        const knownProduct = l.product_id && products.some(p => p.id === l.product_id);
+        return `
+        <div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+                <span style="font-size:12.5px;font-weight:700;color:#86868b">Line ${i + 1}</span>
+                <span class="badge ${l.scope === 'HW' ? 'badge-hw' : 'badge-sw'}">${l.scope}</span>
+                ${orderDraft.lines.length > 1 ? `<button onclick="ordRemoveLine(${i})" class="btn-ghost" style="margin-left:auto" title="Remove line"><i class="ph ph-trash"></i></button>` : ''}
+            </div>
+            <div style="display:grid;grid-template-columns:100px 1fr 120px 80px;gap:12px">
+                <div>
+                    <label class="field-label">Scope</label>
+                    <select class="input-field" onchange="ordSetScope(${i}, this.value)">
+                        <option value="HW" ${l.scope === 'HW' ? 'selected' : ''}>HW</option>
+                        <option value="SW" ${l.scope === 'SW' ? 'selected' : ''}>SW</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="field-label">Product</label>
+                    <select class="input-field" onchange="ordSetProduct(${i}, this.value)">
+                        <option value="">— Select a published product —</option>
+                        ${products.map(p => `<option value="${p.id}" ${l.product_id === p.id ? 'selected' : ''}>${esc(p.name)}${p.model ? ` (${esc(p.model)})` : ''}</option>`).join('')}
+                        <option value="__custom" ${l.product_name && !knownProduct ? 'selected' : ''}>Other (type a name)</option>
+                    </select>
+                    ${l.product_id ? '' : `<input type="text" class="input-field" style="margin-top:8px" placeholder="Product name"
+                        value="${esc(l.product_name)}" oninput="orderDraft.lines[${i}].product_name=this.value.trim()">`}
+                </div>
+                <div>
+                    <label class="field-label">SLA</label>
+                    <select class="input-field" onchange="orderDraft.lines[${i}].sla_plan=this.value">
+                        <option value="">—</option>
+                        ${ORDER_SLA_PLAN_OPTIONS.map(sp => `<option value="${esc(sp)}" ${l.sla_plan === sp ? 'selected' : ''}>${esc(sp)}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <label class="field-label">Qty</label>
+                    <input type="number" class="input-field" min="1" step="1" value="${l.qty}" onchange="ordSetQty(${i}, this.value)">
+                </div>
+            </div>
+            ${l.scope === 'HW' ? `
+            <div style="margin-top:12px">
+                <label class="field-label">Serial Numbers (${l.serial_nos.filter(s => s.trim()).length} of ${l.qty})</label>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                    ${l.serial_nos.map((sn, si) => `
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0">Unit ${si + 1}</span>
+                        <input type="text" class="input-field" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="Serial number"
+                               value="${esc(sn)}" oninput="orderDraft.lines[${i}].serial_nos[${si}]=this.value.trim()">
+                    </div>`).join('')}
+                </div>
+                <div class="field-hint">One serial per unit — the row count follows Qty. Required before the order is confirmed.</div>
+            </div>
+            <div style="margin-top:12px;border:1px dashed var(--border);border-radius:10px;background:var(--bg-subtle);padding:12px 14px">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                    <span style="font-size:12.5px;font-weight:700">Custom BOM</span>
+                    <span class="field-hint" style="margin:0">applies to every unit in this line</span>
+                </div>
+                ${l.bom.length ? `
+                <table style="width:100%;border-collapse:collapse">
+                    <thead><tr>
+                        <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0;width:22%">Component</th>
+                        <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0;width:22%">Brand</th>
+                        <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0">Model</th>
+                        <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 0 6px 0;width:64px">Qty</th>
+                        <th style="width:34px"></th>
+                    </tr></thead>
+                    <tbody>
+                        ${l.bom.map((b, bi) => `
+                        <tr>
+                            <td style="padding:3px 8px 3px 0"><input type="text" class="input-field" placeholder="CPU" value="${esc(b.component_type)}" oninput="orderDraft.lines[${i}].bom[${bi}].component_type=this.value.trim()"></td>
+                            <td style="padding:3px 8px 3px 0"><input type="text" class="input-field" placeholder="—" value="${esc(b.brand)}" oninput="orderDraft.lines[${i}].bom[${bi}].brand=this.value.trim()"></td>
+                            <td style="padding:3px 8px 3px 0"><input type="text" class="input-field" placeholder="Model" value="${esc(b.model)}" oninput="orderDraft.lines[${i}].bom[${bi}].model=this.value.trim()"></td>
+                            <td style="padding:3px 0"><input type="number" class="input-field" min="1" step="1" value="${b.qty}" oninput="orderDraft.lines[${i}].bom[${bi}].qty=parseInt(this.value,10)||1"></td>
+                            <td style="padding:3px 0 3px 4px;text-align:right"><button onclick="ordRemoveBom(${i},${bi})" class="btn-ghost" title="Remove component"><i class="ph ph-x"></i></button></td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>` : ''}
+                <button onclick="ordAddBom(${i})" class="btn-secondary text-xs" style="margin-top:${l.bom.length ? '10px' : '0'}"><i class="ph ph-plus"></i> Add Component</button>
+            </div>` : `
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:12px">
+                <div>
+                    <label class="field-label">Version</label>
+                    <input type="text" class="input-field" placeholder="e.g. 4.1.0" value="${esc(l.version)}" oninput="orderDraft.lines[${i}].version=this.value.trim()">
+                </div>
+                <div>
+                    <label class="field-label">License Start</label>
+                    <input type="date" class="input-field" value="${esc(l.license_start)}" oninput="orderDraft.lines[${i}].license_start=this.value">
+                </div>
+                <div>
+                    <label class="field-label">License End</label>
+                    <input type="date" class="input-field" value="${esc(l.license_end)}" oninput="orderDraft.lines[${i}].license_end=this.value">
+                </div>
+            </div>
+            <div style="margin-top:12px">
+                <label class="field-label">License Keys (${l.license_keys.filter(k => k.trim()).length} of ${l.qty})</label>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                    ${l.license_keys.map((lk, ki) => `
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0">Key ${ki + 1}</span>
+                        <input type="text" class="input-field" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="License key"
+                               value="${esc(lk)}" oninput="orderDraft.lines[${i}].license_keys[${ki}]=this.value.trim()">
+                    </div>`).join('')}
+                </div>
+                <div class="field-hint">One key per license — the row count follows Qty. Required before the order is confirmed.</div>
+            </div>`}
+        </div>`;
+    }).join('');
+}
+
+function ordAddLine() {
+    orderDraft.lines.push(newOrderLineDraft(orderDraft.lines.length + 1));
+    renderOrderDraftLines();
+}
+
+function ordRemoveLine(i) {
+    orderDraft.lines.splice(i, 1);
+    renderOrderDraftLines();
+}
+
+function ordSetScope(i, scope) {
+    const l = orderDraft.lines[i];
+    if (l.scope === scope) return;
+    l.scope = scope;
+    l.product_id = '';
+    l.product_name = '';
+    if (scope === 'SW') {
+        l.serial_nos = []; l.bom = [];
+        l.license_keys = Array.from({ length: l.qty }, () => '');
+    } else {
+        l.serial_nos = Array.from({ length: l.qty }, () => '');
+        l.license_keys = []; l.version = ''; l.license_start = ''; l.license_end = '';
+    }
+    renderOrderDraftLines();
+}
+
+function ordSetProduct(i, value) {
+    const l = orderDraft.lines[i];
+    if (value && value !== '__custom') {
+        const p = PRODUCTS.find(x => x.id === value);
+        l.product_id = value;
+        l.product_name = p ? p.name : '';
+    } else {
+        l.product_id = '';
+        if (value !== '__custom') l.product_name = '';
+    }
+    renderOrderDraftLines();
+}
+
+function ordSetQty(i, value) {
+    const l = orderDraft.lines[i];
+    l.qty = Math.max(1, parseInt(value, 10) || 1);
+    // Keep what's typed; only grow or shrink the array to match qty.
+    if (l.scope === 'HW') {
+        l.serial_nos = Array.from({ length: l.qty }, (_, si) => l.serial_nos[si] || '');
+    } else {
+        l.license_keys = Array.from({ length: l.qty }, (_, ki) => l.license_keys[ki] || '');
+    }
+    renderOrderDraftLines();
+}
+
+function ordAddBom(i) {
+    orderDraft.lines[i].bom.push({ component_type: '', brand: '', model: '', qty: 1 });
+    renderOrderDraftLines();
+}
+
+function ordRemoveBom(i, bi) {
+    orderDraft.lines[i].bom.splice(bi, 1);
+    renderOrderDraftLines();
+}
+
+function validateOrderDraft(status) {
+    const d = orderDraft;
+    const errors = [];
+    if (!d.order_no) errors.push('Order No is required.');
+    if (!d.order_date) errors.push('Order Date is required.');
+    if (!d.customer_name) errors.push('Customer is required.');
+    if (!d.lines.length) errors.push('At least one order line is required.');
+    if (d.lines.some(l => l.scope === 'HW') && !d.hw_supplier_name) errors.push('HW Supplier is required because the order has HW lines.');
+    if (d.lines.some(l => l.scope === 'SW') && !d.sw_supplier_name) errors.push('SW Supplier is required because the order has SW lines.');
+    d.lines.forEach((l, i) => {
+        if (!l.product_name) errors.push(`Line ${i + 1}: product is required.`);
+        if (l.scope === 'HW' && l.bom.some(b => !b.component_type || !b.model)) errors.push(`Line ${i + 1}: every BOM row needs a component and a model.`);
+        if (l.scope === 'SW' && l.license_start && l.license_end && l.license_start > l.license_end) {
+            errors.push(`Line ${i + 1}: license start is after license end.`);
+        }
+    });
+    if (status === 'CONFIRMED') {
+        const seenSerials = new Set();
+        const seenKeys = new Set();
+        d.lines.forEach((l, i) => {
+            if (!l.sla_plan) errors.push(`Line ${i + 1}: an SLA plan is required to confirm.`);
+            if (l.scope === 'HW') {
+                if (l.serial_nos.some(sn => !sn.trim())) errors.push(`Line ${i + 1}: all ${l.qty} serial numbers are required to confirm.`);
+                l.serial_nos.forEach(sn => {
+                    const key = sn.trim().toUpperCase();
+                    if (!key) return;
+                    if (seenSerials.has(key)) errors.push(`Line ${i + 1}: serial ${sn} appears twice in this order.`);
+                    seenSerials.add(key);
+                });
+            } else {
+                if (!l.license_start || !l.license_end) errors.push(`Line ${i + 1}: the license period is required to confirm.`);
+                if (l.license_keys.some(lk => !lk.trim())) errors.push(`Line ${i + 1}: all ${l.qty} license keys are required to confirm.`);
+                l.license_keys.forEach(lk => {
+                    const key = lk.trim().toUpperCase();
+                    if (!key) return;
+                    if (seenKeys.has(key)) errors.push(`Line ${i + 1}: license key ${lk} appears twice in this order.`);
+                    seenKeys.add(key);
+                });
+            }
+        });
+    }
+    const duplicate = ORDERS.find(o => o.id !== d.id && o.order_no.toLowerCase() === d.order_no.toLowerCase());
+    if (duplicate) errors.push(`Order No ${d.order_no} already exists.`);
+    return errors;
+}
+
+function saveOrder(status) {
+    const err = document.getElementById('ord-error');
+    const errors = validateOrderDraft(status);
+    if (errors.length) {
+        err.textContent = errors[0];
+        err.style.display = 'block';
+        return;
+    }
+
+    const d = orderDraft;
+    const isNew = !d.id;
+    const now = new Date().toISOString();
+    const ok = commitPortalMutation(() => {
+        const record = {
+            id: d.id || `ord-${Date.now()}`,
+            order_no: d.order_no, contract_no: d.contract_no,
+            customer_name: d.customer_name, customer_org_id: d.customer_org_id,
+            hw_supplier_name: d.hw_supplier_name, hw_supplier_org_id: d.hw_supplier_org_id,
+            sw_supplier_name: d.sw_supplier_name, sw_supplier_org_id: d.sw_supplier_org_id,
+            sales_contact: d.sales_contact, order_date: d.order_date,
+            status, notes: d.notes,
+            created_at: d.created_at || now, updated_at: now,
+        };
+        const idx = ORDERS.findIndex(o => o.id === record.id);
+        if (idx >= 0) ORDERS[idx] = record; else ORDERS.push(record);
+
+        ORDER_LINES = ORDER_LINES.filter(l => l.order_id !== record.id);
+        d.lines.forEach((l, i) => ORDER_LINES.push({
+            id: l.id || `ol-${Date.now()}-${i}`,
+            order_id: record.id, line_no: i + 1, scope: l.scope,
+            product_id: l.product_id || null, product_name: l.product_name,
+            qty: l.qty,
+            sla_plan: l.sla_plan,
+            serial_nos: l.scope === 'HW' ? l.serial_nos.map(sn => sn.trim()) : [],
+            bom: l.scope === 'HW' ? l.bom : [],
+            license_keys: l.scope === 'SW' ? l.license_keys.map(lk => lk.trim()) : [],
+            version: l.scope === 'SW' ? l.version : '',
+            license_start: l.scope === 'SW' ? l.license_start : '',
+            license_end: l.scope === 'SW' ? l.license_end : '',
+            notes: l.notes || '',
+        }));
+
+        logActivity(isNew ? 'Order created' : 'Order updated', record.order_no,
+            `${record.customer_name} · ${d.lines.length} line${d.lines.length === 1 ? '' : 's'} · ${status}`);
+    });
+    if (!ok) return;
+
+    closeModal();
+    orderDraft = null;
+    renderOrders();
+    showToast(`${d.order_no} ${status === 'CONFIRMED' ? 'confirmed' : 'saved as draft'}`);
+}
+
+// ── Detail ──
+
+function showOrderDetail(id) {
+    const o = getOrderById(id);
+    if (!o) return;
+    const lines = getOrderLines(id);
+    const row = (label, value) => `
+        <div style="display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid #f5f5f7">
+            <span style="font-size:12.5px;color:#86868b">${label}</span>
+            <span style="font-size:13px;color:#1d1d1f;text-align:right">${value}</span>
+        </div>`;
+
+    showModal(`
+        <div style="padding:26px 28px;max-height:82vh;overflow-y:auto">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:6px">
+                <div>
+                    <div style="font-size:18px;font-weight:700;color:#1d1d1f">${esc(o.order_no)}</div>
+                    <div style="font-size:13px;color:#86868b;margin-top:2px">${esc(o.customer_name)}</div>
+                </div>
+                ${orderStatusBadge(o.status)}
+            </div>
+
+            <div style="margin-top:16px">
+                ${row('Contract No', esc(o.contract_no || '—'))}
+                ${row('Order date', esc(o.order_date || '—'))}
+                ${row('HW supplier', esc(o.hw_supplier_name || '—'))}
+                ${row('SW supplier', esc(o.sw_supplier_name || '—'))}
+                ${row('Sales contact', esc(o.sales_contact || '—'))}
+                ${o.notes ? row('Notes', esc(o.notes)) : ''}
+            </div>
+
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:20px 0 8px">Order Lines</div>
+            ${lines.map(l => `
+            <div style="border:1px solid var(--border-light);border-radius:10px;padding:12px 14px;margin-bottom:10px">
+                <div style="display:flex;align-items:center;gap:10px">
+                    <span class="badge ${l.scope === 'HW' ? 'badge-hw' : 'badge-sw'}">${l.scope}</span>
+                    <span style="font-size:13px;font-weight:600;color:#1d1d1f">${esc(l.product_name)}</span>
+                    ${l.version ? `<span style="font-size:12.5px;color:#86868b">v${esc(l.version)}</span>` : ''}
+                    <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
+                        ${l.sla_plan ? `<span class="badge badge-blue">SLA ${esc(l.sla_plan)}</span>` : ''}
+                        <span style="font-size:12.5px;color:#86868b">Qty ${l.qty}</span>
+                    </span>
+                </div>
+                ${l.scope === 'SW' && (l.license_start || l.license_end) ? `
+                <div style="font-size:12.5px;color:#86868b;margin-top:6px">License ${esc(l.license_start || '?')} → ${esc(l.license_end || '?')}</div>` : ''}
+                ${(l.license_keys || []).length ? `
+                <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
+                    ${l.license_keys.map(lk => lk.trim()
+                        ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(lk)}</span>`
+                        : '<span class="badge badge-amber">Key missing</span>').join('')}
+                </div>` : ''}
+                ${l.serial_nos.length ? `
+                <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
+                    ${l.serial_nos.map(sn => sn.trim()
+                        ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(sn)}</span>`
+                        : '<span class="badge badge-amber">Serial missing</span>').join('')}
+                </div>` : ''}
+                ${l.bom.length ? `
+                <div style="margin-top:10px;overflow-x:auto">
+                    <table style="width:100%;border-collapse:collapse">
+                        <thead><tr>
+                            <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 10px 4px 0">Component</th>
+                            <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 10px 4px 0">Brand</th>
+                            <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 10px 4px 0">Model</th>
+                            <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:right;padding:0 0 4px 0">Qty</th>
+                        </tr></thead>
+                        <tbody>
+                            ${l.bom.map(b => `
+                            <tr>
+                                <td style="font-size:12.5px;color:#1d1d1f;padding:3px 10px 3px 0;white-space:nowrap">${esc(b.component_type)}</td>
+                                <td style="font-size:12.5px;color:#86868b;padding:3px 10px 3px 0;white-space:nowrap">${esc(b.brand || '—')}</td>
+                                <td style="font-size:12.5px;color:#1d1d1f;padding:3px 10px 3px 0">${esc(b.model)}</td>
+                                <td style="font-size:12.5px;color:#1d1d1f;padding:3px 0;text-align:right;font-variant-numeric:tabular-nums">${b.qty}</td>
+                            </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>` : ''}
+            </div>`).join('')}
+
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px;flex-wrap:wrap">
+                ${o.status === 'DRAFT' ? `<button onclick="closeModal();showOrderModal('${o.id}')" class="btn-secondary text-xs"><i class="ph ph-pencil-simple"></i> Edit</button>` : ''}
+                ${o.status !== 'CANCELLED' ? `<button onclick="confirmCancelOrder('${o.id}')" class="btn-secondary text-xs"><i class="ph ph-x-circle"></i> Cancel order</button>` : ''}
+                <button onclick="closeModal()" class="btn-primary text-xs">Close</button>
+            </div>
+        </div>
+    `, true);
+}
+
+// ── Cancel ──
+// Cancelling is a status change, not a delete: the order stays on file for
+// reference, matching how the backend spec retires records by status.
+
+function confirmCancelOrder(id) {
+    const o = getOrderById(id);
+    if (!o || o.status === 'CANCELLED') return;
+    showModal(`
+        <div style="padding:26px 28px">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Cancel ${esc(o.order_no)}?</h3>
+            <p style="font-size:13px;color:#86868b;line-height:1.6;margin:0 0 18px">
+                The order stays on file as cancelled. This cannot be undone from the UI.
+            </p>
+            <div style="display:flex;gap:8px;justify-content:flex-end">
+                <button onclick="showOrderDetail('${o.id}')" class="btn-secondary text-xs">Keep order</button>
+                <button onclick="cancelOrder('${o.id}')" class="btn-primary text-xs">Cancel order</button>
+            </div>
+        </div>
+    `);
+}
+
+function cancelOrder(id) {
+    const o = getOrderById(id);
+    if (!o) return;
+    const ok = commitPortalMutation(() => {
+        o.status = 'CANCELLED';
+        o.updated_at = new Date().toISOString();
+        logActivity('Order cancelled', o.order_no, o.customer_name);
+    });
+    if (!ok) return;
+    closeModal();
+    renderOrders();
+    showToast(`${o.order_no} cancelled`);
+}

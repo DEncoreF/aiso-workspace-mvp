@@ -1,66 +1,87 @@
-# AISO Portal v3 MVP
+# AISO Portal v4 MVP
 
-This project is an independent copy of `portal-v2-mvp` focused on centralized
-software-to-hardware compatibility management.
+An independent copy of `portal-v3-mvp` that adds the **Asset Registry** — the
+record of every AISO-built device, its serial number and its warranty.
 
-## v3 changes
+It uses the localStorage key `aiso-portal-v4-mvp`, so it never reads or
+overwrites v3 prototype data.
 
-- Adds a dedicated **Compatibility Mapping** view as a standalone sidebar entry,
-  parallel to Parameter Center (permission-gated via `compatibility.read`).
-- Provides software search, status filtering, mapping summaries, and a searchable
-  published-hardware selector.
-- Removes compatibility selection from software create and edit forms.
-- Keeps `compatible_hardware` on the software product so storefront previews,
-  product details, and hardware takedown guards remain compatible with v2 data.
-- Logs mapping changes to Activity Log and product history.
-- Adds centralized `compatibility.read` and `compatibility.update` permission
-  boundaries for future RBAC integration.
-- Uses the separate localStorage key `aiso-portal-v3-mvp`, preventing v3 from
-  reading or overwriting v2 prototype data.
+## Why the registry exists
 
-## Synced with v2 (2026-07-20)
+The Portal lets a customer register a device and look up its warranty using
+nothing but a serial number. Those pages need real serials to check against, and
+this is where serials live.
 
-- Ported the Licensing feature from v2: per-software single-select licensing
-  offer, shown as a storefront badge next to the product name, selectable in the
-  software create form. Since 2026-07-22 the offers are static (`SW_LICENSE_TYPES`
-  in app.js): First year free (green), N-day free trial (blue, day count entered
-  per product), Free during POC (purple), or Not specified — the former
-  Parameter Center → Licensing Options module was removed.
-- Re-synced all other shared code with v2's latest working tree; the remaining
-  differences between the two prototypes are v3's compatibility centralization,
-  the permission scaffold, and the separate storage key.
+Serial numbers are **produced by the manufacturing team**, not here. This module
+imports their list, keeps the warranty attached to each device, and hands the
+Portal a copy of what it needs.
 
-## Official Website field (2026-07-27)
+## Scope: AISO-built devices only
 
-- Software products expose an optional **Official Website** field in the create
-  and edit forms, stored on the existing `officialUrl` property that was
-  previously carried in seed data but never surfaced.
-- The value is normalized on save (`www.example.com` becomes
-  `https://www.example.com`); a filled-in value must parse as an `http`/`https`
-  URL or the form is blocked.
-- Both live previews render it under the storefront action button, showing the
-  domain without the scheme. A blank or still-invalid value
-  keeps a gray placeholder row so the footer never shifts while typing, and the
-  preview stays non-interactive like the rest of the storefront mock-up.
-- The software detail page shows it as a clickable `Website` row in Product
-  Info, or `—` when unset.
-- The storefront action footer carries a single neutral `Select` action; there
-  is no bundled/add-on distinction and no custom-quote line.
+AISO warrants what it builds. Partner hardware — the GIGABYTE workstations, the
+Phison drives — is warranted by its own vendor, so it never gets a device record
+here; its serials sit on order lines instead. Importing a partner model is
+rejected with that reason stated, rather than looking like a typo.
 
-## Current policy
+Own-brand products carry `is_own_brand: true`. The seed adds one, **AISO1 AI
+Agent Workstation**, whose model and serials match the Portal's
+`hardware/v6/js/warranty-data.js` so the two sides line up out of the box.
 
-- Only published hardware can be added to a mapping.
-- Draft and published software can be configured.
-- Archived software mappings are read-only.
-- Parameter Center and Compatibility Mapping stage every edit in a draft. A
-  shared Save bar appears once something changes; Save opens a confirmation
-  listing the pending changes, and only then are they written and logged.
-  Discard, or leaving the view, throws the draft away.
-- The binding modal's `Apply` stages a mapping — the page-level Save commits it.
-- Software without a mapping is shown as `Not configured`.
-- Packaging (bundled vs add-on) is retired: the Parameter Center section is
-  disabled and hidden, and no view reads `sw_category`. The field is still kept
-  on the product record for v2 data compatibility.
+## Two owners, one record
+
+Each device is written by two parties, and an import has to respect the split:
+
+| Columns | Owner | On re-import |
+|---|---|---|
+| `serial_no` `product_id` `shipped_at` `warranty_months` | manufacturing | refreshed |
+| `warranty_start` | workspace, once adjusted | left alone |
+| `warranty_end` | derived | always recomputed from start + term |
+| `service_org_id` `claimed_at` `order_line_id` `status` `replaced_by_asset_id` | workspace | untouched |
+
+`warranty_source` is the test: while it reads `ship_date` nobody has set the
+start deliberately, so a shipment may still move it. Anything else means someone
+did, and the import leaves it be.
+
+Note that only the **start** is protected. An adjustment says "coverage began on
+this date", not "freeze the end date" — so a corrected term still moves the end,
+otherwise a record could claim 24 months while showing an end date 36 months out.
+
+## Import
+
+Paste the manufacturing team's CSV:
+
+```
+serial_no,model,shipped_at,warranty_months
+AISO1-2026-1001,AISO1,2026-03-14,36
+```
+
+`model` is the string on the label, not an internal id. Rows are checked one at a
+time and a run may partly succeed — one typo in five hundred lines should not
+cost the other 499. A serial already on file is updated, never duplicated.
+
+## Adding devices
+
+A production run arrives through **Import**. **Add** covers the single device
+that arrives outside one — a replacement unit, an engineering sample, a serial
+sent through after the fact.
+
+Both routes share one validator, so a serial typed by hand clears exactly the
+checks a pasted one does. Add refuses a serial already on file rather than
+quietly turning into an update, since that is not what the button says it does.
+
+## Export for the Portal
+
+**Export for Portal** downloads a `warranty-data.js` to drop into
+`hardware/v6/js/`. It is a format conversion, not a state export: only the
+manufacturing columns cross over, so the Portal copy can never disagree with this
+one about anything it holds. Claims and order links stay here.
+
+## Known limit
+
+Claim state cannot flow back. A customer registering on the Portal marks the
+device claimed there, but this side reads a static file and will not see it —
+and a release here will not reach the Portal either. With no shared backend this
+has no fix; it is the first thing that will need one.
 
 ## Run locally
 

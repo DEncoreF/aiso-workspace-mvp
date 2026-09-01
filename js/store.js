@@ -1,15 +1,15 @@
 // ═══════════════════════════════════════════════════════════════════
 // STORE — localStorage persistence layer
 // Load order: seed-data.js → store.js → app.js
-// Persisted state: PRODUCTS, ACTIVITY_LOG, HARDWARE_PRODUCT_TYPES,
+// Persisted state: PRODUCTS, ASSETS, ACTIVITY_LOG, HARDWARE_PRODUCT_TYPES,
 //                  SOFTWARE_CATEGORY_OPTIONS, SOFTWARE_INDUSTRY_OPTIONS
 // ═══════════════════════════════════════════════════════════════════
 
 const Store = (function () {
-    // v3 uses a separate key so it never reads or overwrites v2 prototype data.
-    const KEY = 'aiso-portal-v3-mvp';
-    // v2: licensing options became static (SOFTWARE_LICENSE_OPTIONS removed).
-    const VERSION = 2;
+    // v4 uses a separate key so it never reads or overwrites v3 prototype data.
+    const KEY = 'aiso-portal-v4-mvp';
+    // v4.3: order lines gained sla_plan.
+    const VERSION = 6;
     const IMG_MAX_WIDTH = 800;
     const IMG_JPEG_QUALITY = 0.8;
 
@@ -19,6 +19,9 @@ const Store = (function () {
             mockDataVersion: typeof MOCK_DATA_VERSION === 'undefined' ? 0 : MOCK_DATA_VERSION,
             savedAt: new Date().toISOString(),
             PRODUCTS,
+            ASSETS,
+            ORDERS,
+            ORDER_LINES,
             ACTIVITY_LOG,
             HARDWARE_PRODUCT_TYPES,
             SOFTWARE_CATEGORY_OPTIONS,
@@ -97,6 +100,10 @@ const Store = (function () {
             product.industries = normalized;
             industriesNormalized = true;
         });
+
+        if (Array.isArray(data.ASSETS)) ASSETS = data.ASSETS;
+        if (Array.isArray(data.ORDERS)) ORDERS = data.ORDERS;
+        if (Array.isArray(data.ORDER_LINES)) ORDER_LINES = data.ORDER_LINES;
 
         if (Array.isArray(data.ACTIVITY_LOG)) {
             if (data.mockDataVersion !== MOCK_DATA_VERSION) {

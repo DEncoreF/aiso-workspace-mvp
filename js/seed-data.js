@@ -13,6 +13,11 @@ const SUPER_ADMIN_USER = {
 const DEMO_LOGIN = { email: 'root@aiso.com', password: 'aiso1234' };
 
 const ORGS = [
+    { id: 'v-aiso', name: 'AISO', type: 'vendor', vendor_type: 'hardware', status: 'active',
+      members: [
+        { id: 'm0', name: 'System Root', email: 'root@aiso.com', org_role: 'OA', status: 'active' },
+      ]
+    },
     { id: 'v-phison', name: 'Phison Electronics', type: 'vendor', vendor_type: 'hardware', status: 'active',
       members: [
         { id: 'm1', name: 'James Chen', email: 'james@phison.com', org_role: 'OA', status: 'active' },
@@ -45,8 +50,28 @@ const ORGS = [
 
 let PRODUCTS = [
     // === HARDWARE ===
+    // AISO's own-brand hardware. Only own-brand devices get an entry in the asset
+    // registry, because AISO warrants only what it builds -- partner hardware is
+    // warranted by its own vendor.
     {
-        id: 'hw1', product_type: 'hardware', product_format: 'standard', vendor_id: 'v-phison', vendor_name: 'Phison Electronics',
+        id: 'hw-aiso1', product_type: 'hardware', product_format: 'standard', is_own_brand: true,
+        vendor_id: 'v-aiso', vendor_name: 'AISO',
+        name: 'AISO1 AI Agent Workstation', model: 'AISO1', brand: 'AISO', sub_category: 'Workstation', display_order: 0,
+        short_description: 'Compact AI workstation for enterprise AI labs and personal AI studios.',
+        status: 'published', created_at: '2026-02-01', updated_at: '2026-03-14',
+        is_aidaptiv: true,
+        key_specifications: [
+            'AMD Ryzen AI Max+ 395 (16 Core / 32 Thread)',
+            'AMD Radeon 8060S Graphics',
+            'LPDDR5X 128GB',
+            'HDMI x 1',
+            '180 x 180 x 80 mm',
+            'Ubuntu 24.04',
+        ],
+        bestFor: ['AI Platform', 'AI Agent', 'Data Science'],
+    },
+    {
+        id: 'hw1', product_type: 'hardware', product_format: 'standard', is_own_brand: false, vendor_id: 'v-phison', vendor_name: 'Phison Electronics',
         name: 'GIGABYTE Workstation', model: 'W773-80', brand: 'GIGABYTE', sub_category: 'Workstation', display_order: 1,
         short_description: 'Professional AI workstation for AI engineers and data scientists.',
         status: 'published', created_at: '2026-01-15', updated_at: '2026-03-10',
@@ -62,7 +87,7 @@ let PRODUCTS = [
         bestFor: ['AI Platform', 'Visual Effects', 'HPC', 'Data Science'],
     },
     {
-        id: 'hw2', product_type: 'hardware', product_format: 'standard', vendor_id: 'v-phison', vendor_name: 'Phison Electronics',
+        id: 'hw2', product_type: 'hardware', product_format: 'standard', is_own_brand: false, vendor_id: 'v-phison', vendor_name: 'Phison Electronics',
         name: 'Gigacomputing 4U Server (4x GPU)', model: 'G494-SB4-AAP2', brand: 'Gigacomputing', sub_category: 'Rack Server', display_order: 2,
         short_description: 'Enterprise AI inference server with 4x GPU configuration.',
         status: 'published', created_at: '2026-01-10', updated_at: '2026-03-08',
@@ -78,7 +103,7 @@ let PRODUCTS = [
         bestFor: ['AI Training', 'Multi-model Inference', 'Enterprise AI'],
     },
     {
-        id: 'hw3', product_type: 'hardware', product_format: 'standard', vendor_id: 'v-phison', vendor_name: 'Phison Electronics',
+        id: 'hw3', product_type: 'hardware', product_format: 'standard', is_own_brand: false, vendor_id: 'v-phison', vendor_name: 'Phison Electronics',
         name: 'Gigacomputing 4U Server (8x GPU)', model: 'G494-SB4-AAP2', brand: 'Gigacomputing', sub_category: 'Rack Server', display_order: 3,
         short_description: 'Large-scale AI training server with 8x GPU for maximum parallel processing.',
         status: 'draft', created_at: '2026-03-01', updated_at: '2026-03-18',
@@ -329,9 +354,152 @@ const SEED_PRODUCT_CREATED_LOGS = PRODUCTS
 // NAV CONFIG — per role
 // ═══════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════
+// ASSET REGISTRY
+// One row per AISO-built device. Serial numbers are produced by the
+// manufacturing team and arrive as CSV; this prototype seeds a few so the
+// views have something to show.
+//
+// Two owners share this record and a re-import must respect the split:
+//   manufacturing  serial_no · product_id · shipped_at · warranty_months
+//   workspace      warranty_* overrides · service_org_id · claimed_at
+//                  · order_line_id · status · replaced_by_asset_id
+// warranty_source is the test for whether the dates may be overwritten: once
+// it is anything other than 'ship_date', someone has set them deliberately.
+// ═══════════════════════════════════════════════════════════════════
+
+const WARRANTY_SOURCES = ['ship_date', 'invoice', 'manual'];
+const ASSET_STATUSES = ['ACTIVE', 'DECOMMISSIONED'];
+// A device is "expiring soon" this many days before its warranty ends.
+const ASSET_EXPIRING_SOON_DAYS = 90;
+
+let ASSETS = [
+    {
+        id: 'ast-0001', serial_no: 'AISO1-2026-1001', product_id: 'hw-aiso1',
+        shipped_at: '2026-03-14', warranty_months: 36,
+        warranty_start: '2026-03-14', warranty_end: '2029-03-13', warranty_source: 'ship_date',
+        service_org_id: null, claimed_at: null, order_line_id: null,
+        status: 'ACTIVE', replaced_by_asset_id: null,
+        created_at: '2026-03-14', updated_at: '2026-03-14',
+    },
+    {
+        id: 'ast-0002', serial_no: 'AISO1-2026-1002', product_id: 'hw-aiso1',
+        shipped_at: '2026-01-20', warranty_months: 36,
+        warranty_start: '2026-02-02', warranty_end: '2029-02-01', warranty_source: 'invoice',
+        service_org_id: 'c-megabank', claimed_at: '2026-02-10', order_line_id: null,
+        status: 'ACTIVE', replaced_by_asset_id: null,
+        created_at: '2026-01-20', updated_at: '2026-02-10',
+    },
+    {
+        id: 'ast-0003', serial_no: 'AISO1-2026-1003', product_id: 'hw-aiso1',
+        shipped_at: '2026-06-01', warranty_months: 12,
+        warranty_start: '2026-06-01', warranty_end: '2027-05-31', warranty_source: 'ship_date',
+        service_org_id: null, claimed_at: null, order_line_id: null,
+        status: 'ACTIVE', replaced_by_asset_id: null,
+        created_at: '2026-06-01', updated_at: '2026-06-01',
+    },
+    {
+        id: 'ast-0004', serial_no: 'AISO1-2025-0007', product_id: 'hw-aiso1',
+        shipped_at: '2025-09-10', warranty_months: 12,
+        warranty_start: '2025-09-10', warranty_end: '2026-09-09', warranty_source: 'ship_date',
+        service_org_id: 'c-govcloud', claimed_at: '2025-09-22', order_line_id: null,
+        status: 'ACTIVE', replaced_by_asset_id: null,
+        created_at: '2025-09-10', updated_at: '2025-09-22',
+    },
+    {
+        id: 'ast-0005', serial_no: 'AISO1-2024-0100', product_id: 'hw-aiso1',
+        shipped_at: '2024-05-02', warranty_months: 12,
+        warranty_start: '2024-05-02', warranty_end: '2025-05-01', warranty_source: 'ship_date',
+        service_org_id: 'c-megabank', claimed_at: '2024-05-20', order_line_id: null,
+        status: 'ACTIVE', replaced_by_asset_id: null,
+        created_at: '2024-05-02', updated_at: '2024-05-20',
+    },
+];
+
+// ═══════════════════════════════════════════════════════════════════
+// ORDERS — purchase orders from customers.
+// Supplier and customer are free-text names (the vendor_name pattern):
+// the *_org_id columns stay null until Organization Management ships,
+// then get backfilled by name matching. HW and SW suppliers are separate
+// header fields because one order often mixes both from different vendors.
+// ═══════════════════════════════════════════════════════════════════
+
+let ORDERS = [
+    {
+        id: 'ord-0001',
+        order_no: 'PO-2026-0001',
+        contract_no: 'CTR-2026-0001',
+        customer_name: 'MegaBank Corp', customer_org_id: null,
+        hw_supplier_name: 'Phison Electronics', hw_supplier_org_id: null,
+        sw_supplier_name: 'TPIsoftware Corporation', sw_supplier_org_id: null,
+        sales_contact: 'Ivy Chen',
+        order_date: '2026-07-30',
+        status: 'CONFIRMED', // DRAFT | CONFIRMED | CANCELLED
+        notes: '',
+        created_at: '2026-07-30T09:00:00.000Z', updated_at: '2026-08-02T10:00:00.000Z',
+    },
+    {
+        id: 'ord-0002',
+        order_no: 'PO-2026-0002',
+        contract_no: '',
+        customer_name: 'GovCloud Agency', customer_org_id: null,
+        hw_supplier_name: 'Phison Electronics', hw_supplier_org_id: null,
+        sw_supplier_name: '', sw_supplier_org_id: null,
+        sales_contact: '',
+        order_date: '2026-08-15',
+        status: 'DRAFT',
+        notes: 'Awaiting final GPU allocation.',
+        created_at: '2026-08-15T09:00:00.000Z', updated_at: '2026-08-15T09:00:00.000Z',
+    },
+];
+
+// Per-line service level, matching the reference prototype's plan list.
+const ORDER_SLA_PLAN_OPTIONS = ['5x8', '7x24', 'On-site'];
+
+// One serial per unit: serial_nos.length tracks qty, and a CONFIRMED order
+// requires every HW serial filled in. The BOM applies to every unit in the
+// line — a different configuration is a separate line.
+let ORDER_LINES = [
+    {
+        id: 'ol-0001', order_id: 'ord-0001', line_no: 1, scope: 'HW',
+        product_id: 'hw1', product_name: 'GIGABYTE Workstation', qty: 2, sla_plan: '7x24',
+        license_keys: [], version: '', license_start: '', license_end: '',
+        serial_nos: ['GBT-2026-0771', 'GBT-2026-0772'],
+        bom: [
+            { component_type: 'CPU', brand: 'Intel', model: 'Xeon 60 Core', qty: 1 },
+            { component_type: 'GPU', brand: 'NVIDIA', model: 'Pro6000 Blackwell Max-Q 96GB', qty: 2 },
+            { component_type: 'Memory', brand: 'Micron', model: 'DDR5-5600 64GB DIMM', qty: 8 },
+            { component_type: 'Storage', brand: 'Phison', model: 'X200 NVMe 7680GB', qty: 2 },
+        ],
+        notes: '',
+    },
+    {
+        id: 'ol-0002', order_id: 'ord-0001', line_no: 2, scope: 'SW',
+        product_id: 'sw1', product_name: 'digiRunner', qty: 1, sla_plan: '5x8',
+        serial_nos: [], bom: [],
+        license_keys: ['DGRN-4A7K-92MF-XT01'], version: '3.8.2',
+        license_start: '2026-08-01', license_end: '2027-07-31',
+        notes: '',
+    },
+    {
+        id: 'ol-0003', order_id: 'ord-0002', line_no: 1, scope: 'HW',
+        product_id: 'hw2', product_name: 'Gigacomputing 4U Server (4x GPU)', qty: 1, sla_plan: '',
+        serial_nos: [''],
+        bom: [
+            { component_type: 'GPU', brand: 'NVIDIA', model: 'Pro6000 Blackwell 96GB', qty: 4 },
+        ],
+        notes: '',
+    },
+];
+
 const NAV_ITEMS = [
     { key: 'sw-products', icon: 'ph-app-window', label: 'Software Products' },
     { key: 'hw-products', icon: 'ph-hard-drives', label: 'Hardware Products' },
+    { key: 'orders', icon: 'ph-shopping-cart', label: 'Orders' },
+    // Asset Registry (product registration) is hidden for now: the MVP4 plan
+    // builds Order Management first, then Organization Management. Restore by
+    // uncommenting this entry — the view and its code are untouched.
+    // { key: 'assets', icon: 'ph-barcode', label: 'Asset Registry', permission: 'asset.read' },
     { key: 'compatibility', icon: 'ph-arrows-left-right', label: 'Compatibility', permission: 'compatibility.read' },
     { key: 'param-center', icon: 'ph-sliders', label: 'Parameter Center' },
     { key: 'activity-log', icon: 'ph-clock-counter-clockwise', label: 'Activity Log' },
