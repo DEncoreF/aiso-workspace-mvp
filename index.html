@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AISO Workspace v4 | Asset Registry Prototype</title>
+    <title>AISO Workspace v4 | Back-office Prototype</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <script>
@@ -38,6 +38,15 @@
         ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 5px; }
         ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
 
+        /* Aligned with the filter row and the table below it, not indented. */
+        .page-tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--border-light); margin-bottom: 14px; }
+        .page-tab {
+            appearance: none; background: none; border: none; cursor: pointer;
+            padding: 12px 2px; font-size: 13.5px; font-weight: 600; color: #86868b;
+            border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap;
+        }
+        .page-tab:hover { color: #1d1d1f; }
+        .page-tab.active { color: #1d1d1f; border-bottom-color: #1d1d1f; }
         .nav-item {
             display: flex; align-items: center; gap: 0.75rem;
             width: 100%; padding: 0.6rem 0.9rem; margin-bottom: 1px;
@@ -66,6 +75,8 @@
         .badge-unpublished { background: #fff7ed; color: #d97706; }
         .badge-hw        { background: #eef2ff; color: #4338ca; }
         .badge-sw        { background: #eff6ff; color: #2563eb; }
+        .badge-si        { background: #f0fdf4; color: #15803d; }
+        .badge-customer  { background: #eef1ff; color: #1432E6; }
         .badge-optional  { background: #f3f4f6; color: #6b7280; }
         .badge-green     { background: #ecfdf5; color: #059669; }
         .badge-blue      { background: #eef2ff; color: #4338ca; }
@@ -123,6 +134,8 @@
             font-size: 13px; font-weight: 400; color: #1d1d1f; width: 100%;
         }
         .filter-search input::placeholder { color: #c7c7cc; }
+        /* Keeps the search on the right even when a view hides its filter tabs. */
+        .filter-bar .filter-search { margin-left: auto; }
 
         /* Pill select, visually paired with .filter-search */
         .select-field {
@@ -196,6 +209,8 @@
             border-radius: 20px; padding: 2rem; box-shadow: 0 24px 80px rgba(0,0,0,0.18);
             max-height: 90vh; overflow-y: auto;
         }
+        .modal-card.modal-md { max-width: 46rem; }
+        .modal-card.modal-lg { max-width: 62rem; }
         .modal-card.modal-wide { max-width: 96rem; }
         .modal-card.modal-edit {
             max-width: 46rem; padding: 0; overflow: hidden;
@@ -701,6 +716,59 @@
         }
         .tab-btn:hover { color: #1d1d1f; }
         .tab-btn.active { background: #1d1d1f; color: #ffffff; }
+
+        /* ── Service Desk ── */
+        .tk-stat { flex:1; border:1px solid var(--border-light); border-radius:12px; padding:12px 14px; background:var(--bg-subtle); min-width:0 }
+        .tk-stat .v { font-size:22px; font-weight:700; letter-spacing:-.02em; line-height:1.1 }
+        .tk-stat .l { font-size:11.5px; color:#86868b; margin-top:2px }
+        .tk-kv { display:flex; justify-content:space-between; gap:16px; padding:8px 0; border-bottom:1px solid #f5f5f7 }
+        .tk-kv span:first-child { font-size:12.5px; color:#86868b; flex-shrink:0 }
+        .tk-kv span:last-child { font-size:13px; color:#1d1d1f; text-align:right; min-width:0; overflow-wrap:anywhere }
+        .tk-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; background:#f5f5f7; border-radius:6px; padding:3px 8px; color:#1d1d1f }
+        .tk-msg { display:flex; gap:12px; padding:14px 0; border-bottom:1px solid #f5f5f7 }
+        .tk-msg .av { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; flex-shrink:0 }
+        .tk-msg .av-c { background:#eef1ff; color:#1432E6 } .tk-msg .av-i { background:#1d1d1f; color:#fff }
+        .tk-msg .who { font-size:12.5px; font-weight:600; color:#1d1d1f } .tk-msg .when { font-size:11.5px; color:#86868b; margin-left:8px }
+        .tk-msg .body { font-size:13px; color:#1d1d1f; margin-top:4px; line-height:1.55; white-space:pre-wrap }
+        .tk-msg.internal .body { background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:10px 12px }
+        .tk-step { display:flex; align-items:center; gap:8px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#86868b; margin:18px 0 8px }
+        .tk-step .n { width:18px; height:18px; border-radius:50%; background:#1d1d1f; color:#fff; font-size:10px; display:flex; align-items:center; justify-content:center }
+        .tk-pick { border:1px solid var(--border-light); border-radius:10px; padding:10px 12px; cursor:pointer; display:flex; align-items:center; gap:10px; transition:all .15s; background:#fff; width:100%; text-align:left }
+        .tk-pick:hover { background:#fafbfc } .tk-pick.sel { border-color:#1432E6; background:#eef1ff }
+        .tk-pick.disabled { opacity:.5; cursor:not-allowed }
+        .tk-ent { border:1px solid #bbf7d0; background:#f0fdf4; border-radius:12px; padding:12px 14px }
+        .tk-ent.exp { border-color:#fecaca; background:#fef2f2 }
+        .tk-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px }
+        .tk-sla-bar { height:6px; border-radius:6px; background:#f1f3f5; overflow:hidden } .tk-sla-bar i { display:block; height:100%; border-radius:6px }
+        .tk-chip { padding:6px 12px; border-radius:980px; border:1px solid var(--border); font-size:12.5px; font-weight:500; color:#86868b; background:#fff; cursor:pointer }
+        .tk-chip.active { color:#fff; background:#1d1d1f; border-color:#1d1d1f }
+        textarea.input-field { resize:vertical }
+        .tk-att-list { display:flex; flex-wrap:wrap; gap:6px }
+        .tk-att-chip { display:inline-flex; align-items:center; gap:6px; max-width:240px; padding:4px 8px 4px 6px; border-radius:8px; background:#f5f5f7; border:1px solid var(--border-light); font-size:12px; color:#1d1d1f; text-decoration:none }
+        .tk-att-chip i { font-size:14px; color:#86868b; flex-shrink:0 }
+        .tk-att-chip .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0 }
+        .tk-att-chip .sz { color:#86868b; font-size:11px; flex-shrink:0 }
+        .tk-att-chip .rm { border:none; background:transparent; color:#86868b; cursor:pointer; padding:0 2px; line-height:1; font-size:14px }
+        .tk-att-chip .rm:hover { color:#dc2626 }
+        .tk-att-thumb { width:72px; height:72px; border-radius:8px; object-fit:cover; border:1px solid var(--border-light); cursor:zoom-in; background:#fff }
+        .tk-att-drop { display:flex; align-items:center; justify-content:center; gap:8px; padding:12px; border:1px dashed var(--border); border-radius:10px; background:#fff; font-size:12.5px; color:#86868b; cursor:pointer; transition:all 150ms }
+        .tk-att-drop:hover, .tk-att-drop.over { border-color:#1432E6; background:#eef1ff; color:#1432E6 }
+        .tk-att-drop input[type="file"] { display:none }
+        .tk-preview { position:fixed; inset:0; z-index:200; background:rgba(8,15,38,0.72); display:flex; align-items:center; justify-content:center; padding:32px; cursor:zoom-out }
+        .tk-preview img { max-width:100%; max-height:100%; border-radius:12px; box-shadow:0 24px 80px rgba(0,0,0,0.4); background:#fff }
+        .tk-preview .cap { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); color:#fff; font-size:12.5px; background:rgba(0,0,0,0.45); padding:6px 12px; border-radius:980px }
+
+        /* ── View-as switch (bottom-right) ── */
+        .view-as { position:fixed; right:24px; bottom:24px; z-index:70 }
+        /* The switch sits under the modal backdrop; hide it so it does not
+           show through the blur while a dialog is open. */
+        body.modal-open .view-as { display: none; }
+        .view-as-btn { display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:980px; border:1px solid var(--border); background:#fff; box-shadow:0 6px 20px rgba(8,15,38,0.10); font-size:12.5px; font-weight:600; color:#1d1d1f; cursor:pointer }
+        .view-as-btn.customer { background:#1432E6; border-color:#1432E6; color:#fff }
+        .view-as-menu { position:absolute; right:0; bottom:46px; width:260px; background:#fff; border:1px solid var(--border); border-radius:14px; padding:6px; box-shadow:0 12px 32px rgba(8,15,38,0.14) }
+        .view-as-item { display:flex; align-items:center; gap:10px; width:100%; padding:8px 10px; border-radius:8px; border:none; background:transparent; font-size:13px; color:#1d1d1f; cursor:pointer; text-align:left }
+        .view-as-item:hover { background:#f5f5f7 } .view-as-item.active { background:#eef1ff; color:#1432E6; font-weight:600 }
+        .view-as-label { font-size:10px; color:#c7c7cc; text-transform:uppercase; letter-spacing:0.06em; padding:6px 10px 4px }
     </style>
 </head>
 <body class="min-h-screen">
@@ -714,6 +782,7 @@
         </div>
         <!-- Card -->
         <div style="background:#fff;border-radius:16px;padding:2.5rem;max-width:480px;width:100%;box-shadow:0 10px 40px rgba(8,15,38,0.08)">
+            <div id="login-form-panel">
             <form onsubmit="event.preventDefault();login()">
                 <label class="field-label" for="login-email">Email</label>
                 <input id="login-email" class="input-field" type="email" placeholder="Enter your account email" autocomplete="username" maxlength="100" onblur="validateLoginField('email')" oninput="onLoginInput('email')">
@@ -726,12 +795,15 @@
                 </div>
                 <div id="login-password-error" class="field-error-text"></div>
                 <button id="login-submit" type="submit" class="btn-primary" style="width:100%;justify-content:center;background:#1432E6;padding:0.7rem;margin-top:0.5rem" disabled>Enter Workspace</button>
+                <div id="login-form-error" role="alert" style="display:none;margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff7ed;color:#9a3412;font-size:12.5px;line-height:1.5"></div>
             </form>
             <div style="text-align:center;margin-top:1rem">
                 <a href="#" onclick="event.preventDefault();forgotPassword()" style="color:#1432E6;font-size:12px;font-weight:600;text-decoration:none">Forget Password?</a>
             </div>
+            </div>
+            <div id="login-role-picker" style="display:none"></div>
         </div>
-        <div style="margin-top:1rem;color:#86868b;font-size:12px">Demo access — root@aiso.com / aiso1234</div>
+        <div style="margin-top:1rem;color:#86868b;font-size:12px;text-align:center;line-height:1.7">Demo access — root@aiso.com / aiso1234<br>Preview any organization role with <strong>View as</strong>, bottom right.</div>
     </div>
 
     <!-- ============== SIDEBAR ============== -->
@@ -754,14 +826,7 @@
                     </span>
                     <i class="ph ph-caret-down" style="font-size:14px;color:rgba(255,255,255,0.5)" id="user-menu-caret"></i>
                 </button>
-                <div id="user-menu-dropdown" style="display:none;position:absolute;bottom:52px;left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:12px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,0.25);z-index:50">
-                    <div style="font-size:10px;color:#c7c7cc;text-transform:uppercase;letter-spacing:0.06em;padding:6px 10px 4px">Role</div>
-                    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;background:#eef1ff">
-                        <i class="ph ph-shield-check" style="font-size:18px;color:#1432E6"></i>
-                        <span style="flex:1;font-size:13px;font-weight:600;color:#1432E6">Super Admin</span>
-                        <i class="ph ph-check" style="font-size:15px;color:#1432E6"></i>
-                    </div>
-                </div>
+                <div id="user-menu-dropdown" style="display:none;position:absolute;bottom:52px;left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:12px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,0.25);z-index:50"></div>
             </div>
             <button onclick="logout()" class="nav-item" style="width:100%;margin-top:6px"><span class="nav-icon"><i class="ph ph-sign-out"></i></span><span>Logout</span></button>
         </div>
@@ -842,7 +907,7 @@
                     </div>
                     <div class="filter-search">
                         <i class="ph ph-magnifying-glass"></i>
-                        <input id="order-search" type="text" placeholder="Search order no, customer, supplier..." oninput="renderOrders()">
+                        <input id="order-search" type="text" placeholder="Search order no, customer, supplier, SI..." oninput="renderOrders()">
                     </div>
                 </div>
                 <input type="hidden" id="order-filter-status" value="">
@@ -858,6 +923,83 @@
                             <th style="width:7%">Actions</th>
                         </tr></thead>
                         <tbody id="orders-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ====== ORGANIZATIONS ====== -->
+            <div id="view-organizations" class="view hidden">
+                <div id="org-page-tabs" class="page-tabs"></div>
+                <div class="filter-bar">
+                    <div class="filter-tabs" id="org-filter-tabs">
+                        <button class="filter-tab active" data-val="" onclick="setOrgFilter('')">All</button>
+                        <button class="filter-tab" data-val="OPERATOR" onclick="setOrgFilter('OPERATOR')">Operator</button>
+                        <button class="filter-tab" data-val="ENTERPRISE" onclick="setOrgFilter('ENTERPRISE')">Enterprise</button>
+                        <button class="filter-tab" data-val="INDIVIDUAL" onclick="setOrgFilter('INDIVIDUAL')">Individual</button>
+                    </div>
+                    <div class="filter-search">
+                        <i class="ph ph-magnifying-glass"></i>
+                        <input id="org-search" type="text" placeholder="Search name or contact email..." oninput="renderOrganizations()">
+                    </div>
+                </div>
+                <input type="hidden" id="org-filter-type" value="">
+                <div class="overflow-x-auto border-t border-gray-100">
+                    <table class="data-table w-full" style="table-layout:fixed">
+                        <thead><tr>
+                            <th style="width:30%">Organization</th>
+                            <th style="width:17%">Type</th>
+                            <th style="width:9%">Members</th>
+                            <th style="width:8%">Roles</th>
+                            <th style="width:8%">Orders</th>
+                            <th style="width:11%">Status</th>
+                            <th style="width:9%">Actions</th>
+                        </tr></thead>
+                        <tbody id="orgs-tbody"></tbody>
+                    </table>
+                </div>
+                <div id="accounts-table-wrap" class="overflow-x-auto border-t border-gray-100" style="display:none">
+                    <table class="data-table w-full" style="table-layout:fixed">
+                        <thead><tr>
+                            <th style="width:28%">Account</th>
+                            <th style="width:46%">Organizations &amp; roles</th>
+                            <th style="width:14%">Status</th>
+                            <th style="width:12%">Actions</th>
+                        </tr></thead>
+                        <tbody id="accounts-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ====== SERVICE DESK ====== -->
+            <div id="view-service-desk" class="view hidden">
+                <div id="tk-stats-bar" style="display:flex;gap:12px;margin-bottom:16px"></div>
+                <div class="filter-bar">
+                    <div class="filter-tabs" id="ticket-filter-tabs">
+                        <button class="filter-tab active" data-val="" onclick="setTicketFilter('')">All</button>
+                        <button class="filter-tab" data-val="OPEN" onclick="setTicketFilter('OPEN')">Open</button>
+                        <button class="filter-tab" data-val="IN_PROGRESS" onclick="setTicketFilter('IN_PROGRESS')">In progress</button>
+                        <button class="filter-tab" data-val="AWAITING_CUSTOMER_INFO" onclick="setTicketFilter('AWAITING_CUSTOMER_INFO')">Awaiting customer</button>
+                        <button class="filter-tab" data-val="RESOLVED" onclick="setTicketFilter('RESOLVED')">Resolved</button>
+                        <button class="filter-tab" data-val="CLOSED" onclick="setTicketFilter('CLOSED')">Closed</button>
+                    </div>
+                    <div class="filter-search">
+                        <i class="ph ph-magnifying-glass"></i>
+                        <input id="ticket-search" type="text" placeholder="Search ticket, order no, serial, subject..." oninput="renderServiceDesk()">
+                    </div>
+                </div>
+                <input type="hidden" id="ticket-filter-status" value="">
+                <div class="overflow-x-auto border-t border-gray-100">
+                    <table class="data-table w-full">
+                        <thead><tr>
+                            <th style="width:9%">Ticket</th>
+                            <th style="width:27%">Subject</th>
+                            <th style="width:13%">Customer</th>
+                            <th style="width:27%">Order / Line</th>
+                            <th style="width:7%">Priority</th>
+                            <th style="width:13%">Status</th>
+                            <th style="width:4%"></th>
+                        </tr></thead>
+                        <tbody id="tickets-tbody"></tbody>
                     </table>
                 </div>
             </div>
@@ -1071,7 +1213,13 @@
     <div id="error-state-root" hidden></div>
 
     <!-- ============== TOAST CONTAINER ============== -->
-    <div id="toast-root" class="fixed bottom-6 right-6 z-[300] space-y-2"></div>
+    <!-- ============== ATTACHMENT PREVIEW ============== -->
+    <div id="tk-preview-root"></div>
+
+    <!-- ============== VIEW-AS SWITCH ============== -->
+    <div id="view-as-root"></div>
+
+    <div id="toast-root" class="fixed bottom-20 right-6 z-[300] space-y-2"></div>
 
 <script src="js/seed-data.js"></script>
 <script src="js/store.js"></script>

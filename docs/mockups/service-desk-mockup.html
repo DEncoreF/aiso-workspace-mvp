@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AISO Workspace v4 | Service Desk Mockup</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/@phosphor-icons/web"></script>
+<script>tailwind.config={theme:{extend:{colors:{aiso:{DEFAULT:'#1432E6',light:'#8da4ff',dark:'#0f28b8',50:'#eef1ff',100:'#dde4ff'}}}}}</script>
+    <style>
+        /* Helvetica-style system font stack */
+        :root {
+            --bg: #ffffff;
+            --bg-subtle: #fafbfc;
+            --card: #ffffff;
+            --border: #e8eaed;
+            --border-light: #f1f3f5;
+            --primary: #1432E6;
+            --primary-light: #8da4ff;
+            --text: #1d1d1f;
+            --text-secondary: #86868b;
+        }
+        html { font-size: 18px; }
+        body { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang TC', 'Microsoft JhengHei', sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+        h1, h2, h3, h4 { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; letter-spacing: -0.02em; }
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 5px; }
+        ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+        .nav-item {
+            display: flex; align-items: center; gap: 0.75rem;
+            width: 100%; padding: 0.6rem 0.9rem; margin-bottom: 1px;
+            border-radius: 0.5rem; border: none;
+            font-size: 0.82rem; font-weight: 500; color: rgba(255,255,255,0.55);
+            text-align: left; line-height: 1.35;
+            transition: all 180ms ease; cursor: pointer; user-select: none;
+            background: transparent;
+        }
+        .nav-item:hover { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.85); }
+        .nav-item.active {
+            background: rgba(255,255,255,0.12); color: #ffffff;
+            font-weight: 600;
+        }
+        .nav-item .nav-icon { width: 1.25rem; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+        .nav-item > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        .badge {
+            display: inline-flex; align-items: center; justify-content: center;
+            white-space: nowrap; padding: 4px 10px;
+            font-size: 11px; font-weight: 600; letter-spacing: 0.01em;
+            line-height: 1.2; border-radius: 6px; border: none;
+        }
+        .badge-draft     { background: #f3f4f6; color: #6b7280; }
+        .badge-published { background: #ecfdf5; color: #059669; }
+        .badge-unpublished { background: #fff7ed; color: #d97706; }
+        .badge-hw        { background: #eef2ff; color: #4338ca; }
+        .badge-sw        { background: #eff6ff; color: #2563eb; }
+        .badge-optional  { background: #f3f4f6; color: #6b7280; }
+        .badge-green     { background: #ecfdf5; color: #059669; }
+        .badge-blue      { background: #eef2ff; color: #4338ca; }
+        .badge-orange    { background: #fff7ed; color: #d97706; }
+        .badge-zinc      { background: #f3f4f6; color: #6b7280; }
+        .badge-amber     { background: #fffbeb; color: #b45309; }
+        .badge-red       { background: #fef2f2; color: #dc2626; }
+        .badge-super     { background: #fef2f2; color: #dc2626; }
+        .badge-archived  { background: #f3f0ff; color: #7c3aed; }
+
+        .data-table { width: 100%; border-collapse: collapse; }
+        .data-table th {
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.06em; color: #86868b; padding: 10px 0;
+            border-bottom: 1px solid var(--border); background: transparent;
+            text-align: left;
+        }
+        .data-table td {
+            padding: 16px 0; font-size: 13.5px; color: #1d1d1f;
+            border-bottom: 1px solid var(--border-light); transition: all 180ms;
+        }
+        .data-table tbody tr:last-child td { border-bottom: none; }
+        .data-table tr:hover td { background: transparent; }
+        .data-table tr.cursor-pointer { transition: opacity 180ms; }
+        .data-table tr.cursor-pointer:hover td { color: var(--primary); }
+        .data-table th:first-child, .data-table td:first-child { padding-left: 4px; text-align: left; }
+        .data-table th:last-child, .data-table td:last-child { padding-right: 4px; text-align: right; }
+        .data-table th + th, .data-table td + td { padding-left: 12px; }
+
+        .card { background: var(--bg-subtle); border: 1px solid var(--border-light); border-radius: 1rem; box-shadow: none; }
+
+        /* Filter bar */
+        .filter-bar {
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            padding-bottom: 16px;
+        }
+        .filter-tabs { display: flex; align-items: center; gap: 4px; }
+        .filter-tab {
+            padding: 6px 14px; border-radius: 980px; border: none;
+            font-size: 12.5px; font-weight: 500; color: #86868b;
+            background: transparent; cursor: pointer; transition: all 200ms;
+        }
+        .filter-tab:hover { color: #1d1d1f; background: #f5f5f7; }
+        .filter-tab.active { color: #fff; background: #1d1d1f; }
+        .filter-search {
+            display: flex; align-items: center; gap: 6px;
+            padding: 6px 12px; border-radius: 980px;
+            background: #f5f5f7; color: #86868b; transition: all 200ms;
+            min-width: 180px;
+        }
+        .filter-search:focus-within { background: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,0.08); }
+        .filter-search i { font-size: 14px; flex-shrink: 0; }
+        .filter-search input {
+            border: none; background: transparent; outline: none;
+            font-size: 13px; font-weight: 400; color: #1d1d1f; width: 100%;
+        }
+        .filter-search input::placeholder { color: #c7c7cc; }
+
+        /* Pill select, visually paired with .filter-search */
+        .select-field {
+            appearance: none; -webkit-appearance: none;
+            padding: 6px 34px 6px 14px; border: none; border-radius: 980px;
+            background: #f5f5f7 url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6l4 4 4-4' stroke='%2386868b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 12px center;
+            background-size: 13px;
+            font-size: 13px; font-weight: 500; color: #1d1d1f;
+            cursor: pointer; transition: all 200ms;
+        }
+        .select-field:hover { background-color: #ebebed; }
+        .select-field:focus { outline: none; background-color: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,0.08); }
+
+        /* ── Pending changes Save bar (Parameter Center + Compatibility) ── */
+        .pending-bar {
+            position: sticky; bottom: 0; z-index: 20;
+            margin-top: 24px; padding-top: 12px;
+            background: linear-gradient(to top, #fff 62%, rgba(255, 255, 255, 0));
+        }
+        .pending-bar-inner {
+            display: flex; align-items: center; justify-content: space-between; gap: 16px;
+            padding: 12px 16px;
+            border: 1px solid #fde68a; border-radius: 14px; background: #fffbeb;
+            box-shadow: 0 6px 20px rgba(8, 15, 38, 0.06);
+        }
+        .pending-bar-label {
+            display: inline-flex; align-items: center; gap: 8px;
+            font-size: 13px; font-weight: 600; color: #b45309;
+        }
+
+        /* ── Display Order List ── */
+        .order-list { display: flex; flex-direction: column; }
+        .order-item {
+            display: flex; align-items: center; gap: 12px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-light);
+            background: #fff;
+            transition: background 0.15s;
+        }
+        .order-item:last-child { border-bottom: none; }
+        .order-item:hover { background: #fafbfc; }
+        .order-rank {
+            width: 28px; height: 28px; border-radius: 8px;
+            background: #1d1d1f; color: #fff;
+            display: grid; place-items: center;
+            font-size: 12px; font-weight: 700; flex-shrink: 0;
+        }
+        .order-product-info { flex: 1; min-width: 0; }
+        .order-product-name { font-size: 14px; font-weight: 600; color: #1d1d1f; }
+        .order-product-sub { font-size: 12px; color: #86868b; }
+        .order-item.is-draggable { cursor: grab; }
+        .order-item.is-dragging { opacity: 0.4; cursor: grabbing; }
+        .order-item.drag-over { box-shadow: inset 0 2px 0 0 #1d2e7b; background: #f0f3fb; }
+        .order-grip {
+            display: grid; place-items: center; flex-shrink: 0;
+            color: #c7c7cc; cursor: grab;
+        }
+        .order-item.is-draggable:hover .order-grip { color: #86868b; }
+
+        .toast-animate { animation: slideInUp 0.3s ease-out; }
+        @keyframes slideInUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+        .modal-backdrop {
+            position: fixed; inset: 0; z-index: 80;
+            background: rgba(0,0,0,0.25); backdrop-filter: blur(8px);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .modal-card {
+            width: 100%; max-width: 32rem; margin: 1rem;
+            background: white; border: none;
+            border-radius: 20px; padding: 2rem; box-shadow: 0 24px 80px rgba(0,0,0,0.18);
+            max-height: 90vh; overflow-y: auto;
+        }
+        .modal-card.modal-wide { max-width: 96rem; }
+        .modal-card.modal-edit {
+            max-width: 46rem; padding: 0; overflow: hidden;
+        }
+        .modal-card.modal-edit .create-modal-shell {
+            margin: 0; min-height: auto; max-height: 86vh;
+        }
+
+        /* Product icon square cropper */
+        .icon-crop-backdrop {
+            position: fixed; inset: 0; z-index: 190; display: grid; place-items: center;
+            padding: 20px; background: rgba(8,15,38,0.58); backdrop-filter: blur(8px);
+        }
+        .icon-crop-dialog {
+            width: min(460px, 100%); max-height: calc(100vh - 40px); overflow-y: auto;
+            border-radius: 20px; background: #fff; box-shadow: 0 28px 90px rgba(0,0,0,0.28);
+        }
+        .icon-crop-header {
+            display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+            padding: 20px 22px 16px; border-bottom: 1px solid var(--border);
+        }
+        .icon-crop-title { color: #1d1d1f; font-size: 17px; font-weight: 750; }
+        .icon-crop-subtitle { margin-top: 3px; color: #86868b; font-size: 11px; line-height: 1.45; }
+        .icon-crop-close {
+            display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0;
+            border: 0; border-radius: 10px; background: #f5f5f7; color: #86868b; cursor: pointer;
+            transition: all 200ms;
+        }
+        .icon-crop-close:hover { color: #1d1d1f; background: #e8e8ed; }
+        .icon-crop-body { padding: 20px 22px; }
+        .icon-crop-viewport {
+            position: relative; width: min(320px, 100%); aspect-ratio: 1; margin: 0 auto;
+            overflow: hidden; border-radius: 16px; background-color: #eef0f4;
+            background-image: linear-gradient(45deg,#e1e4e9 25%,transparent 25%),linear-gradient(-45deg,#e1e4e9 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e1e4e9 75%),linear-gradient(-45deg,transparent 75%,#e1e4e9 75%);
+            background-position: 0 0,0 8px,8px -8px,-8px 0; background-size: 16px 16px;
+        }
+        .icon-crop-viewport::after {
+            content: ""; position: absolute; inset: 0; pointer-events: none;
+            background-image: linear-gradient(to right,transparent 33.1%,rgba(255,255,255,.65) 33.1%,rgba(255,255,255,.65) 33.6%,transparent 33.6%,transparent 66.2%,rgba(255,255,255,.65) 66.2%,rgba(255,255,255,.65) 66.7%,transparent 66.7%),linear-gradient(to bottom,transparent 33.1%,rgba(255,255,255,.65) 33.1%,rgba(255,255,255,.65) 33.6%,transparent 33.6%,transparent 66.2%,rgba(255,255,255,.65) 66.2%,rgba(255,255,255,.65) 66.7%,transparent 66.7%);
+            box-shadow: inset 0 0 0 2px rgba(255,255,255,.9);
+        }
+        #product-icon-crop-canvas {
+            display: block; width: 100%; height: 100%; cursor: grab; touch-action: none;
+        }
+        #product-icon-crop-canvas.is-dragging { cursor: grabbing; }
+        .icon-crop-zoom { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+        .icon-crop-zoom input { width: 100%; accent-color: #1d2e7b; }
+        .icon-crop-hint { margin-top: 10px; color: #86868b; font-size: 11px; text-align: center; }
+        .icon-crop-actions {
+            display: flex; justify-content: flex-end; gap: 10px; padding: 16px 22px 20px;
+            border-top: 1px solid var(--border);
+        }
+        .icon-crop-loading { padding: 48px 24px; color: #86868b; text-align: center; font-size: 13px; font-weight: 600; }
+
+        /* Full-page HTTP error state */
+        #error-state-root[hidden] { display: none; }
+        #error-state-root { position: fixed; inset: 0; z-index: 200; }
+        .http-error-page {
+            position: relative; width: 100%; min-height: 100%; overflow: hidden;
+            display: grid; place-items: center; padding: 2rem;
+            background: #f3f6ff; color: #0c2383; text-align: center;
+        }
+        .http-error-scene {
+            position: absolute; left: 50%; top: 50%; width: min(31rem, 78vw); height: min(33rem, 72vh);
+            transform: translate(-50%, -60%); pointer-events: none;
+        }
+        .http-error-ufo {
+            position: absolute; z-index: 2; left: 50%; top: 0; width: 4.1rem; height: 2.25rem;
+            transform: translateX(-50%) rotate(-10deg);
+        }
+        .http-error-dome {
+            position: absolute; left: 1.25rem; top: 0; width: 1.65rem; height: 1.15rem;
+            border-radius: 1.2rem 1.2rem 0.35rem 0.35rem; background: #fff;
+            box-shadow: inset 0.42rem 0 0 #dfe6ff;
+        }
+        .http-error-ring {
+            position: absolute; left: 0; top: 0.72rem; width: 4.1rem; height: 1.05rem;
+            border-radius: 50%; background: #0d238a;
+            box-shadow: 0 0.38rem 0 -0.12rem #8396f5;
+        }
+        .http-error-ring::after {
+            content: ''; position: absolute; left: 0.78rem; top: 0.14rem; width: 2.55rem; height: 0.46rem;
+            border-radius: 50%; background: #fff;
+        }
+        .http-error-beam {
+            position: absolute; left: 50%; top: 1.65rem; width: 100%; height: calc(100% - 1.65rem);
+            transform: translateX(-50%);
+            clip-path: polygon(47% 0, 53% 0, 100% 100%, 0 100%);
+            background: linear-gradient(180deg, rgba(196,208,255,0.72), rgba(255,255,255,0.08));
+        }
+        .http-error-content {
+            position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center;
+            margin-top: 1.4rem;
+        }
+        .http-error-code {
+            margin: 0; color: #0c2383; font-size: clamp(3rem, 6vw, 4.4rem); line-height: 1;
+            font-weight: 800; letter-spacing: -0.045em;
+        }
+        .http-error-message {
+            max-width: 31rem; margin: 1.65rem 0 2.65rem; color: #0c2383;
+            font-size: clamp(1rem, 2vw, 1.25rem); line-height: 1.5; font-weight: 700;
+        }
+        .http-error-home {
+            display: inline-flex; align-items: center; justify-content: center; gap: 0.55rem;
+            min-height: 2.85rem; padding: 0.7rem 1.45rem; border: 0; border-radius: 999px;
+            background: #384352; color: #fff; font-size: 0.9rem; font-weight: 700;
+            cursor: pointer; box-shadow: 0 0.55rem 1.4rem rgba(27,36,51,0.16); transition: transform 160ms, background 160ms;
+        }
+        .http-error-home:hover { background: #222c39; transform: translateY(-1px); }
+        .http-error-home:focus-visible { outline: 3px solid rgba(20,50,230,0.35); outline-offset: 4px; }
+        @media (max-width: 640px) {
+            .http-error-page { padding: 1.25rem; }
+            .http-error-scene { width: 92vw; height: 28rem; transform: translate(-50%, -58%); }
+            .http-error-message { margin: 1.25rem 0 2rem; }
+        }
+
+        .btn-primary {
+            display: inline-flex; align-items: center; gap: 0.5rem;
+            padding: 0.5rem 1.25rem; border-radius: 980px;
+            background: #1d1d1f; color: white; font-size: 0.78rem; font-weight: 600;
+            border: none; cursor: pointer; transition: all 200ms;
+        }
+        .btn-primary:hover { background: #000000; }
+        .btn-primary:active { transform: scale(0.97); }
+        .btn-secondary {
+            display: inline-flex; align-items: center; gap: 0.5rem;
+            padding: 0.5rem 1.25rem; border-radius: 980px;
+            background: transparent; color: #1d1d1f; font-size: 0.78rem; font-weight: 600;
+            border: 1px solid var(--border); cursor: pointer; transition: all 200ms;
+        }
+        .btn-secondary:hover { background: #f5f5f7; }
+        .btn-secondary:active { transform: scale(0.97); }
+
+        .btn-ghost {
+            display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+            padding: 0.4rem 0.65rem; border-radius: 0.5rem;
+            background: transparent; color: #86868b; font-size: 0.82rem;
+            border: none; cursor: pointer; transition: all 200ms;
+        }
+        .btn-ghost:hover { color: #1d1d1f; background: #f5f5f7; }
+        .btn-ghost:active { transform: scale(0.97); }
+
+        .btn-primary:disabled, .btn-secondary:disabled, .btn-ghost:disabled {
+            opacity: 0.4; cursor: not-allowed; pointer-events: none; transform: none;
+        }
+        .btn-primary:focus-visible, .btn-secondary:focus-visible, .btn-ghost:focus-visible,
+        .filter-tab:focus-visible, .tab-btn:focus-visible {
+            outline: 2px solid #1432E6; outline-offset: 2px;
+        }
+
+        .btn-link {
+            display: inline-flex; align-items: center; gap: 4px;
+            font-size: 13px; color: #86868b; font-weight: 500;
+            background: none; border: none; cursor: pointer; padding: 0; transition: color 200ms;
+        }
+        .btn-link:hover { color: #1d1d1f; }
+
+        .input-field {
+            width: 100%; padding: 0.72rem 0.95rem; border-radius: 12px;
+            border: 1px solid var(--border); background: #ffffff; font-size: 0.82rem;
+            color: #1d1d1f; outline: none; transition: border-color 150ms, background 150ms, box-shadow 150ms;
+        }
+        .input-field:focus { border-color: #1d1d1f; background: #ffffff; box-shadow: 0 0 0 3px rgba(0,0,0,0.04); }
+        .input-field.field-error { border-color: #ff3b30; background: #fff5f5; }
+        .input-field::placeholder { color: #c7c7cc; }
+        /* Format selector (radio pill toggle) */
+        .format-selector {
+            display: flex; gap: 0; border-radius: 980px; overflow: hidden;
+            border: 1px solid var(--border); background: #f5f5f7; padding: 3px;
+        }
+        .format-selector label {
+            flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+            padding: 8px 16px; border-radius: 980px;
+            font-size: 13px; font-weight: 600; color: #86868b;
+            cursor: pointer; transition: all 0.2s; user-select: none; text-align: center;
+        }
+        .format-selector label:hover { color: #1d1d1f; }
+        .format-selector input[type="radio"] { display: none; }
+        .format-selector input[type="radio"]:checked + label,
+        .format-selector label.is-active {
+            background: #1d1d1f; color: #ffffff; box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+        }
+        .format-selector label i { font-size: 15px; }
+        .format-badge {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 4px 12px; border-radius: 980px;
+            font-size: 12px; font-weight: 600; letter-spacing: -0.01em;
+        }
+        .format-badge.is-standard { background: #f5f5f7; color: #1d1d1f; }
+        .format-badge.is-nonstandard { background: #fff8ee; color: #b45309; }
+        /* Custom file input */
+        .file-upload-wrap {
+            display: flex; align-items: center; gap: 12px;
+            padding: 10px 14px; border-radius: 12px;
+            border: 1px dashed var(--border); background: #fafafa;
+            cursor: pointer; transition: all 150ms;
+        }
+        .file-upload-wrap:hover { border-color: #86868b; background: #f5f5f7; }
+        .file-upload-wrap.field-error { border-color: #ff3b30; background: #fff5f5; }
+        .file-upload-wrap input[type="file"] { display: none; }
+        .file-upload-btn {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 6px 14px; border-radius: 980px;
+            background: #1d1d1f; color: #fff; font-size: 12px; font-weight: 600;
+            border: none; cursor: pointer; white-space: nowrap; pointer-events: none;
+        }
+        .file-upload-text { font-size: 12px; color: #86868b; font-weight: 500; }
+        textarea.input-field { resize: vertical; min-height: 5rem; }
+        select.input-field {
+            appearance: none; -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2386868b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 0.9rem center; padding-right: 2.4rem; cursor: pointer;
+        }
+        .field-label {
+            display: block; margin-bottom: 0.4rem; color: #1d1d1f;
+            font-size: 0.72rem; font-weight: 700; line-height: 1.2; letter-spacing: -0.01em;
+        }
+        .field-label .req { color: #ff3b30; }
+        .field-hint { margin-top: 0.35rem; color: #86868b; font-size: 0.66rem; font-weight: 500; }
+        .field-error-text { min-height: 1rem; margin-top: 0.25rem; color: #ff3b30; font-size: 0.68rem; font-weight: 600; }
+        .create-modal-shell {
+            margin: -0.75rem; max-height: 84vh; min-height: min(760px, 84vh);
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+        .create-modal-header {
+            flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+            padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); background: #ffffff;
+        }
+        .create-modal-title-row { display: flex; align-items: center; gap: 0.8rem; min-width: 0; }
+        .create-modal-icon {
+            width: 2.6rem; height: 2.6rem; border-radius: 14px; display: flex; align-items: center; justify-content: center;
+            background: #1d1d1f; color: #ffffff; font-size: 1.15rem; flex-shrink: 0;
+        }
+        .create-modal-kicker { color: #86868b; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+        .create-modal-close {
+            width: 2.3rem; height: 2.3rem; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            color: #86868b; border: none; background: #f5f5f7; transition: all 150ms; font-size: 1rem;
+        }
+        .create-modal-close:hover { color: #1d1d1f; background: #e8e8ed; }
+        .create-modal-grid {
+            flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(380px, 430px);
+            gap: 0; align-items: stretch; background: #fafafa;
+        }
+        .create-form-scroll { min-height: 0; overflow-y: auto; padding: 1.5rem; }
+        .create-preview-scroll { min-height: 0; overflow-y: auto; border-left: 1px solid var(--border); background: #f5f5f7; }
+        .create-preview-scroll.is-hardware { padding: 1.5rem; }
+        .create-preview-scroll.is-software { padding: 0; }
+        .form-section {
+            border: none; border-radius: 0; background: transparent; padding: 0;
+            box-shadow: none;
+        }
+        .form-section + .form-section { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-light); }
+        .form-section-head {
+            display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+            padding-bottom: 0.85rem; margin-bottom: 0.9rem; border-bottom: none;
+        }
+        .form-section-title { display: flex; align-items: center; gap: 0.55rem; color: #1d1d1f; font-size: 0.86rem; font-weight: 700; letter-spacing: -0.02em; }
+        .form-section-title i { color: #1d1d1f; font-size: 1rem; }
+        .form-section-subtitle { margin-top: 0.18rem; color: #86868b; font-size: 0.68rem; font-weight: 500; }
+        .form-section-body { display: flex; flex-direction: column; gap: 0.95rem; }
+        .form-grid-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.95rem; }
+        .form-actions {
+            position: sticky; bottom: -1.5rem; z-index: 2; margin: 1.25rem -1.5rem -1.5rem; padding: 1rem 1.5rem;
+            border-top: 1px solid var(--border); background: rgba(255,255,255,0.96); backdrop-filter: blur(12px);
+            display: flex; justify-content: flex-end; gap: 0.65rem;
+        }
+        .preview-eyebrow {
+            display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.9rem;
+            color: #86868b; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+        }
+        .sw-preview-eyebrow {
+            position: sticky; top: 0; z-index: 2;
+            display: flex; align-items: center; gap: 0.4rem;
+            padding: 8px 16px;
+            background: rgba(245,245,247,0.92); backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--border-light);
+            color: #86868b; font-size: 0.65rem; font-weight: 700;
+            letter-spacing: 0.05em; text-transform: uppercase;
+        }
+        .preview-eyebrow-left { display: inline-flex; align-items: center; gap: 0.5rem; }
+        .hw-preview-card {
+            overflow: hidden; border: 1px solid rgba(20,46,123,0.08); border-radius: 20px; background: #fff;
+            box-shadow: 0 5px 20px rgba(181,196,255,0.25);
+            font-size: 16px;
+        }
+        .hw-preview-media {
+            aspect-ratio: 4 / 3; padding: 20px; display: grid; place-items: center;
+            background: linear-gradient(180deg, #f7f9ff 0%, #edf3ff 100%);
+            border-bottom: 1px solid rgba(20,46,123,0.08);
+            color: #9aa6bf; text-align: center;
+        }
+        .hw-preview-media img { width: calc(100% + 40px); height: 100%; margin: -20px; object-fit: cover; }
+        .hw-placeholder-icon { display: grid; gap: 10px; justify-items: center; }
+        .hw-placeholder-device {
+            width: 4.2rem; height: 1.6rem; border: 0.45rem solid #9aa8c2; border-radius: 0.7rem;
+            position: relative;
+        }
+        .hw-placeholder-device::before {
+            content: ""; position: absolute; left: 0.45rem; top: 50%; width: 0.45rem; height: 0.45rem;
+            border-radius: 999px; background: #9aa8c2; transform: translateY(-50%);
+        }
+        .hw-preview-body { padding: 24px; display: flex; flex-direction: column; }
+        .hw-preview-title { font-size: 1.18rem; line-height: 1.25; font-weight: 800; color: #111936; }
+        .hw-preview-category { margin-top: 4px; margin-bottom: 10px; color: #6d7695; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+        .hw-preview-divider { margin: 0 0 16px; border-top: 1px solid rgba(20,46,123,0.1); border-bottom: none; }
+        .hw-aidaptiv-row { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; padding-top: 12px; }
+        .hw-aidaptiv-logo { width: 112px; height: auto; display: block; }
+        .hw-aidaptiv-link { color: #1b2b7c; font-size: 0.82rem; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+        .hw-preview-cta {
+            width: 100%; display: block; border: 0; border-radius: 14px; margin-top: 12px;
+            background: #182466; color: #fff; padding: 12px 20px; font-size: 0.88rem; font-weight: 800;
+            box-shadow: 0 14px 30px rgba(24,36,102,0.18); cursor: default;
+        }
+        .preview-section {
+            border: 1px solid rgba(20,46,123,0.1); border-radius: 12px; overflow: hidden; background: #fff;
+            margin-bottom: 12px;
+        }
+        .preview-section-title {
+            display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+            background: #f8f9ff; border-bottom: 1px solid rgba(20,46,123,0.08);
+            color: #6d7695; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+        }
+        .hw-spec-list { display: flex; flex-direction: column; padding: 10px 14px 12px; }
+        .hw-spec-list li { display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; color: #111936; font-size: 0.82rem; line-height: 1.45; font-weight: 500; }
+        .hw-spec-list li::before { content: ""; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: #1d2e7b; flex-shrink: 0; }
+        .preview-pill {
+            display: inline-flex; align-items: center; padding: 0.35rem 0.8rem; border-radius: 999px;
+            background: #eef1f7; color: #24377d; font-size: 0.72rem; font-weight: 800;
+        }
+        .image-chip {
+            display: inline-flex; align-items: center; gap: 0.35rem; max-width: 100%;
+            padding: 0.35rem 0.65rem; border-radius: 980px; background: #f5f5f7;
+            color: #1d1d1f; font-size: 0.7rem; font-weight: 600;
+        }
+        .product-image-sort-list { display: flex; flex-direction: column; gap: 8px; }
+        .product-image-sort-item {
+            display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0;
+            min-height: 56px; padding: 10px 14px; border: 1px solid #e8eaed;
+            border-radius: 14px; background: #f5f5f7; color: #1d1d1f;
+            font-size: 12px; font-weight: 600;
+            transition: opacity 120ms, border-color 120ms, background 120ms, box-shadow 120ms;
+        }
+        .product-image-sort-item.is-sortable { cursor: grab; }
+        .product-image-sort-item.is-sortable:hover { border-color: #c7c7cc; }
+        .product-image-sort-item.is-dragging { opacity: 0.4; cursor: grabbing; }
+        .product-image-sort-item.drag-over {
+            border-color: #1d2e7b; background: #f0f3fb;
+            box-shadow: 0 0 0 2px rgba(29,46,123,0.12);
+        }
+        .product-image-sort-grip { color: #86868b; font-size: 18px; flex-shrink: 0; }
+        .product-image-sort-thumb { width: 34px; height: 34px; border-radius: 8px; object-fit: cover; flex-shrink: 0; }
+        .product-image-sort-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .product-image-primary-badge {
+            padding: 2px 6px; border-radius: 999px; background: #1d2e7b;
+            color: #fff; font-size: 9px; font-weight: 800; letter-spacing: 0.02em;
+        }
+        .product-image-sort-remove {
+            display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+            padding: 5px 6px; border: 0; background: transparent;
+            color: #86868b; font-size: 12px; font-weight: 600; cursor: pointer;
+        }
+        .product-image-sort-remove:hover { color: #ff3b30; }
+        .product-image-sort-hint { margin-top: 6px; color: #86868b; font-size: 10px; font-weight: 600; }
+        .software-live-preview {
+            width: 100%; min-height: 480px;
+            overflow: hidden; background: #fff;
+            font-size: 16px;
+            display: flex; flex-direction: column;
+        }
+        @media (max-width: 1100px) {
+            .create-modal-grid { grid-template-columns: 1fr; }
+            .create-modal-shell { max-height: 88vh; }
+            .create-preview-scroll { border-left: 0; border-top: 1px solid var(--border); }
+            .form-grid-two { grid-template-columns: 1fr; }
+        }
+
+        /* ── Software Preview Drawer (v5 aligned) ── */
+        .sd-backdrop {
+            position: fixed; inset: 0; z-index: 170;
+            background: rgba(8, 15, 38, 0.35); backdrop-filter: blur(4px);
+            opacity: 0; pointer-events: none; transition: opacity 0.28s ease;
+        }
+        .sd-backdrop.is-open { opacity: 1; pointer-events: auto; }
+        .sd-drawer {
+            position: fixed; top: 0; right: 0; bottom: 0; z-index: 176;
+            width: min(540px, 100vw); background: #ffffff;
+            box-shadow: -24px 0 60px rgba(8,15,38,0.18);
+            display: flex; flex-direction: column; overflow: hidden;
+            transform: translateX(100%); transition: transform 0.32s cubic-bezier(0.22,0.61,0.36,1);
+            font-size: 16px;
+        }
+        .sd-drawer.is-open { transform: translateX(0); }
+        .sd-close {
+            position: absolute; top: 16px; right: 16px; width: 40px; height: 40px;
+            border-radius: 999px; border: 1px solid rgba(20,46,123,0.14);
+            background: rgba(20,46,123,0.05); color: #111936;
+            font-size: 1.4rem; cursor: pointer; display: grid; place-items: center;
+            z-index: 1; transition: background 0.2s; font-family: inherit;
+        }
+        .sd-close:hover { background: rgba(20,46,123,0.12); }
+        .sd-body { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(20,46,123,0.2) transparent; }
+        .sd-hero {
+            padding: 44px 32px 28px;
+            background: linear-gradient(180deg, #f7f9ff 0%, #edf3ff 100%);
+            border-bottom: 1px solid rgba(20,46,123,0.1);
+        }
+        .sd-hero-header { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 14px; }
+        .sd-mark {
+            flex-shrink: 0; width: 64px; height: 64px; border-radius: 20px;
+            display: inline-grid; place-items: center;
+            background: linear-gradient(135deg, #0f173a, #1d2e7b); color: #fff;
+            box-shadow: 0 16px 30px rgba(20,46,123,0.22);
+            font-size: 0.96rem; font-weight: 800; letter-spacing: 0.08em;
+        }
+        .sd-company {
+            color: #6d7695; font-size: 0.74rem; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;
+        }
+        .sd-name { color: #111936; font-size: 1.5rem; font-weight: 800; line-height: 1.15; }
+        .sd-tagline { color: #6d7695; font-size: 0.94rem; font-weight: 500; line-height: 1.6; margin-top: 4px; }
+        .sd-content { padding: 28px 32px 32px; display: grid; gap: 20px; }
+        .sd-meta-block {
+            border: 1px solid rgba(20,46,123,0.1); border-radius: 14px;
+            overflow: hidden; background: rgba(255,255,255,0.66);
+        }
+        .sd-meta-title {
+            display: flex; align-items: center; gap: 8px; padding: 11px 14px;
+            background: #f8f9ff; border-bottom: 1px solid rgba(20,46,123,0.08);
+            color: #6d7695; font-size: 0.72rem; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.06em;
+        }
+        .sd-feature-list { list-style: none; padding: 12px 14px 14px; margin: 0; display: grid; gap: 9px; }
+        .sd-feature-item {
+            display: flex; align-items: flex-start; gap: 8px;
+            color: #111936; font-size: 0.84rem; line-height: 1.5;
+        }
+        .sd-feature-dot {
+            flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%;
+            background: #1d2e7b; margin-top: 5px;
+        }
+        .sd-industry-list { padding: 12px 14px 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+        .sd-industry-chip {
+            display: inline-flex; align-items: center; min-height: 28px; padding: 0 12px;
+            border-radius: 999px; background: rgba(29,46,123,0.08); color: #1d2e7b;
+            font-size: 0.76rem; font-weight: 600;
+        }
+        .sd-license-badge {
+            display: inline-flex; align-items: center; min-height: 24px; padding: 0 10px; margin-top: 8px;
+            border-radius: 999px; background: #ecfdf5; color: #047857;
+            font-size: 0.7rem; font-weight: 700; letter-spacing: 0.01em; white-space: nowrap;
+        }
+        .sd-gallery { position: relative; margin: 0 32px; border-radius: 14px; overflow: hidden; background: #e8ecf4; aspect-ratio: 16/10; }
+        .sd-gallery-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .sd-gallery-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #9aa6bf; font-size: 2rem; }
+        .sd-gallery-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 30px; height: 30px; border-radius: 50%; background: rgba(255,255,255,0.85); border: 1px solid #d0d7e6; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 0.75rem; color: #3b4c8a; box-shadow: 0 1px 4px rgba(0,0,0,0.1); z-index: 2; }
+        .sd-gallery-nav.prev { left: 8px; }
+        .sd-gallery-nav.next { right: 8px; }
+        .sd-gallery-dots { display: flex; justify-content: center; gap: 6px; padding: 8px 0 0; }
+        .sd-gallery-dot { width: 7px; height: 7px; border-radius: 50%; background: #c5cde0; }
+        .sd-gallery-dot.active { background: #3b4c8a; }
+        .sd-action-footer {
+            padding: 20px 32px; border-top: 1px solid rgba(20,46,123,0.1);
+            background: #fff; display: grid; gap: 12px; flex-shrink: 0;
+        }
+        .sd-action-primary {
+            display: flex; align-items: center; justify-content: center;
+            width: 100%; min-height: 46px; border: 0; border-radius: 999px;
+            padding: 0 20px; text-align: center;
+            background: linear-gradient(135deg, #0f173a, #1d2e7b); color: #fff;
+            font-size: 0.88rem; font-weight: 700;
+            box-shadow: 0 14px 28px rgba(20,46,123,0.18); cursor: default;
+        }
+        .sd-site-link {
+            display: flex; align-items: center; justify-content: center; gap: 6px;
+            color: #1d2e7b; font-size: 0.82rem; font-weight: 600; cursor: default;
+            min-width: 0;
+        }
+        .sd-site-link > span {
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            text-decoration: underline; text-underline-offset: 3px;
+        }
+        .sd-site-link.is-empty { color: #9aa6bf; }
+        .sd-site-link.is-empty > span { text-decoration: none; }
+        @media (max-width: 680px) {
+            .sd-drawer {
+                top: auto; left: 0; right: 0; bottom: 0; width: 100%; height: 90vh;
+                border-radius: 24px 24px 0 0; transform: translateY(100%);
+            }
+            .sd-drawer.is-open { transform: translateY(0); }
+            .sd-hero { padding: 60px 20px 18px; }
+            .sd-mark { width: 48px; height: 48px; border-radius: 14px; font-size: 0.78rem; }
+            .sd-name { font-size: 1.15rem; }
+            .sd-content { padding: 20px; gap: 14px; }
+            .sd-action-footer { padding: 16px 20px; }
+        }
+
+        /* Tab style */
+        .tab-btn {
+            padding: 0.45rem 1.1rem; border-radius: 980px;
+            font-size: 0.78rem; font-weight: 500; color: #86868b;
+            border: none; cursor: pointer;
+            background: transparent; transition: all 200ms;
+        }
+        .tab-btn:hover { color: #1d1d1f; }
+        .tab-btn.active { background: #1d1d1f; color: #ffffff; }
+    </style>
+
+<style>
+/* mockup-only additions */
+.mk-banner { position:fixed; top:0; left:240px; right:0; z-index:50; background:#fffbeb; border-bottom:1px solid #fde68a; color:#92400e; font-size:12px; padding:6px 3rem; display:flex; gap:14px; align-items:center }
+.mk-banner b { font-weight:700 }
+.mk-banner button { font-size:12px; padding:3px 10px; border-radius:980px; border:1px solid #fcd34d; background:#fff; color:#92400e; cursor:pointer }
+.mk-banner button.on { background:#1d1d1f; color:#fff; border-color:#1d1d1f }
+.kv { display:flex; justify-content:space-between; gap:16px; padding:8px 0; border-bottom:1px solid #f5f5f7 }
+.kv span:first-child { font-size:12.5px; color:#86868b }
+.kv span:last-child { font-size:13px; color:#1d1d1f; text-align:right }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; background:#f5f5f7; border-radius:6px; padding:3px 8px; color:#1d1d1f }
+.msg { display:flex; gap:12px; padding:14px 0; border-bottom:1px solid #f5f5f7 }
+.msg .av { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; flex-shrink:0 }
+.av-c { background:#eef1ff; color:#1432E6 } .av-i { background:#1d1d1f; color:#fff } .av-v { background:#ecfdf5; color:#059669 }
+.msg .who { font-size:12.5px; font-weight:600; color:#1d1d1f } .msg .when { font-size:11.5px; color:#86868b; margin-left:8px }
+.msg .body { font-size:13px; color:#1d1d1f; margin-top:4px; line-height:1.55 }
+.msg.internal-note .body { background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:10px 12px }
+.step { display:flex; align-items:center; gap:8px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#86868b; margin:18px 0 8px }
+.step .n { width:18px; height:18px; border-radius:50%; background:#1d1d1f; color:#fff; font-size:10px; display:flex; align-items:center; justify-content:center }
+.pick { border:1px solid var(--border-light); border-radius:10px; padding:10px 12px; cursor:pointer; display:flex; align-items:center; gap:10px; transition:all .15s }
+.pick:hover { background:#fafbfc } .pick.sel { border-color:#1432E6; background:#eef1ff }
+.pick.disabled { opacity:.5; cursor:not-allowed }
+.ent { border:1px solid #bbf7d0; background:#f0fdf4; border-radius:12px; padding:12px 14px }
+.ent.exp { border-color:#fecaca; background:#fef2f2 }
+.dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px }
+.sla-bar { height:6px; border-radius:6px; background:#f1f3f5; overflow:hidden } .sla-bar i { display:block; height:100%; border-radius:6px }
+.stat { flex:1; border:1px solid var(--border-light); border-radius:12px; padding:12px 14px; background:var(--bg-subtle) }
+.stat .v { font-size:22px; font-weight:700; letter-spacing:-.02em } .stat .l { font-size:11.5px; color:#86868b }
+textarea.input-field { min-height:96px; resize:vertical }
+</style>
+</head>
+<body class="min-h-screen">
+
+<aside id="sidebar" class="fixed left-0 top-0 bottom-0 w-[240px] z-40 flex flex-col" style="background:#1d1d1f">
+  <div class="px-5 py-5" style="border-bottom:1px solid rgba(255,255,255,0.08)">
+    <div class="flex items-center gap-2.5">
+      <img src="../../images/logo-aiso.svg" alt="AISO" style="height:20px;filter:brightness(0) invert(1)">
+      <span style="width:1px;height:14px;background:rgba(255,255,255,0.25)"></span>
+      <span class="text-[11px] font-semibold uppercase" style="color:rgba(255,255,255,0.55);letter-spacing:0.18em">Workspace</span>
+    </div>
+  </div>
+  <nav class="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
+    <button class="nav-item"><span class="nav-icon"><i class="ph ph-app-window"></i></span><span>Software Products</span></button>
+    <button class="nav-item"><span class="nav-icon"><i class="ph ph-hard-drives"></i></span><span>Hardware Products</span></button>
+    <button class="nav-item"><span class="nav-icon"><i class="ph ph-shopping-cart"></i></span><span>Orders</span></button>
+    <button class="nav-item active"><span class="nav-icon"><i class="ph ph-headset"></i></span><span>Service Desk</span></button>
+    <button class="nav-item"><span class="nav-icon"><i class="ph ph-arrows-left-right"></i></span><span>Compatibility</span></button>
+    <button class="nav-item"><span class="nav-icon"><i class="ph ph-sliders"></i></span><span>Parameter Center</span></button>
+    <button class="nav-item"><span class="nav-icon"><i class="ph ph-clock-counter-clockwise"></i></span><span>Activity Log</span></button>
+    <button class="nav-item"><span class="nav-icon"><i class="ph ph-gear"></i></span><span>Settings</span></button>
+  </nav>
+  <div class="px-3 py-4" style="border-top:1px solid rgba(255,255,255,0.08)">
+    <div style="display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:12px;border:1px solid rgba(255,255,255,0.08)">
+      <span style="width:30px;height:30px;border-radius:50%;background:#eef1ff;color:#1432E6;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center">SR</span>
+      <span style="flex:1;min-width:0;text-align:left">
+        <span style="display:block;color:rgba(255,255,255,0.9);font-size:13px;font-weight:600">System Root</span>
+        <span style="display:block;color:rgba(255,255,255,0.45);font-size:11px">Super Admin</span>
+      </span>
+    </div>
+  </div>
+</aside>
+
+<div class="mk-banner"><b>MOCKUP</b> Service Desk · 點列可開詳情、New Ticket 可走建票流程 · 
+  <span style="margin-left:auto">Screens:</span>
+  <button class="on" onclick="go('list')">1 · List</button>
+  <button onclick="go('create')">2 · New Ticket</button>
+  <button onclick="go('detail')">3 · Ticket Detail</button>
+  <button onclick="go('order')">4 · Order entry</button>
+</div>
+
+<main class="ml-[240px]" style="padding: 4.2rem 3rem 2.5rem">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+    <div>
+      <h2 class="text-2xl font-bold" style="letter-spacing:-0.03em">Service Desk</h2>
+      <p class="text-sm mt-1" style="color:#86868b">After-sales requests received against confirmed orders. Each ticket is anchored to one order line and, for hardware, one serial.</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;white-space:nowrap">
+      <select class="select-field" id="cust-sel" onchange="renderList()">
+        <option value="">All customers</option>
+        <option>MegaBank Corp</option>
+        <option>GovCloud Agency</option>
+      </select>
+      <button class="btn-primary" onclick="go('create')"><i class="ph ph-plus"></i> New Ticket</button>
+    </div>
+  </div>
+
+  <!-- ===== SCREEN 1: LIST ===== -->
+  <section id="scr-list">
+    <div style="display:flex;gap:12px;margin-bottom:16px">
+      <div class="stat"><div class="v">3</div><div class="l">Open</div></div>
+      <div class="stat"><div class="v" style="color:#b45309">1</div><div class="l">Awaiting customer</div></div>
+      <div class="stat"><div class="v" style="color:#dc2626">1</div><div class="l">First response overdue</div></div>
+      <div class="stat"><div class="v">1</div><div class="l">Resolved this month</div></div>
+    </div>
+    <div class="filter-bar">
+      <div class="filter-tabs">
+        <button class="filter-tab active">All</button>
+        <button class="filter-tab">Open</button>
+        <button class="filter-tab">In progress</button>
+        <button class="filter-tab">Awaiting customer</button>
+        <button class="filter-tab">Resolved</button>
+        <button class="filter-tab">Closed</button>
+      </div>
+      <div class="filter-search"><i class="ph ph-magnifying-glass"></i><input placeholder="Search ticket, order no, serial, subject..."></div>
+    </div>
+    <div class="overflow-x-auto border-t border-gray-100">
+      <table class="data-table w-full">
+        <thead><tr>
+          <th style="width:10%">Ticket</th>
+          <th style="width:30%">Subject</th>
+          <th style="width:14%">Customer</th>
+          <th style="width:22%">Order / Line</th>
+          <th style="width:8%">Priority</th>
+          <th style="width:11%">Status</th>
+          <th style="width:5%"></th>
+        </tr></thead>
+        <tbody id="tk-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== SCREEN 4: ORDER DETAIL ENTRY ===== -->
+  <section id="scr-order" class="hidden">
+    <div style="max-width:720px">
+      <div style="font-size:12px;color:#86868b;margin-bottom:10px"><i class="ph ph-info"></i> This is the existing Order detail. The only addition is the <b>Open ticket</b> action per line, gated by <code style="font-size:11px">ticket.create</code>.</div>
+      <div class="card" style="padding:26px 28px;background:#fff;border-color:var(--border)">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:6px">
+          <div><div style="font-size:18px;font-weight:700">PO-2026-0001</div><div style="font-size:13px;color:#86868b;margin-top:2px">MegaBank Corp</div></div>
+          <span class="badge badge-green">Confirmed</span>
+        </div>
+        <div style="margin-top:16px">
+          <div class="kv"><span>Contract No</span><span>CTR-2026-0001</span></div>
+          <div class="kv"><span>Order date</span><span>2026-07-30</span></div>
+          <div class="kv"><span>HW supplier</span><span>Phison Electronics</span></div>
+          <div class="kv"><span>SW supplier</span><span>TPIsoftware Corporation</span></div>
+          <div class="kv"><span>System integrator</span><span>Systex Corporation</span></div>
+        </div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:20px 0 8px">Order Lines</div>
+        <div style="border:1px solid var(--border-light);border-radius:10px;padding:12px 14px;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="badge badge-hw">HW</span><span style="font-size:13px;font-weight:600">GIGABYTE Workstation</span>
+            <span style="margin-left:auto;display:flex;align-items:center;gap:8px"><span class="badge badge-blue">SLA 7x24</span><span style="font-size:12.5px;color:#86868b">Qty 2</span>
+              <button class="btn-secondary text-xs" onclick="go('create',{line:'ol-0001'})" style="padding:4px 10px"><i class="ph ph-headset"></i> Open ticket</button></span>
+          </div>
+          <div style="font-size:12.5px;color:#86868b;margin-top:6px">Warranty 36 months · 2026-08-05 → 2029-08-04</div>
+          <div style="margin-top:8px;display:flex;gap:6px"><span class="mono">GBT-2026-0771</span><span class="mono">GBT-2026-0772</span></div>
+          <div style="margin-top:8px;font-size:12px;color:#86868b"><i class="ph ph-ticket"></i> 2 tickets on this line · <a href="#" onclick="go('list');return false" style="color:#1432E6">view</a></div>
+        </div>
+        <div style="border:1px solid var(--border-light);border-radius:10px;padding:12px 14px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="badge badge-sw">SW</span><span style="font-size:13px;font-weight:600">digiRunner</span><span style="font-size:12.5px;color:#86868b">v3.8.2</span>
+            <span style="margin-left:auto;display:flex;align-items:center;gap:8px"><span class="badge badge-blue">SLA 5x8</span><span style="font-size:12.5px;color:#86868b">Qty 1</span>
+              <button class="btn-secondary text-xs" onclick="go('create',{line:'ol-0002'})" style="padding:4px 10px"><i class="ph ph-headset"></i> Open ticket</button></span>
+          </div>
+          <div style="font-size:12.5px;color:#86868b;margin-top:6px">License 2026-08-01 → 2027-07-31</div>
+          <div style="margin-top:8px"><span class="mono">DGRN-4A7K-92MF-XT01</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="modal-root"></div>
+
+<script>
+const ORDERS = [
+  { id:'ord-0001', no:'PO-2026-0001', customer:'MegaBank Corp', status:'CONFIRMED', date:'2026-07-30', hw:'Phison Electronics', sw:'TPIsoftware Corporation' },
+  { id:'ord-0003', no:'PO-2026-0003', customer:'MegaBank Corp', status:'CONFIRMED', date:'2026-05-12', hw:'Phison Electronics', sw:'' },
+  { id:'ord-0002', no:'PO-2026-0002', customer:'GovCloud Agency', status:'DRAFT', date:'2026-08-15', hw:'Phison Electronics', sw:'' },
+];
+const LINES = [
+  { id:'ol-0001', order:'ord-0001', scope:'HW', name:'GIGABYTE Workstation', qty:2, sla:'7x24', wEnd:'2029-08-04', wMonths:36, serials:['GBT-2026-0771','GBT-2026-0772'] },
+  { id:'ol-0002', order:'ord-0001', scope:'SW', name:'digiRunner v3.8.2', qty:1, sla:'5x8', lEnd:'2027-07-31', keys:['DGRN-4A7K-92MF-XT01'] },
+  { id:'ol-0004', order:'ord-0003', scope:'HW', name:'AISO1 AI Agent Workstation', qty:1, sla:'5x8', wEnd:'2026-09-09', wMonths:12, serials:['AISO1-2025-0442'] },
+];
+const TICKETS = [
+  { id:'TK-0007', subject:'GPU node fails POST after firmware update', customer:'MegaBank Corp', order:'PO-2026-0001', line:'HW · GIGABYTE Workstation', sn:'GBT-2026-0771', pri:'HIGH', assign:'HW vendor', status:'IN_PROGRESS', overdue:true, updated:'2h ago' },
+  { id:'TK-0006', subject:'digiRunner license activation error 0x41', customer:'MegaBank Corp', order:'PO-2026-0001', line:'SW · digiRunner', sn:'', pri:'MEDIUM', assign:'SW vendor', status:'AWAITING_CUSTOMER_INFO', updated:'1d ago' },
+  { id:'TK-0005', subject:'Fan noise on unit 2 under sustained load', customer:'MegaBank Corp', order:'PO-2026-0001', line:'HW · GIGABYTE Workstation', sn:'GBT-2026-0772', pri:'LOW', assign:'Internal', status:'OPEN', updated:'3d ago' },
+  { id:'TK-0004', subject:'Request on-site check before warranty expiry', customer:'MegaBank Corp', order:'PO-2026-0003', line:'HW · AISO1 AI Agent Workstation', sn:'AISO1-2025-0442', pri:'MEDIUM', assign:'Internal', status:'RESOLVED', updated:'6d ago' },
+  { id:'TK-0003', subject:'Storage throughput drop after OS patch', customer:'GovCloud Agency', order:'PO-2025-0009', line:'HW · Gigacomputing 4U Server', sn:'GC-2025-0118', pri:'HIGH', assign:'HW vendor', status:'CLOSED', updated:'21d ago' },
+];
+const ST = { OPEN:['Open','badge-blue'], IN_PROGRESS:['In progress','badge-orange'], AWAITING_CUSTOMER_INFO:['Awaiting customer','badge-amber'], RESOLVED:['Resolved','badge-green'], CLOSED:['Closed','badge-zinc'] };
+const PR = { HIGH:'badge-red', MEDIUM:'badge-amber', LOW:'badge-zinc' };
+const b = (t,c)=>`<span class="badge ${c}">${t}</span>`;
+
+function renderList(){
+  const c = document.getElementById('cust-sel').value;
+  const rows = TICKETS.filter(t=>!c||t.customer===c);
+  document.getElementById('tk-tbody').innerHTML = rows.map(t=>`
+   <tr class="cursor-pointer" onclick="go('detail')">
+    <td><span style="font-weight:600;font-size:13px">${t.id}</span><div style="font-size:11px;color:#86868b">${t.updated}</div></td>
+    <td><span style="font-size:13px">${t.subject}</span></td>
+    <td><span style="font-size:13px">${t.customer}</span></td>
+    <td><span style="font-size:13px;font-weight:600">${t.order}</span><div style="font-size:11.5px;color:#86868b">${t.line}${t.sn?` · <span style="font-family:ui-monospace,Menlo,monospace">${t.sn}</span>`:''}</div></td>
+    <td>${b(t.pri[0]+t.pri.slice(1).toLowerCase(),PR[t.pri])}</td>
+    <td>${b(ST[t.status][0],ST[t.status][1])}${t.overdue?' <span class="badge badge-red" title="No AISO response within target" style="margin-left:4px">Overdue</span>':''}</td>
+    <td class="text-right"><button class="btn-ghost" title="Details"><i class="ph ph-info"></i></button></td>
+   </tr>`).join('');
+}
+
+let cr = { customer:'', order:'', line:'', sn:'' };
+function go(s, opts={}){
+  document.querySelectorAll('.mk-banner button').forEach((x,i)=>x.classList.toggle('on', ['list','create','detail','order'][i]===s));
+  document.getElementById('scr-list').classList.toggle('hidden', s!=='list' && s!=='create' && s!=='detail');
+  document.getElementById('scr-order').classList.toggle('hidden', s!=='order');
+  closeModal();
+  if (s==='create'){
+    cr = { customer:'', order:'', line:'', sn:'' };
+    if (opts.line){ const l=LINES.find(x=>x.id===opts.line); const o=ORDERS.find(x=>x.id===l.order); cr={customer:o.customer, order:o.id, line:l.id, sn: l.serials?.[0]||''}; }
+    else if (document.getElementById('cust-sel').value) cr.customer = document.getElementById('cust-sel').value;
+    renderCreate();
+  }
+  if (s==='detail') renderDetail();
+}
+function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+function setCr(k,v){ cr[k]=v; if(k==='customer'){cr.order='';cr.line='';cr.sn='';} if(k==='order'){cr.line='';cr.sn='';} if(k==='line'){const l=LINES.find(x=>x.id===v); cr.sn=l.serials?.length===1?l.serials[0]:'';} renderCreate(); }
+
+function entitlementCard(l, sn){
+  if(!l) return '';
+  const end = l.scope==='HW'? l.wEnd : l.lEnd;
+  const days = Math.round((new Date(end)-new Date('2026-09-08'))/86400000);
+  const ok = days>=0;
+  const o = ORDERS.find(x=>x.id===l.order);
+  return `<div class="ent ${ok?'':'exp'}">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div style="font-size:12.5px;font-weight:700;color:${ok?'#047857':'#b91c1c'}"><span class="dot" style="background:${ok?'#10b981':'#ef4444'}"></span>${l.scope==='HW'?'Warranty':'License'} ${ok?'active':'expired'} · ${ok?days+' days left':Math.abs(days)+' days ago'}</div>
+      <span class="badge badge-blue">SLA ${l.sla}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;margin-top:8px;font-size:12.5px">
+      <div><span style="color:#86868b">${l.scope==='HW'?'Serial':'License key'}</span><div class="mono" style="display:inline-block;margin-left:6px">${sn||l.keys?.[0]||'—'}</div></div>
+      <div><span style="color:#86868b">Expires</span> <b>${end}</b></div>
+      <div><span style="color:#86868b">Supplier</span> <b>${l.scope==='HW'?o.hw:o.sw}</b></div>
+      <div><span style="color:#86868b">Order</span> <b>${o.no}</b> · ${o.customer}</div>
+    </div>
+    <div style="font-size:11px;color:#86868b;margin-top:8px"><i class="ph ph-camera"></i> These values are copied onto the ticket at creation and do not change if the order is edited later.</div>
+  </div>`;
+}
+
+function renderCreate(){
+  const custs = [...new Set(ORDERS.filter(o=>o.status==='CONFIRMED').map(o=>o.customer))];
+  const orders = ORDERS.filter(o=>o.customer===cr.customer);
+  const lines = LINES.filter(l=>l.order===cr.order);
+  const line = LINES.find(l=>l.id===cr.line);
+  const ready = line && (line.scope==='SW' || cr.sn);
+  document.getElementById('modal-root').innerHTML = `
+  <div class="modal-backdrop" onclick="if(event.target===this)closeModal()">
+   <div class="modal-card" style="max-width:62rem;padding:0;overflow:hidden">
+    <div style="display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);max-height:86vh">
+     <div style="padding:26px 28px;overflow-y:auto;border-right:1px solid var(--border-light)">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#1432E6">Service Desk</div>
+      <div style="font-size:20px;font-weight:700;margin-top:2px">New Ticket</div>
+      <div style="font-size:12.5px;color:#86868b;margin-top:2px">Pick what the request is about. Only confirmed orders are eligible.</div>
+
+      <div class="step"><span class="n">1</span>Customer</div>
+      <select class="input-field" onchange="setCr('customer',this.value)">
+        <option value="">Select customer…</option>${custs.map(c=>`<option ${c===cr.customer?'selected':''}>${c}</option>`).join('')}
+      </select>
+      <div class="field-hint" style="margin-top:4px">Grouped by customer name on confirmed orders. Linked to an organization once Organization Management ships.</div>
+
+      <div class="step"><span class="n">2</span>Order</div>
+      ${cr.customer ? orders.map(o=>`<div class="pick ${o.id===cr.order?'sel':''} ${o.status!=='CONFIRMED'?'disabled':''}" onclick="${o.status==='CONFIRMED'?`setCr('order','${o.id}')`:''}" style="margin-bottom:6px">
+          <i class="ph ph-shopping-cart" style="color:#86868b"></i>
+          <div style="flex:1"><div style="font-size:13px;font-weight:600">${o.no}</div><div style="font-size:11.5px;color:#86868b">${o.date} · ${[o.hw&&'HW '+o.hw,o.sw&&'SW '+o.sw].filter(Boolean).join(' · ')}</div></div>
+          ${o.status==='CONFIRMED'?'<span class="badge badge-green">Confirmed</span>':'<span class="badge badge-draft">Draft · not eligible</span>'}
+        </div>`).join('') : '<div style="font-size:12.5px;color:#c7c7cc;padding:8px 0">Select a customer first.</div>'}
+
+      <div class="step"><span class="n">3</span>Order line</div>
+      ${cr.order ? lines.map(l=>`<div class="pick ${l.id===cr.line?'sel':''}" onclick="setCr('line','${l.id}')" style="margin-bottom:6px">
+          <span class="badge ${l.scope==='HW'?'badge-hw':'badge-sw'}">${l.scope}</span>
+          <div style="flex:1"><div style="font-size:13px;font-weight:600">${l.name}</div><div style="font-size:11.5px;color:#86868b">Qty ${l.qty} · SLA ${l.sla} · ${l.scope==='HW'?'warranty to '+l.wEnd:'license to '+l.lEnd}</div></div>
+        </div>`).join('') : '<div style="font-size:12.5px;color:#c7c7cc;padding:8px 0">Select an order first.</div>'}
+
+      ${line && line.scope==='HW' ? `<div class="step"><span class="n">4</span>Serial number</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${line.serials.map(s=>`<button class="pick ${s===cr.sn?'sel':''}" onclick="cr.sn='${s}';renderCreate()" style="padding:6px 12px"><span class="mono" style="background:transparent;padding:0">${s}</span></button>`).join('')}</div>
+        <div class="field-hint" style="margin-top:4px">One unit per ticket. Two units with the same fault are two tickets.</div>` : ''}
+     </div>
+
+     <div style="padding:26px 28px;overflow-y:auto;background:var(--bg-subtle)">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin-bottom:8px">Entitlement</div>
+      ${ready ? entitlementCard(line, cr.sn) : '<div style="border:1px dashed var(--border);border-radius:12px;padding:22px;text-align:center;font-size:12.5px;color:#86868b"><i class="ph ph-shield-check" style="font-size:22px;display:block;margin-bottom:6px"></i>Warranty / license and SLA appear here once a line (and serial) is selected.</div>'}
+
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:20px 0 8px">Request</div>
+      <div class="form-grid-two">
+        <div><label class="field-label">Channel <span class="req">*</span></label>
+          <select class="input-field"><option>Email</option><option>Phone</option><option>Portal form</option><option>On-site</option></select></div>
+        <div><label class="field-label">Priority <span class="req">*</span></label>
+          <select class="input-field"><option>Medium</option><option>High</option><option>Low</option></select></div>
+      </div>
+      <div style="margin-top:12px"><label class="field-label">Category <span class="req">*</span></label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${['Hardware Failure','Software / Model Anomaly','License / Activation','Other'].map((c,i)=>`<button class="filter-tab ${i===0?'active':''}" style="border:1px solid var(--border)">${c}</button>`).join('')}
+        </div></div>
+      <div style="margin-top:12px"><label class="field-label">Subject <span class="req">*</span></label><input class="input-field" placeholder="One line the customer would recognise" value="${line?.scope==='HW'?'GPU node fails POST after firmware update':''}"></div>
+      <div style="margin-top:12px"><label class="field-label">Description <span class="req">*</span></label><textarea class="input-field" placeholder="What happened, when, what was tried"></textarea></div>
+      <div style="margin-top:12px"><label class="field-label">Reported by</label><input class="input-field" placeholder="Customer contact name / email" value="Amy Zhang · amy@megabank.com"></div>
+      <div style="margin-top:12px"><label class="field-label">Attachments</label>
+        <div style="border:1px dashed var(--border);border-radius:10px;padding:12px;text-align:center;font-size:12.5px;color:#86868b"><i class="ph ph-paperclip"></i> Drop screenshots or logs (PNG, JPG, up to 5 MB)</div></div>
+
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:22px">
+        <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn-primary" ${ready?'':'disabled style="opacity:.5"'} onclick="go('detail')"><i class="ph ph-paper-plane-tilt"></i> Create ticket</button>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>`;
+}
+
+function renderDetail(){
+  const l = LINES[0];
+  document.getElementById('modal-root').innerHTML = `
+  <div class="modal-backdrop" onclick="if(event.target===this)closeModal()">
+   <div class="modal-card" style="max-width:68rem;padding:0;overflow:hidden">
+    <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);max-height:88vh">
+     <div style="padding:26px 28px;overflow-y:auto;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px;font-weight:700">TK-0007</span>${b('In progress','badge-orange')}${b('High','badge-red')}<span class="badge badge-red">Overdue</span></div>
+          <div style="font-size:15px;font-weight:600;margin-top:6px">GPU node fails POST after firmware update</div>
+          <div style="font-size:12.5px;color:#86868b;margin-top:2px">MegaBank Corp · opened 2026-09-05 via Email by Amy Zhang · last update 2h ago</div>
+        </div>
+        <button class="btn-ghost" onclick="closeModal()"><i class="ph ph-x"></i></button>
+      </div>
+
+      <div style="margin-top:18px;flex:1">
+        <div class="msg"><div class="av av-c">AZ</div><div><span class="who">Amy Zhang</span><span class="badge badge-zinc" style="margin-left:6px">Customer</span><span class="when">2026-09-05 09:12</span>
+          <div class="body">After applying BIOS F12 the node GBT-2026-0771 stops at POST code 94. Second unit on the same order is fine. Attaching the console photo.</div>
+          <div style="margin-top:6px"><span class="mono"><i class="ph ph-image"></i> post-code-94.jpg</span></div></div></div>
+        <div class="msg internal-note"><div class="av av-i">SR</div><div><span class="who">System Root</span><span class="badge badge-amber" style="margin-left:6px">Internal note</span><span class="when">2026-09-05 10:40</span>
+          <div class="body">Warranty active to 2029-08-04, SLA 7x24. Priority raised to High: production node. Checking with the supplier offline.</div></div></div>
+        <div class="msg"><div class="av av-i">SR</div><div><span class="who">System Root</span><span class="badge badge-zinc" style="margin-left:6px">AISO · reply to customer</span><span class="when">2026-09-06 14:30</span>
+          <div class="body">Please try clearing CMOS and booting with a single DIMM in A1. If POST 94 persists we will arrange an RMA under warranty. Could you confirm the result by end of day?</div></div></div>
+      </div>
+
+      <div style="margin-top:14px;border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:#fff">
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <button class="filter-tab active">Reply to customer</button><button class="filter-tab">Internal note</button>
+        </div>
+        <textarea class="input-field" style="min-height:64px" placeholder="Write a reply…"></textarea>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+          <span style="font-size:12px;color:#86868b"><i class="ph ph-paperclip"></i> Attach</span>
+          <div style="display:flex;gap:8px"><button class="btn-secondary text-xs">Send & mark awaiting customer</button><button class="btn-primary text-xs"><i class="ph ph-paper-plane-tilt"></i> Send</button></div>
+        </div>
+      </div>
+     </div>
+
+     <div style="padding:26px 24px;overflow-y:auto;background:var(--bg-subtle);border-left:1px solid var(--border-light)">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin-bottom:8px">Status</div>
+      <select class="input-field"><option>Open</option><option selected>In progress</option><option>Awaiting customer info</option><option>Resolved</option><option>Closed</option></select>
+      <div style="margin-top:14px">
+        <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#86868b;margin-bottom:4px"><span>Handled by</span><b>AISO Service Desk</b></div>
+        <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#86868b;margin-bottom:4px"><span>First response · 24h target (SLA 7x24)</span><b style="color:#dc2626">28h · overdue</b></div>
+        <div class="sla-bar"><i style="width:100%;background:#ef4444"></i></div>
+      </div>
+
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:20px 0 8px">Entitlement snapshot</div>
+      ${entitlementCard(l,'GBT-2026-0771')}
+
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:20px 0 8px">Order</div>
+      <div class="kv"><span>Order</span><span><a href="#" onclick="go('order');return false" style="color:#1432E6;font-weight:600">PO-2026-0001</a></span></div>
+      <div class="kv"><span>Line</span><span>1 · HW · GIGABYTE Workstation</span></div>
+      <div class="kv"><span>Serial</span><span class="mono">GBT-2026-0771</span></div>
+      <div class="kv"><span>BOM</span><span>Xeon 60C · 2× Pro6000 96GB · 8× 64GB · 2× X200 7.68TB</span></div>
+      <div class="kv"><span>Category</span><span>Hardware Failure</span></div>
+
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:20px 0 8px">Other tickets on this order</div>
+      <div style="font-size:12.5px"><div style="padding:6px 0;display:flex;justify-content:space-between"><span>TK-0006 · License activation error</span>${b('Awaiting','badge-amber')}</div>
+      <div style="padding:6px 0;display:flex;justify-content:space-between"><span>TK-0005 · Fan noise on unit 2</span>${b('Open','badge-blue')}</div></div>
+     </div>
+    </div>
+   </div>
+  </div>`;
+}
+renderList();
+</script>
+</body>
+</html>

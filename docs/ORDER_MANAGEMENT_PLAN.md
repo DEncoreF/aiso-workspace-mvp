@@ -39,10 +39,15 @@
   hw_supplier_org_id: null,
   sw_supplier_name: 'TPIsoftware Corporation', // free key-in；有 SW 行時必填
   sw_supplier_org_id: null,
+  si_name: 'Systex Corporation',   // free key-in；選填。系統整合商（負責交付/安裝），2026-09-08 新增
+  si_org_id: null,
   sales_contact: 'Ivy Chen',       // 選填
   order_date: '2026-08-15',
   status: 'DRAFT',                 // DRAFT | CONFIRMED | CANCELLED
   notes: '',
+  attachments: [],                 // 文件上傳空間（PO 掃描、合約等），2026-09-15 新增
+  // 複用 Service Desk 的附件讀取/驗證機制（js/app.js readTicketAttachments）：
+  // 最多 5 檔，圖片 5MB / 其他檔案 500KB，型別限 PNG/JPG/PDF/TXT/LOG/CSV/JSON。
   created_at: '', updated_at: '',
 }
 
@@ -81,7 +86,7 @@ revision / SUPERSEDED 機制不做——prototype 直接編輯即可，等有後
 ## UI 範圍（一個 nav 項目：Orders）
 
 1. **清單頁**：訂單號、客戶、供應商（HW/SW 各自帶 badge 顯示）、日期、行數、狀態；
-   搜尋比對 order_no / customer_name / hw_supplier_name / sw_supplier_name。
+   搜尋比對 order_no / customer_name / hw_supplier_name / sw_supplier_name / si_name。
 2. **建立/編輯 modal**：表頭欄位 + 行項目卡片（新增/刪除行、產品 picker、qty、
    序號欄位隨 qty 連動增減、HW 行的 BOM 編輯表格）。
 3. **詳情 drawer**：比照現行產品詳情的呈現方式。

@@ -2,50 +2,122 @@
 // DATA
 // ═══════════════════════════════════════════════════════════════════
 
-const SUPER_ADMIN_USER = {
-    role: 'SUPER_ADMIN',
-    name: 'System Root',
-    email: 'root@aiso.com',
-    label: 'Super Admin',
-    avatar: 'SA',
-    permissions: ['*'],
-};
 const DEMO_LOGIN = { email: 'root@aiso.com', password: 'aiso1234' };
 
-const ORGS = [
-    { id: 'v-aiso', name: 'AISO', type: 'vendor', vendor_type: 'hardware', status: 'active',
-      members: [
-        { id: 'm0', name: 'System Root', email: 'root@aiso.com', org_role: 'OA', status: 'active' },
-      ]
+// ── Organization Management (docs/ORG_MANAGEMENT_PLAN.md) ──
+// Three tables replace the old embedded ORGS[].members, because one account
+// can belong to several organizations:  USERS ──< ROLE_BINDINGS >── ROLES ── ORGS.
+// Permissions live on roles only; an account carries none of its own.
+
+const ORG_TYPES = ['OPERATOR', 'VENDOR', 'CUSTOMER'];
+const VENDOR_TYPES = ['SOFTWARE', 'HARDWARE', 'SI'];
+// A customer is either one person or a company. The split is real, not a
+// label: an individual customer IS the account, so it has no members or
+// roles to manage — see CUSTOMER_TYPE_CAPABILITIES.
+const CUSTOMER_TYPES = ['INDIVIDUAL', 'ENTERPRISE'];
+// This round builds operator and customer orgs only. Vendor orgs stay as data
+// (getMatchingVendorId still reads them) but cannot be managed, hold roles or
+// sign in until VENDOR is added here.
+const ENABLED_ORG_TYPES = ['OPERATOR', 'CUSTOMER'];
+
+const PERMISSION_MODULES = [
+    { key: 'sw_product',    label: 'Software Products' },
+    { key: 'hw_product',    label: 'Hardware Products' },
+    { key: 'compatibility', label: 'Compatibility' },
+    { key: 'parameter',     label: 'Parameter Center' },
+    { key: 'order',         label: 'Orders' },
+    { key: 'ticket',        label: 'Service Desk' },
+    { key: 'asset',         label: 'Asset Registry' },
+    { key: 'organization',  label: 'Organizations' },
+    { key: 'activity_log',  label: 'Activity Log' },
+];
+const PERMISSION_ACTIONS = ['c', 'r', 'u', 'd'];
+
+// Layer 1 — the ceiling per org type: the most a role in that org may be
+// granted. Roles are user-built, so without this a customer admin could grant
+// their own role Parameter Center access. Cells outside it are disabled in the
+// role editor and stripped on save. Customer grants apply to their own data
+// only; the scoping lives with each module, not here.
+const ORG_TYPE_CAPABILITIES = {
+    OPERATOR: {
+        sw_product: 'crud', hw_product: 'crud', compatibility: 'cru', parameter: 'crud',
+        order: 'crud', ticket: 'cru', asset: 'crud', organization: 'crud', activity_log: 'r',
     },
-    { id: 'v-phison', name: 'Phison Electronics', type: 'vendor', vendor_type: 'hardware', status: 'active',
-      members: [
-        { id: 'm1', name: 'James Chen', email: 'james@phison.com', org_role: 'OA', status: 'active' },
-        { id: 'm2', name: 'Kevin Wu', email: 'kevin@phison.com', org_role: 'CM', status: 'active' },
-      ]
+    // CUSTOMER resolves through CUSTOMER_TYPE_CAPABILITIES below.
+    VENDOR: {}, // deferred — see the plan's Deferred section
+};
+
+// Enterprise customers run their own members and roles; an individual customer
+// is a single person, so nothing about organization management applies.
+const CUSTOMER_TYPE_CAPABILITIES = {
+    ENTERPRISE: {
+        order: 'r', ticket: 'cru', asset: 'ru', organization: 'crud', activity_log: 'r',
     },
-    { id: 'v-tpi', name: 'TPIsoftware Corporation', type: 'vendor', vendor_type: 'software', status: 'active',
-      members: [
-        { id: 'm3', name: 'David Lin', email: 'david@tpisoftware.com', org_role: 'OA', status: 'active' },
-        { id: 'm4', name: 'Grace Lee', email: 'grace@tpisoftware.com', org_role: 'CM', status: 'active' },
-      ]
+    INDIVIDUAL: {
+        order: 'r', ticket: 'cru', asset: 'ru', activity_log: 'r',
     },
-    { id: 'v-kdan', name: 'KDAN', type: 'vendor', vendor_type: 'software', status: 'active',
-      members: [
-        { id: 'm5', name: 'Eric Wang', email: 'eric@kdan.com', org_role: 'OA', status: 'active' },
-      ]
-    },
-    { id: 'c-megabank', name: 'MegaBank Corp', type: 'customer', vendor_type: null, status: 'active',
-      members: [
-        { id: 'm6', name: 'Tom Baker', email: 'tom@megabank.com', org_role: 'OA', status: 'active' },
-        { id: 'm7', name: 'Amy Zhang', email: 'amy@megabank.com', org_role: 'CM', status: 'active' },
-      ]
-    },
-    { id: 'c-govcloud', name: 'GovCloud Agency', type: 'customer', vendor_type: null, status: 'active',
-      members: [
-        { id: 'm8', name: 'Robert Kim', email: 'robert@govcloud.gov', org_role: 'OA', status: 'active' },
-      ]
-    },
+};
+
+let ORGS = [
+    { id: 'v-aiso', customer_type: null, name: 'AISO', types: ['OPERATOR', 'VENDOR'], vendor_type: 'HARDWARE', status: 'active',
+      contact_email: 'service.desk@aiso.com', note: '', created_at: '2025-01-01T00:00:00.000Z', updated_at: '2025-01-01T00:00:00.000Z' },
+    { id: 'v-phison', customer_type: null, name: 'Phison Electronics', types: ['VENDOR'], vendor_type: 'HARDWARE', status: 'active',
+      contact_email: '', note: '', created_at: '2025-01-01T00:00:00.000Z', updated_at: '2025-01-01T00:00:00.000Z' },
+    { id: 'v-tpi', customer_type: null, name: 'TPIsoftware Corporation', types: ['VENDOR'], vendor_type: 'SOFTWARE', status: 'active',
+      contact_email: '', note: '', created_at: '2025-01-01T00:00:00.000Z', updated_at: '2025-01-01T00:00:00.000Z' },
+    { id: 'v-kdan', customer_type: null, name: 'KDAN', types: ['VENDOR'], vendor_type: 'SOFTWARE', status: 'active',
+      contact_email: '', note: '', created_at: '2025-01-01T00:00:00.000Z', updated_at: '2025-01-01T00:00:00.000Z' },
+    { id: 'c-megabank', name: 'MegaBank Corp', types: ['CUSTOMER'], vendor_type: null, customer_type: 'ENTERPRISE', status: 'active',
+      contact_email: 'tom@megabank.com', note: '', created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
+    { id: 'c-govcloud', name: 'GovCloud Agency', types: ['CUSTOMER'], vendor_type: null, customer_type: 'ENTERPRISE', status: 'active',
+      contact_email: 'robert@govcloud.gov', note: '', created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
+    // One person who bought directly: no members, no roles to manage.
+    { id: 'c-weiting', name: 'Wei-Ting Chen', types: ['CUSTOMER'], vendor_type: null, customer_type: 'INDIVIDUAL', status: 'active',
+      contact_email: 'weiting.chen@gmail.com', note: 'Direct purchase, single seat.', created_at: '2026-05-04T00:00:00.000Z', updated_at: '2026-05-04T00:00:00.000Z' },
+];
+
+let USERS = [
+    // The Super Admin is a system account: no membership, no organization.
+    { id: 'u-root', name: 'System Root', email: 'root@aiso.com', status: 'active', is_super_admin: true,
+      created_at: '2025-01-01T00:00:00.000Z', updated_at: '2025-01-01T00:00:00.000Z' },
+    { id: 'u-tom', name: 'Tom Baker', email: 'tom@megabank.com', status: 'active', is_super_admin: false,
+      created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
+    { id: 'u-amy', name: 'Amy Zhang', email: 'amy@megabank.com', status: 'active', is_super_admin: false,
+      created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
+    { id: 'u-robert', name: 'Robert Kim', email: 'robert@govcloud.gov', status: 'active', is_super_admin: false,
+      created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
+    { id: 'u-weiting', name: 'Wei-Ting Chen', email: 'weiting.chen@gmail.com', status: 'active', is_super_admin: false,
+      created_at: '2026-05-04T00:00:00.000Z', updated_at: '2026-05-04T00:00:00.000Z' },
+];
+
+// AISO holds no seeded roles on purpose: operator roles are built in the UI.
+// The customer Admin / Member pair replaces the old OA / CM org_role values.
+const CUSTOMER_ADMIN_PERMISSIONS = ['order.r', 'ticket.c', 'ticket.r', 'ticket.u', 'asset.r', 'asset.u',
+    'organization.c', 'organization.r', 'organization.u', 'organization.d', 'activity_log.r'];
+const CUSTOMER_MEMBER_PERMISSIONS = ['order.r', 'ticket.c', 'ticket.r', 'ticket.u', 'asset.r'];
+
+let ROLES = [
+    { id: 'r-mb-admin', org_id: 'c-megabank', name: 'Admin', description: 'Manages MegaBank members and roles.',
+      permissions: [...CUSTOMER_ADMIN_PERMISSIONS], created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
+    { id: 'r-mb-member', org_id: 'c-megabank', name: 'Member', description: 'Reads orders and raises tickets.',
+      permissions: [...CUSTOMER_MEMBER_PERMISSIONS], created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
+    { id: 'r-gc-admin', org_id: 'c-govcloud', name: 'Admin', description: 'Manages GovCloud members and roles.',
+      permissions: [...CUSTOMER_ADMIN_PERMISSIONS], created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
+    { id: 'r-gc-member', org_id: 'c-govcloud', name: 'Member', description: 'Reads orders and raises tickets.',
+      permissions: [...CUSTOMER_MEMBER_PERMISSIONS], created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
+    // An individual customer gets exactly one role, created with the org.
+    { id: 'r-wt-owner', org_id: 'c-weiting', name: 'Owner', description: 'The individual customer themselves.',
+      permissions: [...CUSTOMER_MEMBER_PERMISSIONS], created_at: '2026-05-04T00:00:00.000Z', updated_at: '2026-05-04T00:00:00.000Z' },
+];
+
+// One row per account × role. Robert holds roles in two organizations to demo
+// the one-to-many binding and the role switcher.
+let ROLE_BINDINGS = [
+    { id: 'rb-0001', user_id: 'u-tom',    role_id: 'r-mb-admin',  status: 'active', created_at: '2025-06-01T00:00:00.000Z' },
+    { id: 'rb-0002', user_id: 'u-amy',    role_id: 'r-mb-member', status: 'active', created_at: '2025-06-01T00:00:00.000Z' },
+    { id: 'rb-0003', user_id: 'u-robert', role_id: 'r-gc-admin',  status: 'active', created_at: '2025-06-01T00:00:00.000Z' },
+    { id: 'rb-0004', user_id: 'u-robert', role_id: 'r-mb-member', status: 'active', created_at: '2025-06-01T00:00:00.000Z' },
+    { id: 'rb-0005', user_id: 'u-weiting', role_id: 'r-wt-owner', status: 'active', created_at: '2026-05-04T00:00:00.000Z' },
 ];
 
 let PRODUCTS = [
@@ -422,6 +494,8 @@ let ASSETS = [
 // the *_org_id columns stay null until Organization Management ships,
 // then get backfilled by name matching. HW and SW suppliers are separate
 // header fields because one order often mixes both from different vendors.
+// The system integrator (SI) is a third, optional party: the company that
+// delivers and installs on site, which is often neither supplier.
 // ═══════════════════════════════════════════════════════════════════
 
 let ORDERS = [
@@ -432,10 +506,13 @@ let ORDERS = [
         customer_name: 'MegaBank Corp', customer_org_id: null,
         hw_supplier_name: 'Phison Electronics', hw_supplier_org_id: null,
         sw_supplier_name: 'TPIsoftware Corporation', sw_supplier_org_id: null,
+        si_name: 'Systex Corporation', si_org_id: null,
         sales_contact: 'Ivy Chen',
         order_date: '2026-07-30',
         status: 'CONFIRMED', // DRAFT | CONFIRMED | CANCELLED
         notes: '',
+        attachments: [{ id: 'att-seed-ord-0001', name: 'PO-2026-0001-signed.txt', type: 'text/plain', size: 42, is_image: false,
+            data_url: 'data:text/plain;base64,UE8tMjAyNi0wMDAxIC0gc2lnbmVkIHB1cmNoYXNlIG9yZGVyIChkZW1vKQ==' }],
         created_at: '2026-07-30T09:00:00.000Z', updated_at: '2026-08-02T10:00:00.000Z',
     },
     {
@@ -445,11 +522,41 @@ let ORDERS = [
         customer_name: 'GovCloud Agency', customer_org_id: null,
         hw_supplier_name: 'Phison Electronics', hw_supplier_org_id: null,
         sw_supplier_name: '', sw_supplier_org_id: null,
+        si_name: '', si_org_id: null,
         sales_contact: '',
         order_date: '2026-08-15',
         status: 'DRAFT',
         notes: 'Awaiting final GPU allocation.',
+        attachments: [],
         created_at: '2026-08-15T09:00:00.000Z', updated_at: '2026-08-15T09:00:00.000Z',
+    },
+    {
+        id: 'ord-0003',
+        order_no: 'PO-2025-0031',
+        contract_no: 'CTR-2025-0031',
+        customer_name: 'GovCloud Agency', customer_org_id: null,
+        hw_supplier_name: 'AISO', hw_supplier_org_id: null,
+        sw_supplier_name: '', sw_supplier_org_id: null,
+        si_name: '', si_org_id: null,
+        sales_contact: 'Ivy Chen',
+        order_date: '2025-09-01',
+        status: 'CONFIRMED',
+        notes: '',
+        attachments: [],
+        created_at: '2025-09-01T09:00:00.000Z', updated_at: '2025-09-10T10:00:00.000Z',
+    },
+    {
+        id: 'ord-0004', order_no: 'PO-2026-0004', contract_no: '',
+        customer_name: 'Wei-Ting Chen', customer_org_id: null,
+        hw_supplier_name: '', hw_supplier_org_id: null,
+        sw_supplier_name: 'TPIsoftware Corporation', sw_supplier_org_id: null,
+        si_name: '', si_org_id: null,
+        sales_contact: 'Ivy Chen',
+        order_date: '2026-05-04',
+        status: 'CONFIRMED',
+        notes: 'Single-seat purchase by an individual customer.',
+        attachments: [],
+        created_at: '2026-05-04T09:00:00.000Z', updated_at: '2026-05-04T09:00:00.000Z',
     },
 ];
 
@@ -463,6 +570,7 @@ let ORDER_LINES = [
     {
         id: 'ol-0001', order_id: 'ord-0001', line_no: 1, scope: 'HW',
         product_id: 'hw1', product_name: 'GIGABYTE Workstation', qty: 2, sla_plan: '7x24',
+        warranty_months: 36, warranty_start: '2026-08-05', warranty_end: '2029-08-04',
         license_keys: [], version: '', license_start: '', license_end: '',
         serial_nos: ['GBT-2026-0771', 'GBT-2026-0772'],
         bom: [
@@ -484,25 +592,161 @@ let ORDER_LINES = [
     {
         id: 'ol-0003', order_id: 'ord-0002', line_no: 1, scope: 'HW',
         product_id: 'hw2', product_name: 'Gigacomputing 4U Server (4x GPU)', qty: 1, sla_plan: '',
+        warranty_months: null, warranty_start: '', warranty_end: '',
         serial_nos: [''],
         bom: [
             { component_type: 'GPU', brand: 'NVIDIA', model: 'Pro6000 Blackwell 96GB', qty: 4 },
         ],
         notes: '',
     },
+    {
+        id: 'ol-0004', order_id: 'ord-0003', line_no: 1, scope: 'HW',
+        product_id: 'hw-aiso1', product_name: 'AISO1 AI Agent Workstation', qty: 1, sla_plan: '5x8',
+        warranty_months: 12, warranty_start: '2025-09-10', warranty_end: '2026-09-09',
+        license_keys: [], version: '', license_start: '', license_end: '',
+        serial_nos: ['AISO1-2025-0442'],
+        bom: [
+            { component_type: 'GPU', brand: 'NVIDIA', model: 'RTX 6000 Ada 48GB', qty: 1 },
+            { component_type: 'Storage', brand: 'Phison', model: 'X200 NVMe 3840GB', qty: 1 },
+        ],
+        notes: '',
+    },
+    {
+        id: 'ol-0005', order_id: 'ord-0004', line_no: 1, scope: 'SW',
+        product_id: null, product_name: 'digiRunner Lite', qty: 1, sla_plan: '5x8',
+        warranty_months: null, warranty_start: '', warranty_end: '',
+        license_keys: ['DGRL-7722-QW18-MK04'], version: '3.8.2', license_start: '2026-05-04', license_end: '2027-05-03',
+        serial_nos: [],
+        bom: [],
+        notes: '',
+    },
 ];
 
+// ═══════════════════════════════════════════════════════════════════
+// TICKETS — after-sales requests. AISO is the single service window, so
+// there is no vendor assignment. A ticket is anchored to one order line
+// (and, for hardware, one serial). Everything the desk needs to read the
+// ticket is copied into `snapshot` at creation, so editing or cancelling
+// the order later never rewrites history and rendering needs no join.
+// ═══════════════════════════════════════════════════════════════════
+
+const TICKET_STATUSES = ['OPEN', 'IN_PROGRESS', 'AWAITING_CUSTOMER_INFO', 'RESOLVED', 'CLOSED'];
+const TICKET_PRIORITIES = ['HIGH', 'MEDIUM', 'LOW'];
+const TICKET_CATEGORIES = ['Hardware Failure', 'Software / Model Anomaly', 'License / Activation', 'Other'];
+const TICKET_CHANNELS = ['Email', 'Phone', 'Portal form', 'On-site'];
+// Who the desk is waiting on while a ticket sits In progress. Desk-only:
+// the customer keeps seeing the public status, because AISO stays the single
+// window and which supplier is holding things up is not their business.
+const TICKET_INTERNAL_STATES = ['NONE', 'HW_SUPPLIER', 'SW_SUPPLIER', 'SI', 'AISO_INTERNAL'];
+const TICKET_INTERNAL_STATE_LABEL = {
+    NONE: 'With the desk',
+    HW_SUPPLIER: 'With HW supplier',
+    SW_SUPPLIER: 'With SW supplier',
+    SI: 'With system integrator',
+    AISO_INTERNAL: 'AISO internal work',
+};
+// Hours AISO has to post its first reply, by the line's SLA plan.
+const TICKET_FIRST_RESPONSE_HOURS = { '7x24': 4, 'On-site': 8, '5x8': 24 };
+const TICKET_FIRST_RESPONSE_DEFAULT_HOURS = 24;
+
+let TICKETS = [
+    {
+        id: 'tk-0001', ticket_no: 'TK-0001',
+        customer_name: 'MegaBank Corp', customer_org_id: null,
+        order_id: 'ord-0001', order_line_id: 'ol-0001', serial_no: 'GBT-2026-0771', scope: 'HW',
+        subject: 'GPU node fails POST after firmware update',
+        description: 'After applying BIOS F12 the node stops at POST code 94. The second unit on the same order is fine.',
+        category: 'Hardware Failure', priority: 'HIGH', status: 'IN_PROGRESS',
+        internal_state: 'HW_SUPPLIER', internal_party: 'Phison Electronics',
+        internal_since: '2026-08-21T02:10:00.000Z', internal_note: 'RMA raised, waiting on their diagnosis.',
+        channel: 'Email', reported_by: 'Amy Zhang · amy@megabank.com',
+        snapshot: { order_no: 'PO-2026-0001', line_no: 1, product_name: 'GIGABYTE Workstation', sla_plan: '7x24',
+                    coverage_kind: 'warranty', coverage_end: '2029-08-04', supplier_name: 'Phison Electronics', si_name: 'Systex Corporation', license_key: '' },
+        created_at: '2026-09-05T01:12:00.000Z', updated_at: '2026-09-06T06:30:00.000Z',
+        first_response_at: '2026-09-05T02:40:00.000Z', resolved_at: null,
+    },
+    {
+        id: 'tk-0002', ticket_no: 'TK-0002',
+        customer_name: 'MegaBank Corp', customer_org_id: null,
+        order_id: 'ord-0001', order_line_id: 'ol-0002', serial_no: '', scope: 'SW',
+        subject: 'digiRunner license activation error 0x41',
+        description: 'Activation fails with error 0x41 on the second node after the cluster was re-imaged.',
+        category: 'License / Activation', priority: 'MEDIUM', status: 'AWAITING_CUSTOMER_INFO',
+        channel: 'Portal form', reported_by: 'Tom Baker · tom@megabank.com',
+        snapshot: { order_no: 'PO-2026-0001', line_no: 2, product_name: 'digiRunner', sla_plan: '5x8',
+                    coverage_kind: 'license', coverage_end: '2027-07-31', supplier_name: 'TPIsoftware Corporation', si_name: 'Systex Corporation', license_key: 'DGRN-4A7K-92MF-XT01' },
+        created_at: '2026-09-04T03:20:00.000Z', updated_at: '2026-09-07T01:05:00.000Z',
+        first_response_at: '2026-09-04T05:10:00.000Z', resolved_at: null,
+    },
+    {
+        id: 'tk-0003', ticket_no: 'TK-0003',
+        customer_name: 'MegaBank Corp', customer_org_id: null,
+        order_id: 'ord-0001', order_line_id: 'ol-0001', serial_no: 'GBT-2026-0772', scope: 'HW',
+        subject: 'Fan noise on unit 2 under sustained load',
+        description: 'Audible fan surge every few minutes when all GPUs are busy. No thermal throttling observed.',
+        category: 'Hardware Failure', priority: 'LOW', status: 'OPEN',
+        channel: 'Phone', reported_by: 'Amy Zhang · amy@megabank.com',
+        snapshot: { order_no: 'PO-2026-0001', line_no: 1, product_name: 'GIGABYTE Workstation', sla_plan: '7x24',
+                    coverage_kind: 'warranty', coverage_end: '2029-08-04', supplier_name: 'Phison Electronics', si_name: 'Systex Corporation', license_key: '' },
+        created_at: '2026-09-07T08:00:00.000Z', updated_at: '2026-09-07T08:00:00.000Z',
+        first_response_at: null, resolved_at: null,
+    },
+    {
+        id: 'tk-0004', ticket_no: 'TK-0004',
+        customer_name: 'GovCloud Agency', customer_org_id: null,
+        order_id: 'ord-0003', order_line_id: 'ol-0004', serial_no: 'AISO1-2025-0442', scope: 'HW',
+        subject: 'Request on-site check before warranty expiry',
+        description: 'Warranty ends 2026-09-09. Please schedule a health check and confirm extension options.',
+        category: 'Other', priority: 'MEDIUM', status: 'RESOLVED',
+        channel: 'Email', reported_by: 'Robert Kim · robert@govcloud.gov',
+        snapshot: { order_no: 'PO-2025-0031', line_no: 1, product_name: 'AISO1 AI Agent Workstation', sla_plan: '5x8',
+                    coverage_kind: 'warranty', coverage_end: '2026-09-09', supplier_name: 'AISO', si_name: '', license_key: '' },
+        created_at: '2026-08-28T02:00:00.000Z', updated_at: '2026-09-02T07:45:00.000Z',
+        first_response_at: '2026-08-28T06:30:00.000Z', resolved_at: '2026-09-02T07:45:00.000Z',
+    },
+];
+
+// author_type: CUSTOMER | INTERNAL. is_internal marks a desk-only note that
+// the customer never sees.
+let TICKET_MESSAGES = [
+    { id: 'tm-0001', ticket_id: 'tk-0001', author_type: 'CUSTOMER', author_name: 'Amy Zhang', is_internal: false, created_at: '2026-09-05T01:12:00.000Z',
+      body: 'After applying BIOS F12 the node GBT-2026-0771 stops at POST code 94. Second unit on the same order is fine. Console photo attached.',
+      attachments: [{ id: 'att-seed-0001', name: 'console-photo.png', type: 'image/svg+xml', size: 18240, is_image: true,
+                      data_url: "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='400'%3E%3Crect width='640' height='400' fill='%230b0f1a'/%3E%3Ctext x='32' y='70' font-family='Menlo,monospace' font-size='22' fill='%234ade80'%3EAISO BIOS F12  -  GIGABYTE Workstation%3C/text%3E%3Ctext x='32' y='120' font-family='Menlo,monospace' font-size='18' fill='%23e5e7eb'%3ESerial: GBT-2026-0771%3C/text%3E%3Ctext x='32' y='200' font-family='Menlo,monospace' font-size='64' fill='%23f87171'%3EPOST 94%3C/text%3E%3Ctext x='32' y='250' font-family='Menlo,monospace' font-size='18' fill='%239ca3af'%3EPCI bus enumeration halted%3C/text%3E%3Ctext x='32' y='350' font-family='Menlo,monospace' font-size='14' fill='%236b7280'%3Econsole-photo.png (seed placeholder)%3C/text%3E%3C/svg%3E" }] },
+    { id: 'tm-0002', ticket_id: 'tk-0001', author_type: 'INTERNAL', author_name: 'System Root', is_internal: true, created_at: '2026-09-05T02:40:00.000Z',
+      body: 'Warranty active to 2029-08-04, SLA 7x24. Priority raised to High: production node. Checking with the supplier offline.' },
+    { id: 'tm-0003', ticket_id: 'tk-0001', author_type: 'INTERNAL', author_name: 'System Root', is_internal: false, created_at: '2026-09-06T06:30:00.000Z',
+      body: 'Please try clearing CMOS and booting with a single DIMM in A1. If POST 94 persists we will arrange an RMA under warranty. Could you confirm the result by end of day?' },
+    { id: 'tm-0004', ticket_id: 'tk-0002', author_type: 'CUSTOMER', author_name: 'Tom Baker', is_internal: false, created_at: '2026-09-04T03:20:00.000Z',
+      body: 'Activation fails with error 0x41 on the second node after we re-imaged the cluster.' },
+    { id: 'tm-0005', ticket_id: 'tk-0002', author_type: 'INTERNAL', author_name: 'System Root', is_internal: false, created_at: '2026-09-04T05:10:00.000Z',
+      body: 'Error 0x41 means the key is bound to the previous machine fingerprint. Please send the new node ID from the About page so we can rebind the key.' },
+    { id: 'tm-0006', ticket_id: 'tk-0003', author_type: 'CUSTOMER', author_name: 'Amy Zhang', is_internal: false, created_at: '2026-09-07T08:00:00.000Z',
+      body: 'Audible fan surge every few minutes when all GPUs are busy. No thermal throttling observed. Logged by phone.' },
+    { id: 'tm-0007', ticket_id: 'tk-0004', author_type: 'CUSTOMER', author_name: 'Robert Kim', is_internal: false, created_at: '2026-08-28T02:00:00.000Z',
+      body: 'Warranty ends 2026-09-09. Please schedule a health check and confirm extension options.' },
+    { id: 'tm-0008', ticket_id: 'tk-0004', author_type: 'INTERNAL', author_name: 'System Root', is_internal: false, created_at: '2026-08-28T06:30:00.000Z',
+      body: 'Booked the on-site check for 2026-09-01 09:00. An extension quote will follow the visit.' },
+    { id: 'tm-0009', ticket_id: 'tk-0004', author_type: 'INTERNAL', author_name: 'System Root', is_internal: false, created_at: '2026-09-02T07:45:00.000Z',
+      body: 'Health check completed, no faults found. Extension quote sent to Robert by email. Marking resolved.' },
+];
+
+// Each item shows when the acting role holds its read grant (Settings is the
+// user's own profile and always shows). Grants decide the nav, not a
+// customer/desk flag: a customer role simply holds no product grants.
 const NAV_ITEMS = [
-    { key: 'sw-products', icon: 'ph-app-window', label: 'Software Products' },
-    { key: 'hw-products', icon: 'ph-hard-drives', label: 'Hardware Products' },
-    { key: 'orders', icon: 'ph-shopping-cart', label: 'Orders' },
+    { key: 'sw-products', icon: 'ph-app-window', label: 'Software Products', permission: 'sw_product.r' },
+    { key: 'hw-products', icon: 'ph-hard-drives', label: 'Hardware Products', permission: 'hw_product.r' },
+    { key: 'orders', icon: 'ph-shopping-cart', label: 'Orders', permission: 'order.r' },
+    { key: 'service-desk', icon: 'ph-headset', label: 'Service Desk', permission: 'ticket.r' },
+    { key: 'organizations', icon: 'ph-buildings', label: 'Organizations', permission: 'organization.r' },
     // Asset Registry (product registration) is hidden for now: the MVP4 plan
     // builds Order Management first, then Organization Management. Restore by
     // uncommenting this entry — the view and its code are untouched.
-    // { key: 'assets', icon: 'ph-barcode', label: 'Asset Registry', permission: 'asset.read' },
-    { key: 'compatibility', icon: 'ph-arrows-left-right', label: 'Compatibility', permission: 'compatibility.read' },
-    { key: 'param-center', icon: 'ph-sliders', label: 'Parameter Center' },
-    { key: 'activity-log', icon: 'ph-clock-counter-clockwise', label: 'Activity Log' },
+    // { key: 'assets', icon: 'ph-barcode', label: 'Asset Registry', permission: 'asset.r' },
+    { key: 'compatibility', icon: 'ph-arrows-left-right', label: 'Compatibility', permission: 'compatibility.r' },
+    { key: 'param-center', icon: 'ph-sliders', label: 'Parameter Center', permission: 'parameter.r' },
+    { key: 'activity-log', icon: 'ph-clock-counter-clockwise', label: 'Activity Log', permission: 'activity_log.r' },
     { key: 'settings', icon: 'ph-gear', label: 'Settings' },
 ];
 

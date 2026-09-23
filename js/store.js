@@ -1,15 +1,19 @@
 // ═══════════════════════════════════════════════════════════════════
 // STORE — localStorage persistence layer
 // Load order: seed-data.js → store.js → app.js
-// Persisted state: PRODUCTS, ASSETS, ACTIVITY_LOG, HARDWARE_PRODUCT_TYPES,
+// Persisted state: PRODUCTS, ASSETS, ORDERS, ORDER_LINES, TICKETS,
+//                  TICKET_MESSAGES, ORGS, USERS, ROLES, ROLE_BINDINGS,
+//                  ACTIVITY_LOG, HARDWARE_PRODUCT_TYPES,
 //                  SOFTWARE_CATEGORY_OPTIONS, SOFTWARE_INDUSTRY_OPTIONS
 // ═══════════════════════════════════════════════════════════════════
 
 const Store = (function () {
     // v4 uses a separate key so it never reads or overwrites v3 prototype data.
     const KEY = 'aiso-portal-v4-mvp';
-    // v4.3: order lines gained sla_plan.
-    const VERSION = 6;
+    // v4.4: HW order lines gained warranty term and period.
+    // v4.5: Organization Management — ORGS reshaped (types[], members moved
+    //       out) and persisted, plus USERS / ROLES / ROLE_BINDINGS.
+    const VERSION = 8;
     const IMG_MAX_WIDTH = 800;
     const IMG_JPEG_QUALITY = 0.8;
 
@@ -22,6 +26,12 @@ const Store = (function () {
             ASSETS,
             ORDERS,
             ORDER_LINES,
+            TICKETS,
+            TICKET_MESSAGES,
+            ORGS,
+            USERS,
+            ROLES,
+            ROLE_BINDINGS,
             ACTIVITY_LOG,
             HARDWARE_PRODUCT_TYPES,
             SOFTWARE_CATEGORY_OPTIONS,
@@ -104,6 +114,14 @@ const Store = (function () {
         if (Array.isArray(data.ASSETS)) ASSETS = data.ASSETS;
         if (Array.isArray(data.ORDERS)) ORDERS = data.ORDERS;
         if (Array.isArray(data.ORDER_LINES)) ORDER_LINES = data.ORDER_LINES;
+        // Saves written before the Service Desk shipped have no ticket arrays;
+        // they keep the seed tickets rather than forcing a schema reset.
+        if (Array.isArray(data.TICKETS)) TICKETS = data.TICKETS;
+        if (Array.isArray(data.TICKET_MESSAGES)) TICKET_MESSAGES = data.TICKET_MESSAGES;
+        if (Array.isArray(data.ORGS)) ORGS = data.ORGS;
+        if (Array.isArray(data.USERS)) USERS = data.USERS;
+        if (Array.isArray(data.ROLES)) ROLES = data.ROLES;
+        if (Array.isArray(data.ROLE_BINDINGS)) ROLE_BINDINGS = data.ROLE_BINDINGS;
 
         if (Array.isArray(data.ACTIVITY_LOG)) {
             if (data.mockDataVersion !== MOCK_DATA_VERSION) {
