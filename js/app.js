@@ -945,13 +945,14 @@ function navigate(key) {
     else if (key === 'hw-products') renderHwProducts();
     else if (key === 'orders') renderOrders();
     else if (key === 'service-desk') renderServiceDesk();
-    if (key !== 'service-desk') renderNotificationBell();
     else if (key === 'assets') renderAssets();
     else if (key === 'organizations') renderOrganizations();
     else if (key === 'compatibility') renderCompatibilityCenter();
     else if (key === 'param-center') renderParamCenter();
     else if (key === 'activity-log') renderActivityLog();
     else if (key === 'settings') renderSettings();
+    // The bell sits in the shared header; Service Desk refreshes it itself.
+    if (key !== 'service-desk') renderNotificationBell();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -8122,8 +8123,12 @@ function showTicketDetail(id) {
     const others = getOrderTickets(t.order_id).filter(x => x.id !== t.id);
     const closed = t.status === 'CLOSED';
     if (!manage) ticketReplyMode = 'reply';
-    // Reply text and pending files survive re-renders of this modal, but not a switch to another ticket.
-    if (ticketReplyDraft.ticketId !== t.id) ticketReplyDraft = { ticketId: t.id, text: '', attachments: [], notify: [] };
+    // Reply text, pending files and the reply/note mode survive re-renders of
+    // this modal, but not a switch to another ticket, which starts on Reply.
+    if (ticketReplyDraft.ticketId !== t.id) {
+        ticketReplyDraft = { ticketId: t.id, text: '', attachments: [], notify: [] };
+        ticketReplyMode = 'reply';
+    }
     const reply = ticketReplyDraft;
 
     const kv = (label, value) => `<div class="tk-kv"><span>${label}</span><span>${value}</span></div>`;
@@ -8266,8 +8271,9 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
         logActivity(isNote ? 'Ticket note added' : (manage ? 'Ticket replied' : 'Customer replied'), t.ticket_no, (body || `${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`).slice(0, 80));
     });
     if (!ok) return;
-    ticketReplyMode = 'reply';
-    ticketReplyDraft = { ticketId: null, text: '', attachments: [], notify: [] };
+    // Stay in the mode just used: flipping back to Reply after a note made the
+    // next message go to the customer when a second note was meant.
+    ticketReplyDraft = { ticketId: t.id, text: '', attachments: [], notify: [] };
     renderServiceDesk();
     showTicketDetail(t.id);
 }

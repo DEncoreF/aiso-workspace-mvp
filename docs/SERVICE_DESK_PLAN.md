@@ -89,7 +89,9 @@ Email 通知、SLA 日曆（工作日/假日）、供應商轉派、票務 CSV �
 
 ### 已拍板（2026-09-29）
 
-- **不 seed AISO 同事**，維持「AISO 角色與成員由 UI 建立」。seed 的 `NOTIFICATIONS` 為空；
+- ~~不 seed AISO 同事~~ → **2026-09-29 改為 seed 兩位**：Kevin Lin、Ivy Chen，角色 `r-aiso-desk`（Service Desk），
+  讓靜態頁與線上 demo 開起來就能試通知。舊存檔載入時補一次（`aisoDeskSeeded` 旗標），之後在 UI 刪掉不會再被補回。
+  其他 operator 角色仍由 UI 建立。`NOTIFICATIONS` seed 為空。
   沒有同事時 Notify 區塊與轉出視窗會提示去 Organizations 加人，轉 AISO_INTERNAL 則不強制指定確認人。
 - **View as 改成選人**：選單列出每個 org 的成員（user × role binding），通知、訊息作者都跟著那個人。
   沒有成員的角色不再出現在選單。Super Admin 自己不屬於任何 org，沒有鈴鐺。

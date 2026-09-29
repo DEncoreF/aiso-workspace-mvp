@@ -37,6 +37,7 @@ const Store = (function () {
             HARDWARE_PRODUCT_TYPES,
             SOFTWARE_CATEGORY_OPTIONS,
             SOFTWARE_INDUSTRY_OPTIONS,
+            aisoDeskSeeded: true,
         });
     }
 
@@ -136,6 +137,17 @@ const Store = (function () {
         if (Array.isArray(data.USERS)) USERS = data.USERS;
         if (Array.isArray(data.ROLES)) ROLES = data.ROLES;
         if (Array.isArray(data.ROLE_BINDINGS)) ROLE_BINDINGS = data.ROLE_BINDINGS;
+        // Saves from before the AISO desk colleagues were seeded get them once.
+        // The flag stops a later removal in the UI from being undone on reload.
+        let aisoDeskAdded = false;
+        if (!data.aisoDeskSeeded) {
+            const addMissing = (list, ids) => seed => {
+                if (ids.includes(seed.id) && !list.some(x => x.id === seed.id)) { list.push({ ...seed }); aisoDeskAdded = true; }
+            };
+            SEED_AISO_DESK.roles.forEach(addMissing(ROLES, ['r-aiso-desk']));
+            SEED_AISO_DESK.users.forEach(addMissing(USERS, ['u-aiso-kevin', 'u-aiso-ivy']));
+            SEED_AISO_DESK.bindings.forEach(addMissing(ROLE_BINDINGS, ['rb-aiso-kevin', 'rb-aiso-ivy']));
+        }
 
         if (Array.isArray(data.ACTIVITY_LOG)) {
             if (data.mockDataVersion !== MOCK_DATA_VERSION) {
@@ -155,7 +167,7 @@ const Store = (function () {
         if (Array.isArray(data.HARDWARE_PRODUCT_TYPES)) HARDWARE_PRODUCT_TYPES = data.HARDWARE_PRODUCT_TYPES;
         if (Array.isArray(data.SOFTWARE_CATEGORY_OPTIONS)) SOFTWARE_CATEGORY_OPTIONS = data.SOFTWARE_CATEGORY_OPTIONS;
         if (Array.isArray(data.SOFTWARE_INDUSTRY_OPTIONS)) SOFTWARE_INDUSTRY_OPTIONS = data.SOFTWARE_INDUSTRY_OPTIONS;
-        if (mockDataMigrated || industriesNormalized || licenseKeysNormalized || channelsRenamed) {
+        if (mockDataMigrated || industriesNormalized || licenseKeysNormalized || channelsRenamed || aisoDeskAdded || !data.aisoDeskSeeded) {
             try { localStorage.setItem(KEY, serialize()); } catch (e) { /* retry on the next normal save */ }
         }
         return true;

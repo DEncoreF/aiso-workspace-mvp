@@ -88,15 +88,25 @@ let USERS = [
       created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
     { id: 'u-weiting', name: 'Wei-Ting Chen', email: 'weiting.chen@gmail.com', status: 'active', is_super_admin: false,
       created_at: '2026-05-04T00:00:00.000Z', updated_at: '2026-05-04T00:00:00.000Z' },
+    // Two AISO desk colleagues, so internal notes and confirmations can be
+    // tried by switching View as between them.
+    { id: 'u-aiso-kevin', name: 'Kevin Lin', email: 'kevin.lin@aiso.com', status: 'active', is_super_admin: false,
+      created_at: '2026-09-29T00:00:00.000Z', updated_at: '2026-09-29T00:00:00.000Z' },
+    { id: 'u-aiso-ivy', name: 'Ivy Chen', email: 'ivy.chen@aiso.com', status: 'active', is_super_admin: false,
+      created_at: '2026-09-29T00:00:00.000Z', updated_at: '2026-09-29T00:00:00.000Z' },
 ];
 
-// AISO holds no seeded roles on purpose: operator roles are built in the UI.
-// The customer Admin / Member pair replaces the old OA / CM org_role values.
+// AISO seeds one desk role for the two demo colleagues; any other operator
+// role is built in the UI. The customer Admin / Member pair replaces the old
+// OA / CM org_role values.
 const CUSTOMER_ADMIN_PERMISSIONS = ['order.r', 'ticket.c', 'ticket.r', 'ticket.u', 'asset.r', 'asset.u',
     'organization.c', 'organization.r', 'organization.u', 'organization.d', 'activity_log.r'];
 const CUSTOMER_MEMBER_PERMISSIONS = ['order.r', 'ticket.c', 'ticket.r', 'ticket.u', 'asset.r'];
 
 let ROLES = [
+    { id: 'r-aiso-desk', org_id: 'v-aiso', name: 'Service Desk', description: 'Works the Service Desk: replies, internal notes, handling.',
+      permissions: ['order.r', 'ticket.c', 'ticket.r', 'ticket.u', 'asset.r', 'activity_log.r'],
+      created_at: '2026-09-29T00:00:00.000Z', updated_at: '2026-09-29T00:00:00.000Z' },
     { id: 'r-mb-admin', org_id: 'c-megabank', name: 'Admin', description: 'Manages MegaBank members and roles.',
       permissions: [...CUSTOMER_ADMIN_PERMISSIONS], created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
     { id: 'r-mb-member', org_id: 'c-megabank', name: 'Member', description: 'Reads orders and raises tickets.',
@@ -118,7 +128,17 @@ let ROLE_BINDINGS = [
     { id: 'rb-0003', user_id: 'u-robert', role_id: 'r-gc-admin',  status: 'active', created_at: '2025-06-01T00:00:00.000Z' },
     { id: 'rb-0004', user_id: 'u-robert', role_id: 'r-mb-member', status: 'active', created_at: '2025-06-01T00:00:00.000Z' },
     { id: 'rb-0005', user_id: 'u-weiting', role_id: 'r-wt-owner', status: 'active', created_at: '2026-05-04T00:00:00.000Z' },
+    { id: 'rb-aiso-kevin', user_id: 'u-aiso-kevin', role_id: 'r-aiso-desk', status: 'active', created_at: '2026-09-29T00:00:00.000Z' },
+    { id: 'rb-aiso-ivy',   user_id: 'u-aiso-ivy',   role_id: 'r-aiso-desk', status: 'active', created_at: '2026-09-29T00:00:00.000Z' },
 ];
+
+// Kept aside before a save replaces the arrays, so store.js can add the desk
+// colleagues to saves written before they were seeded.
+const SEED_AISO_DESK = {
+    roles: ROLES.filter(r => r.id === 'r-aiso-desk'),
+    users: USERS.filter(u => u.id === 'u-aiso-kevin' || u.id === 'u-aiso-ivy'),
+    bindings: ROLE_BINDINGS.filter(b => b.role_id === 'r-aiso-desk'),
+};
 
 let PRODUCTS = [
     // === HARDWARE ===
