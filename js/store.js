@@ -2,7 +2,7 @@
 // STORE — localStorage persistence layer
 // Load order: seed-data.js → store.js → app.js
 // Persisted state: PRODUCTS, ASSETS, ORDERS, ORDER_LINES, TICKETS,
-//                  TICKET_MESSAGES, ORGS, USERS, ROLES, ROLE_BINDINGS,
+//                  TICKET_MESSAGES, NOTIFICATIONS, ORGS, USERS, ROLES, ROLE_BINDINGS,
 //                  ACTIVITY_LOG, HARDWARE_PRODUCT_TYPES,
 //                  SOFTWARE_CATEGORY_OPTIONS, SOFTWARE_INDUSTRY_OPTIONS
 // ═══════════════════════════════════════════════════════════════════
@@ -28,6 +28,7 @@ const Store = (function () {
             ORDER_LINES,
             TICKETS,
             TICKET_MESSAGES,
+            NOTIFICATIONS,
             ORGS,
             USERS,
             ROLES,
@@ -114,10 +115,19 @@ const Store = (function () {
         if (Array.isArray(data.ASSETS)) ASSETS = data.ASSETS;
         if (Array.isArray(data.ORDERS)) ORDERS = data.ORDERS;
         if (Array.isArray(data.ORDER_LINES)) ORDER_LINES = data.ORDER_LINES;
+        // Saves from before license-to-serial binding hold license keys as plain
+        // strings; they become unbound keys, which is what they meant.
+        let licenseKeysNormalized = false;
+        ORDER_LINES.forEach(line => {
+            if (!(line.license_keys || []).some(k => typeof k === 'string')) return;
+            line.license_keys = line.license_keys.map(k => typeof k === 'string' ? { key: k, unit: null } : k);
+            licenseKeysNormalized = true;
+        });
         // Saves written before the Service Desk shipped have no ticket arrays;
         // they keep the seed tickets rather than forcing a schema reset.
         if (Array.isArray(data.TICKETS)) TICKETS = data.TICKETS;
         if (Array.isArray(data.TICKET_MESSAGES)) TICKET_MESSAGES = data.TICKET_MESSAGES;
+        if (Array.isArray(data.NOTIFICATIONS)) NOTIFICATIONS = data.NOTIFICATIONS;
         if (Array.isArray(data.ORGS)) ORGS = data.ORGS;
         if (Array.isArray(data.USERS)) USERS = data.USERS;
         if (Array.isArray(data.ROLES)) ROLES = data.ROLES;
@@ -141,7 +151,7 @@ const Store = (function () {
         if (Array.isArray(data.HARDWARE_PRODUCT_TYPES)) HARDWARE_PRODUCT_TYPES = data.HARDWARE_PRODUCT_TYPES;
         if (Array.isArray(data.SOFTWARE_CATEGORY_OPTIONS)) SOFTWARE_CATEGORY_OPTIONS = data.SOFTWARE_CATEGORY_OPTIONS;
         if (Array.isArray(data.SOFTWARE_INDUSTRY_OPTIONS)) SOFTWARE_INDUSTRY_OPTIONS = data.SOFTWARE_INDUSTRY_OPTIONS;
-        if (mockDataMigrated || industriesNormalized) {
+        if (mockDataMigrated || industriesNormalized || licenseKeysNormalized) {
             try { localStorage.setItem(KEY, serialize()); } catch (e) { /* retry on the next normal save */ }
         }
         return true;

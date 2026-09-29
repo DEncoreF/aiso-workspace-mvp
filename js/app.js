@@ -27,6 +27,7 @@ function capturePortalState() {
         ORDER_LINES,
         TICKETS,
         TICKET_MESSAGES,
+        NOTIFICATIONS,
         ORGS,
         USERS,
         ROLES,
@@ -44,6 +45,7 @@ function restorePortalState(snapshot) {
     ORDER_LINES = snapshot.ORDER_LINES;
     TICKETS = snapshot.TICKETS;
     TICKET_MESSAGES = snapshot.TICKET_MESSAGES;
+    NOTIFICATIONS = snapshot.NOTIFICATIONS;
     ORGS = snapshot.ORGS;
     USERS = snapshot.USERS;
     ROLES = snapshot.ROLES;
@@ -104,26 +106,34 @@ const PORTAL_PERMISSIONS = Object.freeze({
 // Who is acting: the signed-in account plus the one role in effect. Grants are
 // never merged across roles — switching role is how the view changes.
 // The Super Admin holds no role and passes every check, but can view as any
-// role (bottom-right switch); that role's grants and org then apply exactly.
-let activeBindingId = null; // the regular account's role binding in effect
-let viewAsRoleId = null;    // Super Admin only: the role being viewed as
+// member (bottom-right switch): that person's role grants and org then apply
+// exactly, and person-level things like notifications are theirs.
+let activeBindingId = null;  // the regular account's role binding in effect
+let viewAsBindingId = null;  // Super Admin only: the member (user × role) being viewed as
 
+function activeBinding() {
+    return ROLE_BINDINGS.find(b => b.id === (viewAsBindingId || activeBindingId)) || null;
+}
 function activeRole() {
-    if (viewAsRoleId) return ROLES.find(r => r.id === viewAsRoleId) || null;
-    const binding = ROLE_BINDINGS.find(b => b.id === activeBindingId);
+    const binding = activeBinding();
     return binding ? ROLES.find(r => r.id === binding.role_id) || null : null;
+}
+// The person acting: the viewed-as member, or the signed-in account. The
+// Super Admin in its own context belongs to no org, so it is nobody's colleague.
+function actingUser() {
+    if (viewAsBindingId) return USERS.find(u => u.id === activeBinding()?.user_id) || null;
+    return currentUser?.is_super_admin ? null : currentUser;
 }
 function activeOrg() { const role = activeRole(); return role ? getOrgById(role.org_id) : null; }
 function activeOrgId() { return activeOrg()?.id || null; }
-function isSuperAdminContext() { return !!currentUser?.is_super_admin && !viewAsRoleId; }
+function isSuperAdminContext() { return !!currentUser?.is_super_admin && !viewAsBindingId; }
 function orgHasType(org, type) { return !!org?.types?.includes(type) && ENABLED_ORG_TYPES.includes(type); }
 // Desk-only affordances (internal notes, status changes, unlinked-org fixes)
 // follow the org type, not a grant: a customer role never gets them.
 function isOperatorView() { return isSuperAdminContext() || orgHasType(activeOrg(), 'OPERATOR'); }
 function isCustomerView() { return !isOperatorView() && orgHasType(activeOrg(), 'CUSTOMER'); }
-// The name customer-side messages go out under: the person, or the org while
-// the Super Admin is only viewing as one of its roles.
-function actingName() { return viewAsRoleId ? (activeOrg()?.name || '') : (currentUser?.name || ''); }
+// The name messages go out under: whoever is acting, viewed-as or signed in.
+function actingName() { return actingUser()?.name || currentUser?.name || ''; }
 
 // What one type contributes to an org's ceiling. CUSTOMER resolves further by
 // customer_type: an individual customer is one person, so nothing about
@@ -728,7 +738,7 @@ function resetLoginPanel() {
 function enterApp(user, bindingId = null) {
     currentUser = { ...user, label: user.is_super_admin ? 'Super Admin' : '' };
     activeBindingId = user.is_super_admin ? null : bindingId;
-    viewAsRoleId = null;
+    viewAsBindingId = null;
     saveSession();
     if (typeof closeUserMenu === 'function') closeUserMenu();
     const screen = document.getElementById('login-screen');
@@ -812,10 +822,10 @@ function buildNav() {
 // The sidebar card shows whoever the desk is currently acting as.
 function renderSidebarUser() {
     const role = activeRole();
-    const name = viewAsRoleId ? (activeOrg()?.name || '') : currentUser.name;
+    const name = actingName();
     const label = role ? `${activeOrg()?.name || ''} · ${role.name}` : currentUser.label;
     document.getElementById('user-name').textContent = name;
-    document.getElementById('user-role').textContent = viewAsRoleId ? `Viewing as ${role?.name || ''}` : label;
+    document.getElementById('user-role').textContent = viewAsBindingId ? `Viewing as · ${label}` : label;
     document.getElementById('user-avatar').textContent = getUserInitials(name);
 }
 
@@ -827,10 +837,13 @@ function logout() {
     // Staged edits never survive a session.
     paramDraft = null;
     compatDraft = null;
-    viewAsRoleId = null;
+    viewAsBindingId = null;
     activeBindingId = null;
     const vaRoot = document.getElementById('view-as-root');
     if (vaRoot) vaRoot.innerHTML = '';
+    notifMenuOpen = false;
+    const notifRoot = document.getElementById('notif-root');
+    if (notifRoot) notifRoot.innerHTML = '';
     currentUser = null;
     resetLoginPanel();
     const screen = document.getElementById('login-screen');
@@ -932,6 +945,7 @@ function navigate(key) {
     else if (key === 'hw-products') renderHwProducts();
     else if (key === 'orders') renderOrders();
     else if (key === 'service-desk') renderServiceDesk();
+    if (key !== 'service-desk') renderNotificationBell();
     else if (key === 'assets') renderAssets();
     else if (key === 'organizations') renderOrganizations();
     else if (key === 'compatibility') renderCompatibilityCenter();
@@ -4468,7 +4482,7 @@ function renderSettings() {
     const role = activeRole();
     document.getElementById('settings-role').value = isSuperAdminContext()
         ? 'Super Admin (unrestricted cross-org access)'
-        : `${activeOrg()?.name || ''} · ${role?.name || ''}${viewAsRoleId ? ' (viewing as)' : ''}`;
+        : `${activeOrg()?.name || ''} · ${role?.name || ''}${viewAsBindingId ? ' (viewing as)' : ''}`;
 }
 
 function confirmResetDemoData() {
@@ -5473,12 +5487,16 @@ function renderOrders() {
 
 let orderDraft = null;
 
+// Draft lines get their id up front: a bundled SW line points at its HW
+// line by id before either has been saved.
 function newOrderLineDraft(lineNo) {
     return {
-        id: null, line_no: lineNo, scope: 'HW', product_id: '', product_name: '', qty: 1,
+        id: `ol-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        line_no: lineNo, scope: 'HW', product_id: '', product_name: '', qty: 1,
         sla_plan: '',
         serial_nos: [''], bom: [],
         warranty_months: '', warranty_start: '',
+        parent_line_id: null, supplier_name: '',
         license_keys: [], version: '', license_start: '', license_end: '',
         notes: '',
     };
@@ -5531,10 +5549,10 @@ function showOrderModal(orderId = null) {
             </div>
 
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:22px 0 10px">Documents</div>
-            ${ticketAttachmentDropZone('ord-draft-files', 'onOrderDraftFiles(this.files)')}
-            <div class="field-hint" style="margin-top:6px">${TICKET_ATTACHMENT_HINT}</div>
+            ${ticketAttachmentDropZone('ord-draft-files', "onOrderDocFiles('orderDraft', this.files)")}
+            <div class="field-hint" style="margin-top:6px">${ORDER_DOC_HINT}</div>
             <p id="ord-att-error" style="font-size:12px;font-weight:600;color:#dc2626;margin-top:6px"></p>
-            <div id="ord-attachments-list" class="tk-att-list" style="margin-top:8px">${orderDraft.attachments.length ? ticketAttachmentChips(orderDraft.attachments, 'removeOrderDraftAttachment') : ''}</div>
+            <div id="ord-attachments-list" style="display:flex;flex-direction:column;gap:8px;margin-top:8px">${orderDocRows('orderDraft')}</div>
 
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:22px 0 10px">Order Lines</div>
             <div id="ord-lines"></div>
@@ -5557,24 +5575,33 @@ function showOrderModal(orderId = null) {
 function renderOrderDraftLines() {
     const host = document.getElementById('ord-lines');
     if (!host) return;
-    host.innerHTML = orderDraft.lines.map((l, i) => {
-        const products = getVisibleProducts(l.scope === 'HW' ? 'hardware' : 'software').filter(p => p.status === 'published');
-        const knownProduct = l.product_id && products.some(p => p.id === l.product_id);
-        return `
-        <div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px">
+    // Bundled SW lines render inside their HW line's card, not on their own.
+    host.innerHTML = orderDraft.lines.map((l, i) => l.parent_line_id ? '' : ordLineCard(l, i)).join('');
+}
+
+function ordLineCard(l, i) {
+    const lines = orderDraft.lines;
+    const parent = l.parent_line_id ? lines.find(x => x.id === l.parent_line_id) : null;
+    const products = getVisibleProducts(l.scope === 'HW' ? 'hardware' : 'software').filter(p => p.status === 'published');
+    const knownProduct = l.product_id && products.some(p => p.id === l.product_id);
+    const removable = parent || lines.filter(x => !x.parent_line_id).length > 1;
+    return `
+        <div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;${parent ? 'margin-top:10px;background:#fff' : 'margin-bottom:12px'}">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
                 <span style="font-size:12.5px;font-weight:700;color:#86868b">Line ${i + 1}</span>
                 <span class="badge ${l.scope === 'HW' ? 'badge-hw' : 'badge-sw'}">${l.scope}</span>
-                ${orderDraft.lines.length > 1 ? `<button onclick="ordRemoveLine(${i})" class="btn-ghost" style="margin-left:auto" title="Remove line"><i class="ph ph-trash"></i></button>` : ''}
+                ${parent ? `<span class="field-hint" style="margin:0">bundled with Line ${lines.indexOf(parent) + 1}</span>` : ''}
+                ${removable ? `<button onclick="ordRemoveLine(${i})" class="btn-ghost" style="margin-left:auto" title="Remove line"><i class="ph ph-trash"></i></button>` : ''}
             </div>
-            <div style="display:grid;grid-template-columns:100px 1fr 120px 80px;gap:12px">
+            <div style="display:grid;grid-template-columns:${parent ? '' : '100px '}1fr 120px 80px;gap:12px">
+                ${parent ? '' : `
                 <div>
                     <label class="field-label">Scope</label>
                     <select class="input-field" onchange="ordSetScope(${i}, this.value)">
                         <option value="HW" ${l.scope === 'HW' ? 'selected' : ''}>HW</option>
                         <option value="SW" ${l.scope === 'SW' ? 'selected' : ''}>SW</option>
                     </select>
-                </div>
+                </div>`}
                 <div>
                     <label class="field-label">Product</label>
                     <select class="input-field" onchange="ordSetProduct(${i}, this.value)">
@@ -5654,8 +5681,14 @@ function renderOrderDraftLines() {
                     </tbody>
                 </table>` : ''}
                 <button onclick="ordAddBom(${i})" class="btn-secondary text-xs" style="margin-top:${l.bom.length ? '10px' : '0'}"><i class="ph ph-plus"></i> Add Component</button>
-            </div>` : `
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:12px">
+            </div>
+            ${ordBundleSection(l, i)}` : `
+            <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px;margin-top:12px">
+                <div>
+                    <label class="field-label">Supplier</label>
+                    <input type="text" class="input-field" placeholder="${esc(orderDraft.sw_supplier_name || 'Order SW supplier')}" value="${esc(l.supplier_name)}" oninput="orderDraft.lines[${i}].supplier_name=this.value.trim()">
+                    <div class="field-hint">Blank uses the order's SW supplier.</div>
+                </div>
                 <div>
                     <label class="field-label">Version</label>
                     <input type="text" class="input-field" placeholder="e.g. 4.1.0" value="${esc(l.version)}" oninput="orderDraft.lines[${i}].version=this.value.trim()">
@@ -5670,19 +5703,75 @@ function renderOrderDraftLines() {
                 </div>
             </div>
             <div style="margin-top:12px">
-                <label class="field-label">License Keys (${l.license_keys.filter(k => k.trim()).length} of ${l.qty})</label>
+                <label class="field-label">License Keys (${l.license_keys.filter(k => k.key).length} of ${l.qty})</label>
                 <div style="display:flex;flex-direction:column;gap:8px">
                     ${l.license_keys.map((lk, ki) => `
                     <div style="display:flex;align-items:center;gap:10px">
                         <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0">Key ${ki + 1}</span>
                         <input type="text" class="input-field" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="License key"
-                               value="${esc(lk)}" oninput="orderDraft.lines[${i}].license_keys[${ki}]=this.value.trim()">
+                               value="${esc(lk.key)}" oninput="orderDraft.lines[${i}].license_keys[${ki}].key=this.value.trim()">
+                        ${parent ? `<select class="input-field" style="width:230px;flex-shrink:0" title="Which unit this key is for"
+                               onchange="orderDraft.lines[${i}].license_keys[${ki}].unit=this.value===''?null:Number(this.value)">${ordUnitOptions(parent, lk.unit)}</select>` : ''}
                     </div>`).join('')}
                 </div>
-                <div class="field-hint">One key per license — the row count follows Qty. Required before the order is confirmed.</div>
+                <div class="field-hint">${parent
+                    ? 'Bind each key to one unit or to all units. Repeat a key on several rows to share it between units.'
+                    : 'One key per license — the row count follows Qty. Required before the order is confirmed.'}</div>
             </div>`}
         </div>`;
-    }).join('');
+}
+
+// ── Bundled software (docs/ORDER_MANAGEMENT_PLAN.md, License ↔ SN) ──
+// A bundled SW line is an ordinary SW line with parent_line_id set. It sits
+// right after its HW line in the array, so line numbers stay in order.
+
+function ordBundleSection(l, i) {
+    const children = orderDraft.lines.filter(x => l.id && x.parent_line_id === l.id);
+    return `
+            <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-light)">
+                <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer">
+                    <input type="checkbox" ${children.length ? 'checked' : ''} onchange="ordToggleBundle(${i}, this.checked)"> Includes software licenses
+                </label>
+                ${children.length ? `
+                <div style="margin-left:18px">
+                    ${children.map(c => ordLineCard(c, orderDraft.lines.indexOf(c))).join('')}
+                    <button onclick="ordAddBundled(${i})" class="btn-secondary text-xs" style="margin-top:10px"><i class="ph ph-plus"></i> Add Software</button>
+                </div>` : ''}
+            </div>`;
+}
+
+// The binding is by unit index, so a unit whose serial is still blank can
+// already take a key. A unit that Qty no longer covers stays selected and is
+// flagged; saving refuses it rather than silently rebinding.
+function ordUnitOptions(parent, unit) {
+    const units = parent.serial_nos.map((sn, u) => `<option value="${u}" ${unit === u ? 'selected' : ''}>Unit ${u + 1} · ${esc(sn.trim() || 'serial pending')}</option>`);
+    const gone = unit !== null && unit >= parent.qty ? `<option value="${unit}" selected>Unit ${unit + 1} (removed)</option>` : '';
+    return `<option value="" ${unit === null ? 'selected' : ''}>All units</option>${units.join('')}${gone}`;
+}
+
+function ordAddBundled(i) {
+    const parent = orderDraft.lines[i];
+    const child = {
+        ...newOrderLineDraft(0), scope: 'SW', parent_line_id: parent.id, serial_nos: [], qty: parent.qty,
+        // Default to one key per unit, in order — the common case.
+        license_keys: Array.from({ length: parent.qty }, (_, u) => ({ key: '', unit: u })),
+    };
+    let at = i + 1;
+    while (at < orderDraft.lines.length && orderDraft.lines[at].parent_line_id === parent.id) at++;
+    orderDraft.lines.splice(at, 0, child);
+    renderOrderDraftLines();
+}
+
+function ordToggleBundle(i, on) {
+    if (on) { ordAddBundled(i); return; }
+    const parentId = orderDraft.lines[i].id;
+    const children = orderDraft.lines.filter(x => x.parent_line_id === parentId);
+    if (children.some(c => c.license_keys.some(k => k.key)) && !window.confirm('Remove the bundled software and the license keys entered for it?')) {
+        renderOrderDraftLines();
+        return;
+    }
+    orderDraft.lines = orderDraft.lines.filter(x => x.parent_line_id !== parentId);
+    renderOrderDraftLines();
 }
 
 function ordAddLine() {
@@ -5691,7 +5780,8 @@ function ordAddLine() {
 }
 
 function ordRemoveLine(i) {
-    orderDraft.lines.splice(i, 1);
+    const id = orderDraft.lines[i].id;
+    orderDraft.lines = orderDraft.lines.filter((x, xi) => xi !== i && !(id && x.parent_line_id === id));
     renderOrderDraftLines();
 }
 
@@ -5704,7 +5794,9 @@ function ordSetScope(i, scope) {
     if (scope === 'SW') {
         l.serial_nos = []; l.bom = [];
         l.warranty_months = ''; l.warranty_start = '';
-        l.license_keys = Array.from({ length: l.qty }, () => '');
+        l.license_keys = Array.from({ length: l.qty }, () => ({ key: '', unit: null }));
+        // A SW line cannot carry bundled software.
+        orderDraft.lines = orderDraft.lines.filter(x => x.parent_line_id !== l.id);
     } else {
         l.serial_nos = Array.from({ length: l.qty }, () => '');
         l.license_keys = []; l.version = ''; l.license_start = ''; l.license_end = '';
@@ -5732,7 +5824,7 @@ function ordSetQty(i, value) {
     if (l.scope === 'HW') {
         l.serial_nos = Array.from({ length: l.qty }, (_, si) => l.serial_nos[si] || '');
     } else {
-        l.license_keys = Array.from({ length: l.qty }, (_, ki) => l.license_keys[ki] || '');
+        l.license_keys = Array.from({ length: l.qty }, (_, ki) => l.license_keys[ki] || { key: '', unit: null });
     }
     renderOrderDraftLines();
 }
@@ -5761,34 +5853,160 @@ function ordRemoveBom(i, bi) {
 }
 
 // ── Documents ──
-// Header-level attachments (PO scans, contracts). Reuses the ticket
-// attachment file-read/validation pipeline — same size/type limits.
+// Header-level attachments (PO scans, contracts, sign-off sheets). Reuses the
+// ticket attachment file-read/validation pipeline — same size/type limits,
+// with a higher count since an order collects papers over its life.
+// Every file carries a doc_type so the detail view can filter by kind; files
+// saved before types existed read as Unclassified until someone picks one.
+// The editor (orderDraft, DRAFT orders) and the Manage documents modal
+// (orderDocDraft, confirmed orders — acceptance and delivery papers arrive
+// after confirmation) share one list renderer, addressed by `ns`.
 
-function renderOrderDraftAttachments() {
-    const host = document.getElementById('ord-attachments-list');
-    if (host) host.innerHTML = orderDraft.attachments.length ? ticketAttachmentChips(orderDraft.attachments, 'removeOrderDraftAttachment') : '';
+const ORDER_DOC_TYPES = [
+    { key: 'PO', label: 'Purchase order' },
+    { key: 'QUOTATION', label: 'Quotation' },
+    { key: 'CONTRACT', label: 'Contract' },
+    { key: 'ACCEPTANCE', label: 'Acceptance' },
+    { key: 'DELIVERY', label: 'Delivery receipt' },
+    { key: 'OTHER', label: 'Other' },
+];
+const ORDER_DOC_MAX_COUNT = 10;
+const ORDER_DOC_HINT = 'Pick a type for each file. PNG, JPG, PDF, TXT, LOG, CSV or JSON; up to 10 files; images up to 5 MB, other files up to 500 KB.';
+
+function orderDocTypeLabel(key) { return ORDER_DOC_TYPES.find(t => t.key === key)?.label || 'Unclassified'; }
+
+let orderDocDraft = null;
+function orderDocTarget(ns) { return ns === 'orderDraft' ? orderDraft : orderDocDraft; }
+
+function orderDocRows(ns) {
+    const list = orderDocTarget(ns)?.attachments || [];
+    return list.map((a, i) => `
+        <div class="ord-doc-row ${a.doc_type ? '' : 'untyped'}">
+            <span class="ord-doc-tile">${a.is_image ? `<img src="${a.data_url}" alt="">` : '<i class="ph ph-file-text"></i>'}</span>
+            <span class="ord-doc-name" title="${esc(a.name)}"><span class="nm">${esc(a.name)}</span><span class="sz">${formatFileSize(a.size)}${a.doc_type ? '' : ' · pick a type'}</span></span>
+            <select class="input-field ord-doc-type" aria-label="Document type for ${esc(a.name)}"
+                    onchange="orderDocTarget('${ns}').attachments[${i}].doc_type=this.value;renderOrderDocRows('${ns}')">
+                <option value="" disabled ${a.doc_type ? '' : 'selected'}>Choose type…</option>
+                ${ORDER_DOC_TYPES.map(t => `<option value="${t.key}" ${a.doc_type === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
+            </select>
+            <button class="btn-ghost" onclick="removeOrderDoc('${ns}', ${i})" title="Remove ${esc(a.name)}"><i class="ph ph-x"></i></button>
+        </div>`).join('');
 }
 
-async function onOrderDraftFiles(fileList) {
-    if (!orderDraft) return;
-    const { added, error } = await readTicketAttachments(fileList, orderDraft.attachments);
-    orderDraft.attachments.push(...added);
-    renderOrderDraftAttachments();
+function renderOrderDocRows(ns) {
+    const host = document.getElementById('ord-attachments-list');
+    if (host) host.innerHTML = orderDocRows(ns);
+}
+
+async function onOrderDocFiles(ns, fileList) {
+    const target = orderDocTarget(ns);
+    if (!target) return;
+    const { added, error } = await readTicketAttachments(fileList, target.attachments, ORDER_DOC_MAX_COUNT);
+    target.attachments.push(...added.map(a => ({ ...a, doc_type: '' })));
+    renderOrderDocRows(ns);
     const errEl = document.getElementById('ord-att-error');
     if (errEl) errEl.textContent = error || '';
 }
 
-function removeOrderDraftAttachment(i) {
-    orderDraft.attachments.splice(i, 1);
-    renderOrderDraftAttachments();
+function removeOrderDoc(ns, i) {
+    orderDocTarget(ns).attachments.splice(i, 1);
+    renderOrderDocRows(ns);
 }
 
-function orderAttachmentGallery(list, orderId) {
-    return list.map((a, i) => a.is_image
-        ? `<img class="tk-att-thumb" src="${a.data_url}" alt="${esc(a.name)}" title="${esc(a.name)}" onclick="showOrderAttachmentPreview('${orderId}', ${i})">`
-        : `<a class="tk-att-chip" href="${a.data_url}" download="${esc(a.name)}" title="Download ${esc(a.name)}">
-            <i class="ph ph-file-text"></i><span class="nm">${esc(a.name)}</span><span class="sz">${formatFileSize(a.size)}</span><i class="ph ph-download-simple"></i>
-           </a>`).join('');
+function untypedDocError(list) {
+    const a = list.find(x => !x.doc_type);
+    return a ? `Documents: choose a type for ${a.name}.` : '';
+}
+
+// Detail view: filter chips (only when there is more than one kind) above the
+// files; indexes stay the stored ones so the image preview finds the file.
+let orderDocFilter = { orderId: null, type: null };
+
+function setOrderDocFilter(orderId, type) {
+    orderDocFilter = { orderId, type };
+    showOrderDetail(orderId);
+}
+
+function orderDocSection(o) {
+    const docs = o.attachments || [];
+    const canManage = o.status === 'CONFIRMED' && canUpdateOrders();
+    if (!docs.length && !canManage) return '';
+    const kinds = [...new Set(docs.map(a => a.doc_type || ''))];
+    const active = orderDocFilter.orderId === o.id && kinds.includes(orderDocFilter.type) ? orderDocFilter.type : null;
+    const chip = (type, label, count) => `<button class="tk-chip ${active === type ? 'active' : ''}" onclick="setOrderDocFilter('${o.id}', ${type === null ? 'null' : `'${type}'`})">${esc(label)} <span style="opacity:.6">${count}</span></button>`;
+    const ordered = [...ORDER_DOC_TYPES.map(t => t.key).filter(k => kinds.includes(k)), ...(kinds.includes('') ? [''] : [])];
+    return `
+            <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 8px">
+                <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b">Documents</span>
+                ${canManage ? `<button onclick="showOrderDocsModal('${o.id}')" class="btn-secondary text-xs" style="padding:4px 10px"><i class="ph ph-paperclip"></i> Manage documents</button>` : ''}
+            </div>
+            ${kinds.length > 1 ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+                ${chip(null, 'All', docs.length)}${ordered.map(k => chip(k, orderDocTypeLabel(k), docs.filter(a => (a.doc_type || '') === k).length)).join('')}
+            </div>` : ''}
+            ${docs.length ? `<div class="tk-att-list">${orderAttachmentGallery(o, active)}</div>`
+                : '<div style="font-size:12.5px;color:#86868b">No documents yet — add acceptance or delivery papers as they arrive.</div>'}`;
+}
+
+function orderAttachmentGallery(o, type = null) {
+    return (o.attachments || []).map((a, i) => {
+        if (type !== null && (a.doc_type || '') !== type) return '';
+        const label = `<span style="font-size:10.5px;font-weight:600;color:${a.doc_type ? '#52525b' : '#b45309'}">${esc(orderDocTypeLabel(a.doc_type))}</span>`;
+        return `<span style="display:inline-flex;flex-direction:column;gap:3px;align-items:flex-start">${label}${a.is_image
+            ? `<img class="tk-att-thumb" src="${a.data_url}" alt="${esc(a.name)}" title="${esc(a.name)}" onclick="showOrderAttachmentPreview('${o.id}', ${i})">`
+            : `<a class="tk-att-chip" href="${a.data_url}" download="${esc(a.name)}" title="Download ${esc(a.name)}">
+                <i class="ph ph-file-text"></i><span class="nm">${esc(a.name)}</span><span class="sz">${formatFileSize(a.size)}</span><i class="ph ph-download-simple"></i>
+               </a>`}</span>`;
+    }).join('');
+}
+
+// Manage documents on a confirmed order: add, retype or remove files without
+// reopening the rest of the order. Changes are logged as one entry.
+function showOrderDocsModal(orderId) {
+    const o = getOrderById(orderId);
+    if (!o || o.status !== 'CONFIRMED' || !canUpdateOrders()) return;
+    orderDocDraft = { orderId, attachments: JSON.parse(JSON.stringify(o.attachments || [])) };
+    showModal(`
+        <div style="padding:26px 28px;max-height:82vh;overflow-y:auto">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Documents · ${esc(o.order_no)}</h3>
+            <p style="font-size:13px;color:#86868b;margin:0 0 16px;line-height:1.6">Add papers that arrive after confirmation, such as acceptance or delivery receipts. Changes are recorded in the Activity Log.</p>
+            ${ticketAttachmentDropZone('ord-doc-files', "onOrderDocFiles('orderDocDraft', this.files)")}
+            <div class="field-hint" style="margin-top:6px">${ORDER_DOC_HINT}</div>
+            <p id="ord-att-error" style="font-size:12px;font-weight:600;color:#dc2626;margin-top:6px"></p>
+            <div id="ord-attachments-list" style="display:flex;flex-direction:column;gap:8px;margin-top:8px">${orderDocRows('orderDocDraft')}</div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
+                <button onclick="orderDocDraft=null;showOrderDetail('${o.id}')" class="btn-secondary text-xs">Cancel</button>
+                <button onclick="saveOrderDocs()" class="btn-primary text-xs">Save documents</button>
+            </div>
+        </div>`, true);
+}
+
+function saveOrderDocs() {
+    const d = orderDocDraft;
+    const o = getOrderById(d.orderId);
+    const error = untypedDocError(d.attachments);
+    if (error) {
+        document.getElementById('ord-att-error').textContent = error;
+        return;
+    }
+    const before = new Map((o.attachments || []).map(a => [a.id, a]));
+    const after = new Set(d.attachments.map(a => a.id));
+    const changes = [
+        ...d.attachments.filter(a => !before.has(a.id)).map(a => `+ ${a.name} (${orderDocTypeLabel(a.doc_type)})`),
+        ...d.attachments.filter(a => before.has(a.id) && (before.get(a.id).doc_type || '') !== a.doc_type)
+            .map(a => `${a.name}: ${orderDocTypeLabel(before.get(a.id).doc_type)} → ${orderDocTypeLabel(a.doc_type)}`),
+        ...[...before.values()].filter(a => !after.has(a.id)).map(a => `− ${a.name}`),
+    ];
+    if (changes.length) {
+        const ok = commitPortalMutation(() => {
+            o.attachments = d.attachments;
+            o.updated_at = new Date().toISOString();
+            logActivity('Order documents updated', o.order_no, changes.join('; '));
+        });
+        if (!ok) return;
+        showToast(`Documents updated on ${o.order_no}`);
+    }
+    orderDocDraft = null;
+    showOrderDetail(o.id);
 }
 
 function showOrderAttachmentPreview(orderId, index) {
@@ -5809,18 +6027,17 @@ function validateOrderDraft(status) {
     if (!d.order_date) errors.push('Order Date is required.');
     if (!d.customer_name) errors.push('Customer is required.');
     if (!d.lines.length) errors.push('At least one order line is required.');
+    if (untypedDocError(d.attachments || [])) errors.push(untypedDocError(d.attachments));
     if (d.lines.some(l => l.scope === 'HW') && !d.hw_supplier_name) errors.push('HW Supplier is required because the order has HW lines.');
-    if (d.lines.some(l => l.scope === 'SW') && !d.sw_supplier_name) errors.push('SW Supplier is required because the order has SW lines.');
+    if (d.lines.some(l => l.scope === 'SW' && !l.supplier_name) && !d.sw_supplier_name) errors.push('SW Supplier is required because a SW line has no supplier of its own.');
     d.lines.forEach((l, i) => {
         if (!l.product_name) errors.push(`Line ${i + 1}: product is required.`);
         if (l.scope === 'HW' && l.bom.some(b => !b.component_type || !b.model)) errors.push(`Line ${i + 1}: every BOM row needs a component and a model.`);
-        if (l.scope === 'SW' && l.license_start && l.license_end && l.license_start > l.license_end) {
-            errors.push(`Line ${i + 1}: license start is after license end.`);
-        }
+        if (l.scope === 'SW') errors.push(...licenseLineErrors(l, `Line ${i + 1}`, d.lines.find(x => x.id === l.parent_line_id)));
     });
     if (status === 'CONFIRMED') {
         const seenSerials = new Set();
-        const seenKeys = new Set();
+        errors.push(...licenseKeyDuplicateErrors(d.lines));
         d.lines.forEach((l, i) => {
             if (!l.sla_plan) errors.push(`Line ${i + 1}: an SLA plan is required to confirm.`);
             if (l.scope === 'HW') {
@@ -5834,19 +6051,155 @@ function validateOrderDraft(status) {
                 });
             } else {
                 if (!l.license_start || !l.license_end) errors.push(`Line ${i + 1}: the license period is required to confirm.`);
-                if (l.license_keys.some(lk => !lk.trim())) errors.push(`Line ${i + 1}: all ${l.qty} license keys are required to confirm.`);
-                l.license_keys.forEach(lk => {
-                    const key = lk.trim().toUpperCase();
-                    if (!key) return;
-                    if (seenKeys.has(key)) errors.push(`Line ${i + 1}: license key ${lk} appears twice in this order.`);
-                    seenKeys.add(key);
-                });
+                if (l.license_keys.some(lk => !lk.key.trim())) errors.push(`Line ${i + 1}: all ${l.qty} license keys are required to confirm.`);
             }
         });
     }
     const duplicate = ORDERS.find(o => o.id !== d.id && o.order_no.toLowerCase() === d.order_no.toLowerCase());
     if (duplicate) errors.push(`Order No ${d.order_no} already exists.`);
     return errors;
+}
+
+// Checks one SW line on its own; shared by the order editor and the
+// post-confirmation license adjustment.
+function licenseLineErrors(l, label, parent) {
+    const errors = [];
+    if (l.license_start && l.license_end && l.license_start > l.license_end) errors.push(`${label}: license start is after license end.`);
+    if (parent) l.license_keys.forEach((lk, ki) => {
+        if (lk.unit !== null && lk.unit >= parent.qty) errors.push(`${label}: key ${ki + 1} is bound to Unit ${lk.unit + 1}, which the hardware line no longer has. Rebind it.`);
+    });
+    return errors;
+}
+
+// A key may repeat inside one bundled line to cover several units, never
+// across lines and never twice on the same unit (or next to "All units").
+function licenseKeyDuplicateErrors(lines) {
+    const errors = [];
+    const seen = new Map(); // KEY → { lineIndex, units }
+    lines.forEach((l, i) => (l.license_keys || []).forEach(lk => {
+        const key = lk.key.trim().toUpperCase();
+        if (!key) return;
+        const prior = seen.get(key);
+        if (!prior) { seen.set(key, { lineIndex: i, units: new Set([lk.unit]) }); return; }
+        if (prior.lineIndex !== i) errors.push(`License key ${lk.key} is on both line ${prior.lineIndex + 1} and line ${i + 1}.`);
+        else if (lk.unit === null || prior.units.has(null) || prior.units.has(lk.unit)) errors.push(`Line ${i + 1}: license key ${lk.key} repeats without a different unit.`);
+        prior.units.add(lk.unit);
+    }));
+    return errors;
+}
+
+function licenseUnitLabel(parent, unit) {
+    if (unit === null) return 'All units';
+    if (unit >= parent.qty) return `Unit ${unit + 1} (removed)`;
+    return `Unit ${unit + 1} · ${(parent.serial_nos[unit] || '').trim() || 'serial pending'}`;
+}
+
+// ── Adjust license (confirmed orders) ──
+// Keys get reissued, renewed or rebound after an order is confirmed. Only the
+// SW line's license fields are editable here; the rest of the order stays
+// locked, and every change lands in the Activity Log with before → after.
+
+let licenseDraft = null;
+
+function showLicenseAdjustModal(lineId) {
+    const line = ORDER_LINES.find(l => l.id === lineId);
+    const order = line ? getOrderById(line.order_id) : null;
+    if (!line || line.scope !== 'SW' || order?.status !== 'CONFIRMED' || !canUpdateOrders()) return;
+    licenseDraft = {
+        lineId,
+        supplier_name: line.supplier_name || '', version: line.version || '',
+        license_start: line.license_start || '', license_end: line.license_end || '',
+        license_keys: (line.license_keys || []).map(lk => ({ ...lk })),
+    };
+    renderLicenseAdjustModal();
+}
+
+function renderLicenseAdjustModal() {
+    const d = licenseDraft;
+    const line = ORDER_LINES.find(l => l.id === d.lineId);
+    const order = getOrderById(line.order_id);
+    const parent = line.parent_line_id ? ORDER_LINES.find(x => x.id === line.parent_line_id) : null;
+    const input = (label, key, type = 'text', placeholder = '') => `
+        <div>
+            <label class="field-label">${label}</label>
+            <input type="${type}" class="input-field" value="${esc(d[key])}" ${placeholder ? `placeholder="${esc(placeholder)}"` : ''} oninput="licenseDraft.${key}=this.value">
+        </div>`;
+    showModal(`
+        <div style="padding:26px 28px;max-height:82vh;overflow-y:auto">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Adjust license · ${esc(line.product_name)}</h3>
+            <p style="font-size:13px;color:#86868b;margin:0 0 18px;line-height:1.6">${esc(order.order_no)} · line ${line.line_no}${parent ? ` · bundled with ${esc(parent.product_name)}` : ''}. Every change is recorded in the Activity Log.</p>
+            <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px">
+                ${input('Supplier', 'supplier_name', 'text', order.sw_supplier_name || 'Order SW supplier')}
+                ${input('Version', 'version', 'text', 'e.g. 4.1.0')}
+                ${input('License Start', 'license_start', 'date')}
+                ${input('License End', 'license_end', 'date')}
+            </div>
+            <label class="field-label" style="margin-top:14px">License Keys (${d.license_keys.length})</label>
+            <div style="display:flex;flex-direction:column;gap:8px">
+                ${d.license_keys.map((lk, ki) => `
+                <div style="display:flex;align-items:center;gap:10px">
+                    <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0">Key ${ki + 1}</span>
+                    <input type="text" class="input-field" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="License key"
+                           value="${esc(lk.key)}" oninput="licenseDraft.license_keys[${ki}].key=this.value">
+                    ${parent ? `<select class="input-field" style="width:230px;flex-shrink:0"
+                           onchange="licenseDraft.license_keys[${ki}].unit=this.value===''?null:Number(this.value)">${ordUnitOptions(parent, lk.unit)}</select>` : ''}
+                    ${d.license_keys.length > 1 ? `<button onclick="licenseDraft.license_keys.splice(${ki},1);renderLicenseAdjustModal()" class="btn-ghost" title="Remove key"><i class="ph ph-x"></i></button>` : ''}
+                </div>`).join('')}
+            </div>
+            <button onclick="licenseDraft.license_keys.push({ key: '', unit: null });renderLicenseAdjustModal()" class="btn-secondary text-xs" style="margin-top:10px"><i class="ph ph-plus"></i> Add Key</button>
+            <p id="la-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin-top:12px"></p>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
+                <button onclick="licenseDraft=null;showOrderDetail('${order.id}')" class="btn-secondary text-xs">Cancel</button>
+                <button onclick="saveLicenseAdjustment()" class="btn-primary text-xs">Save changes</button>
+            </div>
+        </div>`, true);
+}
+
+function saveLicenseAdjustment() {
+    const d = licenseDraft;
+    const line = ORDER_LINES.find(l => l.id === d.lineId);
+    const order = getOrderById(line.order_id);
+    const parent = line.parent_line_id ? ORDER_LINES.find(x => x.id === line.parent_line_id) : null;
+    const next = {
+        supplier_name: d.supplier_name.trim(), version: d.version.trim(),
+        license_start: d.license_start, license_end: d.license_end,
+        license_keys: d.license_keys.map(lk => ({ key: lk.key.trim(), unit: parent ? lk.unit : null })),
+    };
+    const errors = [];
+    if (!next.license_start || !next.license_end) errors.push('The license period is required.');
+    if (next.license_keys.some(lk => !lk.key)) errors.push('Every key row needs a key.');
+    if (!next.supplier_name && !order.sw_supplier_name) errors.push('Supplier is required because the order has no SW supplier.');
+    errors.push(...licenseLineErrors(next, `Line ${line.line_no}`, parent));
+    errors.push(...licenseKeyDuplicateErrors(getOrderLines(order.id).map(l => l.id === line.id ? next : l)));
+    if (errors.length) {
+        const el = document.getElementById('la-error');
+        el.textContent = errors[0];
+        el.style.display = 'block';
+        return;
+    }
+
+    const keyList = keys => keys.map(lk => `${lk.key}${parent ? ` (${licenseUnitLabel(parent, lk.unit)})` : ''}`).join(', ') || '—';
+    const changes = [
+        ['supplier', line.supplier_name || '', next.supplier_name],
+        ['version', line.version || '', next.version],
+        ['start', line.license_start || '', next.license_start],
+        ['end', line.license_end || '', next.license_end],
+        ['keys', keyList(line.license_keys || []), keyList(next.license_keys)],
+    ].filter(([, before, after]) => before !== after).map(([field, before, after]) => `${field} ${before || '—'} → ${after || '—'}`);
+    if (!changes.length) {
+        licenseDraft = null;
+        showOrderDetail(order.id);
+        return;
+    }
+    const ok = commitPortalMutation(() => {
+        Object.assign(line, next, { qty: next.license_keys.length });
+        order.updated_at = new Date().toISOString();
+        logActivity('License adjusted', order.order_no, `Line ${line.line_no} ${line.product_name}: ${changes.join('; ')}`);
+    });
+    if (!ok) return;
+    licenseDraft = null;
+    showOrderDetail(order.id);
+    showToast(`License updated on ${order.order_no}`);
 }
 
 function saveOrder(status) {
@@ -5893,7 +6246,9 @@ function saveOrder(status) {
             warranty_months: l.scope === 'HW' && parseInt(l.warranty_months, 10) >= 1 ? parseInt(l.warranty_months, 10) : null,
             warranty_start: l.scope === 'HW' ? l.warranty_start : '',
             warranty_end: l.scope === 'HW' ? ordWarrantyEnd(l) : '',
-            license_keys: l.scope === 'SW' ? l.license_keys.map(lk => lk.trim()) : [],
+            parent_line_id: l.scope === 'SW' ? (l.parent_line_id || null) : null,
+            supplier_name: l.scope === 'SW' ? (l.supplier_name || '') : '',
+            license_keys: l.scope === 'SW' ? l.license_keys.map(lk => ({ key: lk.key.trim(), unit: l.parent_line_id ? lk.unit : null })) : [],
             version: l.scope === 'SW' ? l.version : '',
             license_start: l.scope === 'SW' ? l.license_start : '',
             license_end: l.scope === 'SW' ? l.license_end : '',
@@ -6057,13 +6412,14 @@ function showOrderDetail(id) {
                 ${o.notes ? row('Notes', esc(o.notes)) : ''}
             </div>
 
-            ${(o.attachments || []).length ? `
-            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:20px 0 8px">Documents</div>
-            <div class="tk-att-list">${orderAttachmentGallery(o.attachments, o.id)}</div>` : ''}
+            ${orderDocSection(o)}
 
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:20px 0 8px">Order Lines</div>
-            ${lines.map(l => `
-            <div style="border:1px solid var(--border-light);border-radius:10px;padding:12px 14px;margin-bottom:10px">
+            ${lines.map(l => {
+                const parent = l.parent_line_id ? lines.find(x => x.id === l.parent_line_id) : null;
+                return `
+            <div style="border:1px solid var(--border-light);border-radius:10px;padding:12px 14px;margin-bottom:10px${parent ? ';margin-left:24px' : ''}">
+                ${parent ? `<div style="font-size:11.5px;color:#86868b;margin-bottom:6px"><i class="ph ph-arrow-elbow-down-right"></i> Bundled with line ${parent.line_no} · ${esc(parent.product_name)}</div>` : ''}
                 <div style="display:flex;align-items:center;gap:10px">
                     <span class="badge ${l.scope === 'HW' ? 'badge-hw' : 'badge-sw'}">${l.scope}</span>
                     <span style="font-size:13px;font-weight:600;color:#1d1d1f">${esc(l.product_name)}</span>
@@ -6075,16 +6431,18 @@ function showOrderDetail(id) {
                     </span>
                 </div>
                 ${getLineTickets(l.id).length ? `<div style="font-size:12px;color:#86868b;margin-top:6px"><i class="ph ph-ticket"></i> ${getLineTickets(l.id).length} ticket${getLineTickets(l.id).length === 1 ? '' : 's'} on this line · <a href="#" onclick="event.preventDefault();closeModal();openServiceDeskForOrder('${o.id}')" style="color:#1432E6;font-weight:600">view</a></div>` : ''}
-                ${l.scope === 'SW' && (l.license_start || l.license_end) ? `
-                <div style="font-size:12.5px;color:#86868b;margin-top:6px">License ${esc(l.license_start || '?')} → ${esc(l.license_end || '?')}</div>` : ''}
+                ${l.scope === 'SW' && (l.license_start || l.license_end || l.supplier_name) ? `
+                <div style="font-size:12.5px;color:#86868b;margin-top:6px">${l.license_start || l.license_end ? `License ${esc(l.license_start || '?')} → ${esc(l.license_end || '?')}` : ''}${l.supplier_name ? `${l.license_start || l.license_end ? ' · ' : ''}Supplier ${esc(l.supplier_name)}` : ''}</div>` : ''}
                 ${l.scope === 'HW' && l.warranty_months ? `
                 <div style="font-size:12.5px;color:#86868b;margin-top:6px">Warranty ${l.warranty_months} months${l.warranty_start ? ` · ${esc(l.warranty_start)} → ${esc(l.warranty_end || '?')}` : ' · starts on shipment'}</div>` : ''}
                 ${(l.license_keys || []).length ? `
                 <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
-                    ${l.license_keys.map(lk => lk.trim()
-                        ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(lk)}</span>`
-                        : '<span class="badge badge-amber">Key missing</span>').join('')}
+                    ${l.license_keys.map(lk => `<span style="display:inline-flex;align-items:center;gap:6px">${lk.key
+                        ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(lk.key)}</span>`
+                        : '<span class="badge badge-amber">Key missing</span>'}${parent ? `<span style="font-size:11.5px;color:#86868b">→ ${esc(licenseUnitLabel(parent, lk.unit))}</span>` : ''}</span>`).join('')}
                 </div>` : ''}
+                ${l.scope === 'SW' && o.status === 'CONFIRMED' && canUpdateOrders() ? `
+                <div style="margin-top:8px"><button onclick="showLicenseAdjustModal('${l.id}')" class="btn-secondary text-xs" style="padding:4px 10px"><i class="ph ph-key"></i> Adjust license</button></div>` : ''}
                 ${l.serial_nos.length ? `
                 <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
                     ${l.serial_nos.map(sn => sn.trim()
@@ -6111,7 +6469,8 @@ function showOrderDetail(id) {
                         </tbody>
                     </table>
                 </div>` : ''}
-            </div>`).join('')}
+            </div>`;
+            }).join('')}
 
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px;flex-wrap:wrap">
                 ${o.status === 'DRAFT' && canUpdateOrders() ? `<button onclick="closeModal();showOrderModal('${o.id}')" class="btn-secondary text-xs"><i class="ph ph-pencil-simple"></i> Edit</button>` : ''}
@@ -6362,7 +6721,7 @@ function renderAccounts() {
 function confirmToggleAccount(userId) {
     const user = USERS.find(u => u.id === userId);
     if (!user || user.is_super_admin || !canManageAccounts()) return;
-    if (!viewAsRoleId && user.id === currentUser?.id) { showToast('You cannot disable the account you are signed in with.', 'error'); return; }
+    if (!viewAsBindingId && user.id === currentUser?.id) { showToast('You cannot disable the account you are signed in with.', 'error'); return; }
     const disabling = user.status === 'active';
     const held = getUserBindings(user.id);
     showModal(`
@@ -6381,7 +6740,7 @@ function confirmToggleAccount(userId) {
 function toggleAccountStatus(userId) {
     const user = USERS.find(u => u.id === userId);
     if (!user || user.is_super_admin || !canManageAccounts()) return;
-    if (!viewAsRoleId && user.id === currentUser?.id) return;
+    if (!viewAsBindingId && user.id === currentUser?.id) return;
     const next = user.status === 'active' ? 'disabled' : 'active';
     const ok = commitPortalMutation(() => {
         user.status = next;
@@ -6700,7 +7059,7 @@ function saveRole(orgId, roleId = null) {
     if (!permissions.length) return fail('Pick at least one permission.');
     // Changing the role you are acting under would rewrite the floor beneath
     // this session; the Super Admin previewing it is unaffected.
-    const actingRole = !viewAsRoleId && activeRole();
+    const actingRole = !viewAsBindingId && activeRole();
     if (role && actingRole && actingRole.id === role.id) return fail('This is the role you are signed in under. Switch to another role before editing it.');
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
@@ -6853,7 +7212,7 @@ function addMember(orgId) {
 // The signed-in account may not drop the role it is acting under: that
 // would pull the floor out from under the current session.
 function wouldDropActiveBinding(userId, bindingIds) {
-    return !viewAsRoleId && userId === currentUser?.id && bindingIds.includes(activeBindingId);
+    return !viewAsBindingId && userId === currentUser?.id && bindingIds.includes(activeBindingId);
 }
 
 function showEditMemberModal(orgId, userId) {
@@ -6941,19 +7300,29 @@ function removeMember(orgId, userId) {
 
 // ═══════════════════════════════════════════════════════════════════
 // VIEW AS — bottom-right switch, Super Admin only. Views the workspace as
-// any role of an enabled org: that role's grants and org scope apply through
-// the same hasPermission() as a real account, so what shows is what that
-// role's members see. No data is changed.
+// any member of an enabled org: their role's grants and org scope apply
+// through the same hasPermission() as a real account, and person-level state
+// (notifications) is theirs. No data is changed.
 // ═══════════════════════════════════════════════════════════════════
 
 let viewAsMenuOpen = false;
 
-// Roles a demo can view as, grouped by org, for orgs whose type is enabled.
-function viewAsRoleGroups() {
+// Members a demo can view as, grouped by org, for orgs whose type is enabled.
+// One entry per active role binding, so a person holding two roles appears
+// under each org they act in.
+function viewAsMemberGroups() {
     return ORGS
         .filter(org => org.status === 'active' && org.types.some(t => ENABLED_ORG_TYPES.includes(t)))
-        .map(org => ({ org, roles: ROLES.filter(r => r.org_id === org.id).sort((a, b) => a.name.localeCompare(b.name)) }))
-        .filter(g => g.roles.length);
+        .map(org => {
+            const roleIds = new Set(ROLES.filter(r => r.org_id === org.id).map(r => r.id));
+            const members = ROLE_BINDINGS
+                .filter(b => b.status === 'active' && roleIds.has(b.role_id))
+                .map(b => ({ binding: b, user: USERS.find(u => u.id === b.user_id), role: ROLES.find(r => r.id === b.role_id) }))
+                .filter(m => m.user && m.user.status === 'active')
+                .sort((x, y) => x.user.name.localeCompare(y.user.name) || x.role.name.localeCompare(y.role.name));
+            return { org, members };
+        })
+        .filter(g => g.members.length);
 }
 
 function toggleViewAsMenu(e) {
@@ -6972,11 +7341,11 @@ document.addEventListener('click', e => {
     if (!e.target.closest('#view-as-root')) closeViewAsMenu();
 });
 
-function setViewAs(roleId = null) {
+function setViewAs(bindingId = null) {
     if (!currentUser?.is_super_admin) return;
     viewAsMenuOpen = false;
     closeModal();
-    viewAsRoleId = roleId && ROLES.some(r => r.id === roleId) ? roleId : null;
+    viewAsBindingId = bindingId && ROLE_BINDINGS.some(b => b.id === bindingId) ? bindingId : null;
     renderSidebarUser();
     buildNav();
     renderViewAsSwitch();
@@ -6985,34 +7354,36 @@ function setViewAs(roleId = null) {
     const allowed = visibleNavItems().map(n => n.key);
     navigate(allowed.includes(currentView) ? currentView : allowed[0]);
     const role = activeRole();
-    showToast(role ? `Viewing as ${activeOrg()?.name} · ${role.name}` : 'Back to Super Admin view', 'info');
+    showToast(role ? `Viewing as ${actingName()} · ${activeOrg()?.name} ${role.name}` : 'Back to Super Admin view', 'info');
 }
 
 function renderViewAsSwitch() {
     const root = document.getElementById('view-as-root');
     if (!root) return;
     if (!currentUser?.is_super_admin) { root.innerHTML = ''; return; }
-    const groups = viewAsRoleGroups();
+    const groups = viewAsMemberGroups();
     const role = activeRole();
-    const item = (id, icon, label, active) => `
+    const item = (id, icon, label, sub, active) => `
                 <button class="view-as-item ${active ? 'active' : ''}" onclick="setViewAs(${id ? `'${id}'` : 'null'})">
-                    <i class="ph ${icon}" style="font-size:16px"></i><span style="flex:1">${esc(label)}</span>${active ? '<i class="ph ph-check"></i>' : ''}
+                    <i class="ph ${icon}" style="font-size:16px"></i>
+                    <span style="flex:1;min-width:0">${esc(label)}${sub ? `<span style="display:block;font-size:11px;font-weight:400;color:#86868b">${esc(sub)}</span>` : ''}</span>
+                    ${active ? '<i class="ph ph-check"></i>' : ''}
                 </button>`;
     root.innerHTML = `
         <div class="view-as">
             ${viewAsMenuOpen ? `
             <div class="view-as-menu" style="max-height:60vh;overflow-y:auto">
                 <div class="view-as-label">View as</div>
-                ${item(null, 'ph-shield-check', 'Super Admin', !viewAsRoleId)}
+                ${item(null, 'ph-shield-check', 'Super Admin', '', !viewAsBindingId)}
                 ${groups.length ? groups.map(g => `
                 <div class="view-as-label">${esc(g.org.name)}</div>
-                ${g.roles.map(r => item(r.id, orgHasType(g.org, 'OPERATOR') ? 'ph-shield' : 'ph-buildings', r.name, viewAsRoleId === r.id)).join('')}`).join('')
-                : '<div style="font-size:12px;color:#86868b;padding:6px 10px">No roles yet. Create one under Organizations.</div>'}
-                <div style="font-size:11px;color:#86868b;padding:8px 10px 4px;border-top:1px solid var(--border-light);margin-top:4px">Applies that role's permissions and organization. No data is changed.</div>
+                ${g.members.map(m => item(m.binding.id, orgHasType(g.org, 'OPERATOR') ? 'ph-shield' : 'ph-user', m.user.name, m.role.name, viewAsBindingId === m.binding.id)).join('')}`).join('')
+                : '<div style="font-size:12px;color:#86868b;padding:6px 10px">No members yet. Add people under Organizations.</div>'}
+                <div style="font-size:11px;color:#86868b;padding:8px 10px 4px;border-top:1px solid var(--border-light);margin-top:4px">Acts as that person under that role: their permissions, organization and notifications. Roles with no members are not listed. No data is changed.</div>
             </div>` : ''}
             <button class="view-as-btn ${isCustomerView() ? 'customer' : ''}" onclick="toggleViewAsMenu(event)" title="Switch perspective">
-                <i class="ph ${viewAsRoleId ? 'ph-buildings' : 'ph-eye'}" style="font-size:15px"></i>
-                <span>${role ? `Viewing as ${esc(activeOrg()?.name || '')} · ${esc(role.name)}` : 'Viewing as Super Admin'}</span>
+                <i class="ph ${viewAsBindingId ? 'ph-user' : 'ph-eye'}" style="font-size:15px"></i>
+                <span>${role ? `Viewing as ${esc(actingName())} · ${esc(activeOrg()?.name || '')} ${esc(role.name)}` : 'Viewing as Super Admin'}</span>
                 <i class="ph ${viewAsMenuOpen ? 'ph-caret-down' : 'ph-caret-up'}" style="font-size:12px;opacity:.7"></i>
             </button>
         </div>`;
@@ -7084,7 +7455,10 @@ function isTicketReferred(t) { return ticketInternalState(t) !== 'NONE'; }
 function ticketInternalParty(t, state) {
     const order = getOrderById(t.order_id);
     if (state === 'HW_SUPPLIER') return (order?.hw_supplier_name || (t.scope === 'HW' ? t.snapshot?.supplier_name : '') || '').trim();
-    if (state === 'SW_SUPPLIER') return (order?.sw_supplier_name || (t.scope === 'SW' ? t.snapshot?.supplier_name : '') || '').trim();
+    if (state === 'SW_SUPPLIER') {
+        const line = t.scope === 'SW' ? ORDER_LINES.find(l => l.id === t.order_line_id) : null;
+        return (line?.supplier_name || order?.sw_supplier_name || (t.scope === 'SW' ? t.snapshot?.supplier_name : '') || '').trim();
+    }
     if (state === 'SI') return (order?.si_name || t.snapshot?.si_name || '').trim();
     if (state === 'AISO_INTERNAL') return 'AISO';
     return '';
@@ -7094,15 +7468,23 @@ function ticketInternalChip(t, { compact = false } = {}) {
     if (!isTicketReferred(t)) return '';
     const state = ticketInternalState(t);
     const days = t.internal_since ? Math.floor((Date.now() - new Date(t.internal_since)) / 86400000) : null;
-    const label = compact ? (t.internal_party || TICKET_INTERNAL_STATE_LABEL[state]) : TICKET_INTERNAL_STATE_LABEL[state];
+    const label = compact ? (t.internal_party || TICKET_INTERNAL_STATE_LABEL[state])
+        : `${TICKET_INTERNAL_STATE_LABEL[state]}${state === 'AISO_INTERNAL' && t.internal_assignee_id ? ` · ${t.internal_party}` : ''}`;
     const age = days === null ? '' : ` · ${days}d`;
-    return `<span class="badge badge-orange" title="Internal: ${esc(TICKET_INTERNAL_STATE_LABEL[state])}${t.internal_party ? ` — ${esc(t.internal_party)}` : ''}. The customer does not see this."><i class="ph ph-arrow-bend-up-right"></i> ${esc(label)}${esc(age)}</span>`;
+    // A colleague sitting on a confirmation for a day or more is the stale case.
+    const stale = state === 'AISO_INTERNAL' && days >= 1;
+    return `<span class="badge ${stale ? 'badge-red' : 'badge-orange'}" title="Internal: ${esc(TICKET_INTERNAL_STATE_LABEL[state])}${t.internal_party ? ` — ${esc(t.internal_party)}` : ''}. The customer does not see this."><i class="ph ph-arrow-bend-up-right"></i> ${esc(label)}${esc(age)}</span>`;
 }
 
-function setTicketInternalState(ticketId, state) {
+function setTicketInternalState(ticketId, state, { assigneeId = null, note = '' } = {}) {
     const t = getTicketById(ticketId);
     if (!t || !canManageTickets() || !TICKET_INTERNAL_STATES.includes(state) || ticketInternalState(t) === state) return;
-    const party = ticketInternalParty(t, state);
+    // Internal work goes to a named colleague when there is one to name.
+    if (state === 'AISO_INTERNAL' && !assigneeId && deskStaff().some(u => u.id !== actingUser()?.id)) {
+        showReferInternalModal(t.id);
+        return;
+    }
+    const party = state === 'AISO_INTERNAL' && assigneeId ? userNameById(assigneeId) : ticketInternalParty(t, state);
     // Referring to a party the order never named would leave an empty chip.
     if (state !== 'NONE' && state !== 'AISO_INTERNAL' && !party) {
         showToast(`${t.snapshot?.order_no || 'This order'} records no ${state === 'SI' ? 'system integrator' : state === 'HW_SUPPLIER' ? 'HW supplier' : 'SW supplier'}.`, 'error');
@@ -7115,17 +7497,24 @@ function setTicketInternalState(ticketId, state) {
         t.internal_state = state;
         t.internal_party = state === 'NONE' ? '' : party;
         t.internal_since = state === 'NONE' ? null : now;
+        t.internal_assignee_id = state === 'AISO_INTERNAL' ? (assigneeId || null) : null;
+        t.internal_referred_by = state === 'AISO_INTERNAL' && assigneeId ? (actingUser()?.id || null) : null;
         t.updated_at = now;
         // The thread is the audit trail, and an internal note never reaches
         // the customer — so the referral is recorded there too.
+        const msgId = `tm-${Date.now()}`;
         TICKET_MESSAGES.push({
-            id: `tm-${Date.now()}`, ticket_id: t.id, author_type: 'INTERNAL', author_name: currentUser.name,
+            id: msgId, ticket_id: t.id, author_type: 'INTERNAL', author_name: actingName(),
             is_internal: true, created_at: now,
             body: state === 'NONE'
-                ? `Back with the desk (was ${TICKET_INTERNAL_STATE_LABEL[from]}${t.internal_party ? '' : ''}).`
-                : `Referred to ${party} — ${TICKET_INTERNAL_STATE_LABEL[state]}.`,
+                ? `Back with the desk (was ${TICKET_INTERNAL_STATE_LABEL[from]}).`
+                : state === 'AISO_INTERNAL' && assigneeId
+                    ? `Referred to ${party} for confirmation.${note ? ` ${note}` : ''}`
+                    : `Referred to ${party} — ${TICKET_INTERNAL_STATE_LABEL[state]}.`,
             attachments: [],
+            notify_user_ids: t.internal_assignee_id ? [t.internal_assignee_id] : [],
         });
+        if (t.internal_assignee_id) notifyUsers([t.internal_assignee_id], t, 'CONFIRM', msgId);
         logActivity('Ticket handling changed', t.ticket_no, `${TICKET_INTERNAL_STATE_LABEL[from]} → ${TICKET_INTERNAL_STATE_LABEL[state]}${party ? ` (${party})` : ''}`);
     });
     if (!ok) return;
@@ -7148,6 +7537,177 @@ function ticketCoverage(snap) {
     if (!snap?.coverage_end) return { known: false };
     const days = Math.round((new Date(snap.coverage_end) - new Date(todayIso())) / 86400000);
     return { known: true, days, active: days >= 0, end: snap.coverage_end, kind: snap.coverage_kind === 'license' ? 'License' : 'Warranty' };
+}
+
+// ── Internal notifications (docs/SERVICE_DESK_PLAN.md, 內部通知) ──
+// In-app only, for AISO people. Created when an internal note names a
+// colleague, when a ticket is referred to someone for confirmation, and when
+// that confirmation comes back. Naming someone notifies them; it does not
+// hide the note from the rest of the desk.
+
+let notifMenuOpen = false;
+
+// Colleagues who can work tickets: active members of an operator org whose
+// role can update tickets.
+function deskStaff() {
+    const roleIds = new Set(ROLES
+        .filter(r => orgHasType(getOrgById(r.org_id), 'OPERATOR') && r.permissions.includes(PORTAL_PERMISSIONS.TICKET_UPDATE))
+        .map(r => r.id));
+    const userIds = new Set(ROLE_BINDINGS.filter(b => b.status === 'active' && roleIds.has(b.role_id)).map(b => b.user_id));
+    return USERS.filter(u => userIds.has(u.id) && u.status === 'active').sort((a, b) => a.name.localeCompare(b.name));
+}
+function userNameById(id) { return USERS.find(u => u.id === id)?.name || ''; }
+
+// Call inside a commitPortalMutation. Nobody is notified of their own action.
+function notifyUsers(userIds, ticket, kind, messageId = null) {
+    const me = actingUser()?.id;
+    const now = new Date().toISOString();
+    [...new Set(userIds)].filter(id => id && id !== me).forEach((id, i) => NOTIFICATIONS.unshift({
+        id: `nt-${Date.now()}-${i}`, user_id: id, ticket_id: ticket.id, message_id: messageId, kind,
+        actor_name: actingName(), created_at: now, read_at: null,
+    }));
+}
+
+function myNotifications() {
+    const me = actingUser();
+    return me && isOperatorView() ? NOTIFICATIONS.filter(n => n.user_id === me.id) : [];
+}
+
+// A ticket needs me while it waits on my confirmation, or while I have an
+// unread notification on it.
+function ticketNeedsMe(t) {
+    const me = actingUser();
+    if (!me || !isOperatorView()) return false;
+    return isWaitingOnMe(t) || NOTIFICATIONS.some(n => n.user_id === me.id && n.ticket_id === t.id && !n.read_at);
+}
+function isWaitingOnMe(t) {
+    const me = actingUser();
+    return !!me && ticketInternalState(t) === 'AISO_INTERNAL' && t.internal_assignee_id === me.id;
+}
+
+// Opening a ticket reads my notifications on it. A confirmation request stays
+// on the Needs me list until it is confirmed, whatever its read state.
+function markTicketNotificationsRead(ticketId) {
+    const unread = myNotifications().filter(n => n.ticket_id === ticketId && !n.read_at);
+    if (!unread.length) return;
+    const now = new Date().toISOString();
+    unread.forEach(n => { n.read_at = now; });
+    Store.save({ notify: false });
+    renderNotificationBell();
+}
+
+function notificationText(n) {
+    const t = getTicketById(n.ticket_id);
+    const no = t?.ticket_no || 'a ticket';
+    if (n.kind === 'CONFIRM') return `${n.actor_name} needs your confirmation on ${no}`;
+    if (n.kind === 'CONFIRMED') return `${n.actor_name} confirmed ${no}`;
+    return `${n.actor_name} flagged you in an internal note on ${no}`;
+}
+
+function renderNotificationBell() {
+    const root = document.getElementById('notif-root');
+    if (!root) return;
+    const me = actingUser();
+    if (!me || !isOperatorView()) { root.innerHTML = ''; notifMenuOpen = false; return; }
+    const list = myNotifications();
+    const unread = list.filter(n => !n.read_at).length;
+    root.innerHTML = `
+        <button class="notif-btn" onclick="toggleNotifMenu(event)" aria-label="Notifications${unread ? `, ${unread} unread` : ''}" title="Notifications">
+            <i class="ph ph-bell"></i>${unread ? `<span class="notif-count">${unread > 99 ? '99+' : unread}</span>` : ''}
+        </button>
+        ${notifMenuOpen ? `
+        <div class="notif-menu" onclick="event.stopPropagation()">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px 8px">
+                <span style="font-size:12.5px;font-weight:700">Notifications</span>
+                ${unread ? '<button class="btn-link" style="font-size:12px" onclick="markAllNotificationsRead()">Mark all read</button>' : ''}
+            </div>
+            ${list.length ? list.slice(0, 30).map(n => {
+                const t = getTicketById(n.ticket_id);
+                return `<button class="notif-item ${n.read_at ? '' : 'unread'}" onclick="openNotification('${n.id}')">
+                    <span class="dot"></span>
+                    <span style="min-width:0;flex:1"><span class="txt">${esc(notificationText(n))}</span>
+                        <span style="display:block;color:#86868b;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t?.subject || '')} · ${ticketTimeAgo(n.created_at)}</span></span>
+                </button>`;
+            }).join('') : '<div style="font-size:12.5px;color:#86868b;padding:14px 10px;text-align:center">Nothing yet. Colleagues can flag you in internal notes.</div>'}
+        </div>` : ''}`;
+}
+
+function toggleNotifMenu(e) {
+    if (e) e.stopPropagation();
+    notifMenuOpen = !notifMenuOpen;
+    renderNotificationBell();
+}
+
+document.addEventListener('click', e => {
+    if (notifMenuOpen && !e.target.closest('#notif-root')) { notifMenuOpen = false; renderNotificationBell(); }
+});
+
+function openNotification(id) {
+    const n = NOTIFICATIONS.find(x => x.id === id);
+    notifMenuOpen = false;
+    if (!n) return;
+    if (currentView !== 'service-desk') navigate('service-desk');
+    showTicketDetail(n.ticket_id); // marks it read
+    renderServiceDesk();
+}
+
+function markAllNotificationsRead() {
+    const now = new Date().toISOString();
+    myNotifications().filter(n => !n.read_at).forEach(n => { n.read_at = now; });
+    Store.save({ notify: false });
+    renderNotificationBell();
+    if (currentView === 'service-desk') renderServiceDesk();
+}
+
+// Picking "AISO internal work" asks who has to confirm before referring.
+function showReferInternalModal(ticketId) {
+    const t = getTicketById(ticketId);
+    const staff = deskStaff().filter(u => u.id !== actingUser()?.id);
+    showModal(`
+        <div style="padding:26px 28px">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Who needs to confirm ${esc(t.ticket_no)}?</h3>
+            <p style="font-size:13px;color:#86868b;margin:0 0 16px;line-height:1.6">They get a notification and the ticket stays on their Needs me list until they mark it confirmed. The customer does not see this.</p>
+            <label class="field-label" for="refer-assignee">Confirm by</label>
+            <select id="refer-assignee" class="input-field">
+                ${staff.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}
+            </select>
+            <label class="field-label" for="refer-note" style="margin-top:12px">What to confirm</label>
+            <textarea id="refer-note" class="input-field" style="min-height:72px" placeholder="Optional. Goes into the internal note."></textarea>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+                <button onclick="showTicketDetail('${t.id}')" class="btn-secondary text-xs">Cancel</button>
+                <button onclick="setTicketInternalState('${t.id}', 'AISO_INTERNAL', { assigneeId: document.getElementById('refer-assignee').value, note: document.getElementById('refer-note').value.trim() })" class="btn-primary text-xs"><i class="ph ph-arrow-bend-up-right"></i> Refer</button>
+            </div>
+        </div>`, 'md');
+}
+
+function confirmTicketInternal(ticketId) {
+    const t = getTicketById(ticketId);
+    if (!t || !isWaitingOnMe(t)) return;
+    const now = new Date().toISOString();
+    const ok = commitPortalMutation(() => {
+        const msgId = `tm-${Date.now()}`;
+        TICKET_MESSAGES.push({
+            id: msgId, ticket_id: t.id, author_type: 'INTERNAL', author_name: actingName(),
+            is_internal: true, created_at: now, body: `Confirmed by ${actingName()}. Back with the desk.`, attachments: [],
+            notify_user_ids: t.internal_referred_by ? [t.internal_referred_by] : [],
+        });
+        notifyUsers([t.internal_referred_by], t, 'CONFIRMED', msgId);
+        Object.assign(t, { internal_state: 'NONE', internal_party: '', internal_since: null, internal_assignee_id: null, internal_referred_by: null, updated_at: now });
+        logActivity('Ticket handling changed', t.ticket_no, `Confirmed by ${actingName()}`);
+    });
+    if (!ok) return;
+    renderServiceDesk();
+    showTicketDetail(t.id);
+    showToast(`${t.ticket_no} confirmed`);
+}
+
+function toggleReplyNotify(userId) {
+    const list = ticketReplyDraft.notify || (ticketReplyDraft.notify = []);
+    const i = list.indexOf(userId);
+    if (i >= 0) list.splice(i, 1); else list.push(userId);
+    const text = document.getElementById('tk-reply')?.value;
+    if (text !== undefined) ticketReplyDraft.text = text;
+    showTicketDetail(ticketReplyDraft.ticketId);
 }
 
 // ── Page action / list ──
@@ -7194,7 +7754,8 @@ function getFilteredTickets() {
     const q = (document.getElementById('ticket-search')?.value || '').trim().toLowerCase();
     const handling = isOperatorView() ? (document.getElementById('ticket-handling')?.value || '') : '';
     return getScopedTickets().filter(t => {
-        if (status && t.status !== status) return false;
+        if (status === 'NEEDS_ME') { if (!ticketNeedsMe(t)) return false; }
+        else if (status && t.status !== status) return false;
         if (handling === 'REFERRED' && !isTicketReferred(t)) return false;
         if (handling && handling !== 'REFERRED' && ticketInternalState(t) !== handling) return false;
         if (q && ![t.ticket_no, t.subject, t.customer_name, t.snapshot?.order_no, t.snapshot?.product_name, t.serial_no]
@@ -7218,6 +7779,15 @@ function renderTicketStats() {
 }
 
 function renderServiceDesk() {
+    // Needs me is a person's list: shown only while someone at AISO is acting.
+    const needsTab = document.getElementById('ticket-needs-me-tab');
+    if (needsTab) {
+        const show = !!actingUser() && isOperatorView();
+        needsTab.style.display = show ? '' : 'none';
+        if (show) needsTab.innerHTML = `Needs me${(() => { const n = getScopedTickets().filter(ticketNeedsMe).length; return n ? ` <span class="badge badge-red" style="margin-left:4px;padding:1px 6px">${n}</span>` : ''; })()}`;
+        if (!show && document.getElementById('ticket-filter-status')?.value === 'NEEDS_ME') setTicketFilter('');
+    }
+    renderNotificationBell();
     renderTicketStats();
     const list = getFilteredTickets();
     const searching = !!(document.getElementById('ticket-search')?.value || '').trim();
@@ -7227,7 +7797,7 @@ function renderServiceDesk() {
         const fr = ticketFirstResponse(t);
         return `
         <tr class="cursor-pointer" onclick="if(!event.target.closest('button'))showTicketDetail('${t.id}')">
-            <td><span style="font-weight:600;font-size:13px;color:#1d1d1f">${esc(t.ticket_no)}</span>
+            <td>${ticketNeedsMe(t) ? `<span class="tk-needs-dot" title="${isWaitingOnMe(t) ? 'Waiting for your confirmation' : 'You were flagged on this ticket'}"></span>` : ''}<span style="font-weight:600;font-size:13px;color:#1d1d1f">${esc(t.ticket_no)}</span>
                 <div style="font-size:11px;color:#86868b;margin-top:1px">${ticketTimeAgo(t.updated_at)}</div></td>
             <td><span style="font-size:13px;color:#1d1d1f">${esc(t.subject)}</span>
                 <div style="font-size:11.5px;color:#86868b;margin-top:1px">${esc(t.category)} · via ${esc(t.channel || '—')}</div></td>
@@ -7277,11 +7847,32 @@ function ticketEntitlementCard(snap, serialNo) {
             <div><span style="color:#86868b">Supplier</span><div style="margin-top:2px;font-weight:600">${esc(snap.supplier_name || '—')}</div></div>
             <div><span style="color:#86868b">System integrator</span><div style="margin-top:2px;font-weight:600">${esc(snap.si_name || '—')}</div></div>
         </div>
+        ${(snap.licenses || []).length ? `
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.06);font-size:12.5px">
+            <span style="color:#86868b">Licenses on this unit</span>
+            ${snap.licenses.map(lc => `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px">
+                <span style="font-weight:600">${esc(lc.product_name)}</span><span class="tk-mono">${esc(lc.license_key)}</span>
+                <span style="color:#86868b">${lc.all_units ? 'all units · ' : ''}to ${esc(lc.license_end || '—')}</span>
+            </div>`).join('')}
+        </div>` : ''}
     </div>`;
 }
 
-// Build the snapshot a ticket keeps from the order + line it points at.
-function buildTicketSnapshot(order, line) {
+// Licenses bundled with a hardware unit: keys bound to that unit plus keys
+// bound to all units of the line.
+function unitLicenses(hwLine, serialNo) {
+    const unit = (hwLine.serial_nos || []).indexOf(serialNo);
+    if (unit < 0) return [];
+    return ORDER_LINES.filter(l => l.parent_line_id === hwLine.id).flatMap(l => (l.license_keys || [])
+        .filter(lk => lk.key && (lk.unit === null || lk.unit === unit))
+        .map(lk => ({
+            product_name: l.product_name + (l.version ? ` v${l.version}` : ''),
+            license_key: lk.key, all_units: lk.unit === null, license_end: l.license_end || '',
+        })));
+}
+
+// Build the snapshot a ticket keeps from the order + line (+ serial) it points at.
+function buildTicketSnapshot(order, line, serialNo = '') {
     const isSw = line.scope === 'SW';
     return {
         order_no: order.order_no,
@@ -7290,9 +7881,10 @@ function buildTicketSnapshot(order, line) {
         sla_plan: line.sla_plan || '',
         coverage_kind: isSw ? 'license' : 'warranty',
         coverage_end: isSw ? (line.license_end || '') : (line.warranty_end || ''),
-        supplier_name: isSw ? (order.sw_supplier_name || '') : (order.hw_supplier_name || ''),
+        supplier_name: isSw ? (line.supplier_name || order.sw_supplier_name || '') : (order.hw_supplier_name || ''),
         si_name: order.si_name || '',
-        license_key: isSw ? (line.license_keys || []).find(k => k.trim()) || '' : '',
+        license_key: isSw ? (line.license_keys || []).find(k => k.key)?.key || '' : '',
+        licenses: !isSw && serialNo ? unitLicenses(line, serialNo) : [],
     };
 }
 
@@ -7363,7 +7955,7 @@ function renderTicketCreateModal() {
     const order = line ? getOrderById(line.order_id) : null;
     const serials = (line?.serial_nos || []).filter(s => s.trim());
     const ready = ticketDraftReady();
-    const snap = ready ? buildTicketSnapshot(order, line) : null;
+    const snap = ready ? buildTicketSnapshot(order, line, d.serial_no) : null;
 
     // Keep typed text across re-renders triggered by picker clicks.
     const keep = id => document.getElementById(id)?.value;
@@ -7490,7 +8082,7 @@ function saveTicket() {
         subject: d.subject.trim(), description: d.description.trim(),
         category: d.category, priority: d.priority, status: 'OPEN',
         channel: d.channel, reported_by: d.reported_by.trim(),
-        snapshot: buildTicketSnapshot(order, line),
+        snapshot: buildTicketSnapshot(order, line, d.serial_no),
         internal_state: 'NONE', internal_party: '', internal_since: null,
         created_at: now, updated_at: now, first_response_at: null, resolved_at: null,
     };
@@ -7521,6 +8113,8 @@ function showTicketDetail(id) {
     if (!t) return;
     if (isCustomerView() && t.customer_org_id !== activeOrgId()) return;
     const manage = canManageTickets();
+    markTicketNotificationsRead(t.id);
+    const staff = manage ? deskStaff().filter(u => u.id !== actingUser()?.id) : [];
     const messages = getTicketMessages(id).filter(m => manage || !m.is_internal);
     const fr = ticketFirstResponse(t);
     const order = getOrderById(t.order_id);
@@ -7529,7 +8123,7 @@ function showTicketDetail(id) {
     const closed = t.status === 'CLOSED';
     if (!manage) ticketReplyMode = 'reply';
     // Reply text and pending files survive re-renders of this modal, but not a switch to another ticket.
-    if (ticketReplyDraft.ticketId !== t.id) ticketReplyDraft = { ticketId: t.id, text: '', attachments: [] };
+    if (ticketReplyDraft.ticketId !== t.id) ticketReplyDraft = { ticketId: t.id, text: '', attachments: [], notify: [] };
     const reply = ticketReplyDraft;
 
     const kv = (label, value) => `<div class="tk-kv"><span>${label}</span><span>${value}</span></div>`;
@@ -7552,6 +8146,12 @@ function showTicketDetail(id) {
                     <button class="btn-ghost" onclick="closeModal()" title="Close"><i class="ph ph-x"></i></button>
                 </div>
 
+                ${isWaitingOnMe(t) ? `
+                <div style="margin-top:14px;display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid #fcd34d;background:#fffbeb;border-radius:12px">
+                    <i class="ph ph-bell-ringing" style="font-size:20px;color:#b45309"></i>
+                    <div style="flex:1;min-width:0;font-size:12.5px;color:#92400e"><b>Waiting for your confirmation</b><br>${t.internal_referred_by ? `${esc(userNameById(t.internal_referred_by))} referred this to you` : 'Referred to you'} ${esc(ticketTimeAgo(t.internal_since))}.</div>
+                    <button class="btn-primary text-xs" onclick="confirmTicketInternal('${t.id}')"><i class="ph ph-check"></i> Mark confirmed</button>
+                </div>` : ''}
                 <div style="margin-top:14px;flex:1">
                     ${messages.map(m => `
                     <div class="tk-msg ${m.is_internal ? 'internal' : ''}">
@@ -7561,6 +8161,7 @@ function showTicketDetail(id) {
                             <span class="badge ${m.is_internal ? 'badge-amber' : (m.author_type === 'CUSTOMER' ? 'badge-customer' : 'badge-zinc')}" style="margin-left:6px">${m.is_internal ? 'Internal note' : (m.author_type === 'CUSTOMER' ? 'Customer' : 'AISO')}</span>
                             <span class="when">${esc(ticketDateTime(m.created_at))}</span>
                             <div class="body">${esc(m.body)}</div>
+                            ${m.is_internal && (m.notify_user_ids || []).length ? `<div style="font-size:11.5px;color:#86868b;margin-top:4px"><i class="ph ph-bell"></i> Notified ${esc(m.notify_user_ids.map(userNameById).filter(Boolean).join(', '))}</div>` : ''}
                             ${(m.attachments || []).length ? `<div class="tk-att-list" style="margin-top:8px">${ticketAttachmentGallery(m.attachments, m.id)}</div>` : ''}
                         </div>
                     </div>`).join('')}
@@ -7574,6 +8175,11 @@ function showTicketDetail(id) {
                     </div>` : ''}
                     <textarea id="tk-reply" class="input-field" style="min-height:64px;${ticketReplyMode === 'note' ? 'background:#fffbeb;border-color:#fde68a' : ''}" placeholder="${ticketReplyMode === 'note' ? 'Note for the desk only. The customer never sees this.' : (manage ? 'Write a reply to the customer…' : 'Write a message to AISO…')}" oninput="ticketReplyDraft.text=this.value">${esc(reply.text)}</textarea>
                     ${reply.attachments.length ? `<div class="tk-att-list" style="margin-top:8px">${ticketAttachmentChips(reply.attachments, 'removeTicketReplyAttachment')}</div>` : ''}
+                    ${ticketReplyMode === 'note' ? `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px">
+                        <span style="font-size:11.5px;font-weight:600;color:#86868b"><i class="ph ph-bell"></i> Notify</span>
+                        ${staff.length ? staff.map(u => `<button class="tk-chip ${(reply.notify || []).includes(u.id) ? 'active' : ''}" style="padding:4px 10px;font-size:12px" onclick="toggleReplyNotify('${u.id}')">${esc(u.name)}</button>`).join('')
+                            : '<span style="font-size:11.5px;color:#86868b">No AISO colleagues with ticket access yet — add people to AISO under Organizations.</span>'}
+                    </div>` : ''}
                     <div id="tk-att-error" class="field-error-text"></div>
                     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px">
                         <label class="btn-secondary text-xs" style="cursor:pointer" title="${esc(TICKET_ATTACHMENT_HINT)}"><i class="ph ph-paperclip"></i> Attach<input type="file" multiple accept="${TICKET_ATTACHMENT_ACCEPT}" style="display:none" onchange="onTicketReplyFiles(this.files)"></label>
@@ -7637,14 +8243,18 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
     if (!t || (!body && !attachments.length)) { showToast('Write a message or attach a file first.', 'error'); return; }
     const manage = canManageTickets();
     const isNote = manage && ticketReplyMode === 'note';
+    const notify = isNote && ticketReplyDraft.ticketId === ticketId ? [...(ticketReplyDraft.notify || [])] : [];
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
+        const msgId = `tm-${Date.now()}`;
         TICKET_MESSAGES.push({
-            id: `tm-${Date.now()}`, ticket_id: t.id,
+            id: msgId, ticket_id: t.id,
             author_type: manage ? 'INTERNAL' : 'CUSTOMER',
-            author_name: manage ? currentUser.name : actingName(),
+            author_name: actingName(),
             is_internal: isNote, created_at: now, body, attachments,
+            ...(notify.length ? { notify_user_ids: notify } : {}),
         });
+        if (notify.length) notifyUsers(notify, t, 'NOTE', msgId);
         t.updated_at = now;
         if (manage && !isNote) {
             if (!t.first_response_at) t.first_response_at = now;
@@ -7657,7 +8267,7 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
     });
     if (!ok) return;
     ticketReplyMode = 'reply';
-    ticketReplyDraft = { ticketId: null, text: '', attachments: [] };
+    ticketReplyDraft = { ticketId: null, text: '', attachments: [], notify: [] };
     renderServiceDesk();
     showTicketDetail(t.id);
 }
@@ -7676,6 +8286,8 @@ function setTicketStatus(ticketId, status) {
             t.internal_state = 'NONE';
             t.internal_party = '';
             t.internal_since = null;
+            t.internal_assignee_id = null;
+            t.internal_referred_by = null;
         } else t.resolved_at = null;
         logActivity('Ticket status changed', t.ticket_no, `${TICKET_STATUS_LABEL[from]} → ${TICKET_STATUS_LABEL[status]}`);
     });
@@ -7721,11 +8333,11 @@ function readFileAsDataUrl(file) {
 }
 
 // Validate and read a FileList; returns what could be added plus the first error.
-async function readTicketAttachments(fileList, existing) {
+async function readTicketAttachments(fileList, existing, maxCount = TICKET_ATTACHMENT_MAX_COUNT) {
     const added = [];
     let error = '';
     for (const file of Array.from(fileList || [])) {
-        if (existing.length + added.length >= TICKET_ATTACHMENT_MAX_COUNT) { error = `You can attach up to ${TICKET_ATTACHMENT_MAX_COUNT} files.`; break; }
+        if (existing.length + added.length >= maxCount) { error = `You can attach up to ${maxCount} files.`; break; }
         const kind = ticketAttachmentKind(file);
         if (!kind) { error = `${file.name}: unsupported file type.`; continue; }
         if (file.size > TICKET_ATTACHMENT_MAX_BYTES) { error = `${file.name} exceeds the 5 MB limit.`; continue; }

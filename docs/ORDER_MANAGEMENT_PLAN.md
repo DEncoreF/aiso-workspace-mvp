@@ -111,3 +111,59 @@ revision / SUPERSEDED 機制不做——prototype 直接編輯即可，等有後
 4. 詳情 drawer + Activity Log 接線 —— 約 15 分鐘。
 
 合計約 2 小時，可分 4 個 commit。
+
+## License ↔ SN 綁定（2026-09-24 已實作，Steve 優化建議 1）
+
+**需求**：硬體行可以附帶軟體授權，每把 License 能對應到具體機器；確認後還能調整 License。
+**原則**：資料模型給足彈性，之後要收緊就只加驗證規則，不用改資料結構（使用者判斷未來只會加限制）。
+
+### 資料模型
+
+SW 行新增兩個欄位，`license_keys` 從字串陣列改成物件陣列：
+
+```js
+{
+  scope: 'SW',
+  parent_line_id: 'ol-0001',        // 掛在哪條 HW 行底下；null = 獨立 SW 行（不綁機器）
+  supplier_name: '',                // 選填；空白時沿用表頭 sw_supplier_name（一機多家軟體）
+  qty: 2,                           // 授權數 = key 列數，不跟母行台數連動
+  license_keys: [
+    { key: 'DGRN-4A7K-92MF-XT01', unit: 0 },    // 綁母行第 1 台（serial_nos[0]）
+    { key: 'DGRN-4A7K-92MF-XT02', unit: null }, // null = 母行所有機器 / 不指定
+  ],
+}
+```
+
+**綁 unit index 而不是綁 SN 字串**：DRAFT 階段 SN 常常還沒填，綁字串會綁不到；
+綁 index 時修正 SN 打錯也不會斷。畫面與票務快照一律把 index 解析成當下的 SN 顯示。
+
+### 行為
+
+1. HW 行卡片底部「Includes software licenses」勾選框：勾 → 新增一條子行（qty 預設 = 母行台數，
+   key 預設一台一把依序綁定）；取消 → 刪除全部子行（已填 key 時先確認）。可再「Add software」加多套。
+2. 子行在陣列中緊跟母行之後，畫面巢狀顯示；刪除母行或母行改成 SW 時，子行一起刪。
+3. 每把 key 的 unit 下拉：All units ＋ 母行每一台。母行 qty 減少後，指向不存在台數的 key
+   保留原值並標示 removed，存檔時擋下，要人工改綁——不自動改成 All units，避免默默綁錯。
+4. 重複 key：同一子行內允許同一把 key 綁不同台（多台共用一把）；跨行重複或同台重複仍擋。
+5. SW 供應商：表頭 `sw_supplier_name` 只在有 SW 行沒填自己的 `supplier_name` 時才必填。
+6. **調整 License**：CONFIRMED 訂單的 SW 行可開「Adjust license」修改 key / 綁定 / 版本 /
+   期間 / 供應商，Activity Log 記下異動前後。其他欄位仍只能在 DRAFT 編輯。
+7. Service Desk：HW 票選定 SN 後，保固卡列出綁這台（含 All units）的授權，並寫入票的快照。
+8. 舊存檔的字串 key 在 store 載入時轉成 `{ key, unit: null }`，不清資料。
+
+### 不做
+
+- 一把 key 綁「其中幾台」的子集合：用同一把 key 列多列、各綁一台表達。
+- 每把 key 各自的到期日：到期日不同就拆成兩條子行。
+- 子行綁到其他 HW 行的機器：跨行共用的授權用獨立 SW 行。
+
+## 文件類型標記（2026-09-24 已實作，Steve 優化建議 4）
+
+- 每個附件多一個 `doc_type`：`PO` 採購單、`QUOTATION` 報價單、`CONTRACT` 合約、`ACCEPTANCE` 驗收單、
+  `DELIVERY` 簽收單、`OTHER` 其他。Steve 列的四類之外，加了 PO（原本就在上傳）與簽收單（出貨佐證）。
+- **強制選類型**：新上傳的檔案類型為空，旁邊的下拉以橘框提示；有檔案沒選類型就不能存檔。
+  舊存檔沒有 `doc_type` 的檔案顯示為 Unclassified，下次編輯時同樣要補選。
+- 詳情視窗：有兩種以上類型時顯示篩選 chip（All / 各類型＋數量），每個檔案上方標類型。
+- **CONFIRMED 訂單可補文件**：驗收單、簽收單都在確認後才出現，詳情視窗加「Manage documents」，
+  可新增、改類型、刪除，Activity Log 記一筆異動摘要。訂單其他欄位仍只能在 DRAFT 編輯。
+- 訂單文件上限從 5 個提高到 10 個（票務附件仍是 5 個）；單檔大小限制不變，受 localStorage 容量約束。

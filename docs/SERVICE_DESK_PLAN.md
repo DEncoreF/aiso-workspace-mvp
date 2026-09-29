@@ -63,3 +63,35 @@ TICKET_MESSAGES[] = { id, ticket_id, author_type, author_name, is_internal, body
 ## 不做（等後端）
 
 Email 通知、SLA 日曆（工作日/假日）、供應商轉派、票務 CSV 匯出。
+
+## 內部通知（2026-09-29 已實作，Steve Service Desk 建議 1、2）
+
+**問題**：內部備註寫了沒人知道要去看；列表上也看不出哪張票在等 AISO 內部某個人確認。
+**範圍**：站內通知（鈴鐺＋列表標示），只給 AISO 內部帳號。不寄 Email、不做排程催辦——沿用本檔「不做（等後端）」。
+
+### 設計
+
+1. **指定通知對象**：寫 Internal note 時可多選 AISO 同事，存在訊息的 `notify_user_ids`。
+   「指定誰看」解讀為**通知誰**，不是限制誰看得到——內部備註仍對所有 AISO 內部人員可見，
+   避免交接時有人看不到前因後果。
+2. **待內部確認沿用既有 `internal_state = AISO_INTERNAL`**，不另開公開狀態（客戶仍只看到公開狀態）。
+   轉成 AISO_INTERNAL 時必須指定一位確認人，存 `internal_assignee_id`，並通知他。
+3. **通知資料**：`NOTIFICATIONS[] = { id, user_id, ticket_id, message_id, kind: 'NOTE' | 'CONFIRM', created_at, read_at }`。
+   只在上面兩個時機產生；自己寫的備註不通知自己。
+4. **表層提示**
+   - 側欄鈴鐺＋未讀數；展開列出通知，點一則 → 開票並標已讀。
+   - Service Desk 列表：有給我的未讀通知的票，票號前紅點；新增 filter tab「Needs me (n)」，
+     計算 = 我有未讀通知的票 ∪ 我是確認人且仍在 AISO_INTERNAL 的票。
+   - 票詳情：我是確認人時頂端黃色橫幅「Waiting for your confirmation」＋「Mark confirmed」
+     → `internal_state` 回 NONE、寫一則內部備註當軌跡、通知轉出者。
+5. **逾時標示**：AISO_INTERNAL 超過 24 小時未確認，列表與詳情顯示紅色「Waiting 1d+」。
+   AI 建議的「自動催辦主管」不做：目前沒有主管層級，也沒有後端排程。
+
+### 已拍板（2026-09-29）
+
+- **不 seed AISO 同事**，維持「AISO 角色與成員由 UI 建立」。seed 的 `NOTIFICATIONS` 為空；
+  沒有同事時 Notify 區塊與轉出視窗會提示去 Organizations 加人，轉 AISO_INTERNAL 則不強制指定確認人。
+- **View as 改成選人**：選單列出每個 org 的成員（user × role binding），通知、訊息作者都跟著那個人。
+  沒有成員的角色不再出現在選單。Super Admin 自己不屬於任何 org，沒有鈴鐺。
+- 通知對象 = operator org 裡角色含 `ticket.u` 的 active 成員（`deskStaff()`）。
+- 確認人只能由被指定的那位按 Mark confirmed；其他人仍可用 Internal handling 下拉改回。
