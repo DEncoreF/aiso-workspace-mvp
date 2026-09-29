@@ -7901,7 +7901,7 @@ function showTicketCreateModal({ lineId = null } = {}) {
     ticketDraft = {
         customer_name: isCustomerView() ? (activeOrg()?.name || '') : (document.getElementById('ticket-customer')?.value || ''),
         order_id: '', order_line_id: '', serial_no: '',
-        channel: isCustomerView() ? 'Portal form' : 'Email',
+        channel: isCustomerView() ? 'Workspace' : 'Email',
         priority: 'MEDIUM', category: TICKET_CATEGORIES[0],
         subject: '', description: '',
         reported_by: isCustomerView() ? actingName() : '',

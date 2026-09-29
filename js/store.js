@@ -126,6 +126,10 @@ const Store = (function () {
         // Saves written before the Service Desk shipped have no ticket arrays;
         // they keep the seed tickets rather than forcing a schema reset.
         if (Array.isArray(data.TICKETS)) TICKETS = data.TICKETS;
+        // Customers raise tickets from the Workspace; the channel used to be
+        // called "Portal form", which read like the public website.
+        let channelsRenamed = false;
+        TICKETS.forEach(t => { if (t.channel === 'Portal form') { t.channel = 'Workspace'; channelsRenamed = true; } });
         if (Array.isArray(data.TICKET_MESSAGES)) TICKET_MESSAGES = data.TICKET_MESSAGES;
         if (Array.isArray(data.NOTIFICATIONS)) NOTIFICATIONS = data.NOTIFICATIONS;
         if (Array.isArray(data.ORGS)) ORGS = data.ORGS;
@@ -151,7 +155,7 @@ const Store = (function () {
         if (Array.isArray(data.HARDWARE_PRODUCT_TYPES)) HARDWARE_PRODUCT_TYPES = data.HARDWARE_PRODUCT_TYPES;
         if (Array.isArray(data.SOFTWARE_CATEGORY_OPTIONS)) SOFTWARE_CATEGORY_OPTIONS = data.SOFTWARE_CATEGORY_OPTIONS;
         if (Array.isArray(data.SOFTWARE_INDUSTRY_OPTIONS)) SOFTWARE_INDUSTRY_OPTIONS = data.SOFTWARE_INDUSTRY_OPTIONS;
-        if (mockDataMigrated || industriesNormalized || licenseKeysNormalized) {
+        if (mockDataMigrated || industriesNormalized || licenseKeysNormalized || channelsRenamed) {
             try { localStorage.setItem(KEY, serialize()); } catch (e) { /* retry on the next normal save */ }
         }
         return true;

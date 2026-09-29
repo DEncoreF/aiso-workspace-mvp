@@ -641,7 +641,7 @@ let ORDER_LINES = [
 const TICKET_STATUSES = ['OPEN', 'IN_PROGRESS', 'AWAITING_CUSTOMER_INFO', 'RESOLVED', 'CLOSED'];
 const TICKET_PRIORITIES = ['HIGH', 'MEDIUM', 'LOW'];
 const TICKET_CATEGORIES = ['Hardware Failure', 'Software / Model Anomaly', 'License / Activation', 'Other'];
-const TICKET_CHANNELS = ['Email', 'Phone', 'Portal form', 'On-site'];
+const TICKET_CHANNELS = ['Email', 'Phone', 'Workspace', 'On-site'];
 // Who the desk is waiting on while a ticket sits In progress. Desk-only:
 // the customer keeps seeing the public status, because AISO stays the single
 // window and which supplier is holding things up is not their business.
@@ -680,7 +680,7 @@ let TICKETS = [
         subject: 'digiRunner license activation error 0x41',
         description: 'Activation fails with error 0x41 on the second node after the cluster was re-imaged.',
         category: 'License / Activation', priority: 'MEDIUM', status: 'AWAITING_CUSTOMER_INFO',
-        channel: 'Portal form', reported_by: 'Tom Baker · tom@megabank.com',
+        channel: 'Workspace', reported_by: 'Tom Baker · tom@megabank.com',
         snapshot: { order_no: 'PO-2026-0001', line_no: 2, product_name: 'digiRunner', sla_plan: '5x8',
                     coverage_kind: 'license', coverage_end: '2027-07-31', supplier_name: 'TPIsoftware Corporation', si_name: 'Systex Corporation', license_key: 'DGRN-4A7K-92MF-XT01' },
         created_at: '2026-09-04T03:20:00.000Z', updated_at: '2026-09-07T01:05:00.000Z',

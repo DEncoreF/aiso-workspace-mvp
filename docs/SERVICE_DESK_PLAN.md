@@ -51,7 +51,7 @@ TICKET_MESSAGES[] = { id, ticket_id, author_type, author_name, is_internal, body
   `CUSTOMER_VIEW_PERMISSIONS`（order.read / ticket.read / ticket.create）。
 - Nav 只留 `customer: true` 的項目（Orders、Service Desk）；側欄使用者卡顯示客戶名 + Customer view。
 - Orders 只列該客戶非 DRAFT 訂單，隱藏 New/Edit/Cancel；Service Desk 只列該客戶票，
-  建票時客戶固定、channel 固定 Portal form；詳情看不到內部備註、不能改狀態、回覆者為客戶。
+  建票時客戶固定、channel 固定 Workspace（原名 Portal form，2026-09-29 改名）；詳情看不到內部備註、不能改狀態、回覆者為客戶。
 - 登出或切回 Super Admin 即還原。真正的客戶帳號等組織管理。
 
 ## 附件
