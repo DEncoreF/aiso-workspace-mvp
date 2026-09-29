@@ -4478,8 +4478,10 @@ function onOrderDrop(e, type, targetPid) {
 }
 
 function renderSettings() {
-    document.getElementById('settings-name').value = currentUser.name;
-    document.getElementById('settings-email').value = currentUser.email;
+    // The profile of whoever is acting: the viewed-as person, else the account.
+    const person = actingUser() || currentUser;
+    document.getElementById('settings-name').value = person.name;
+    document.getElementById('settings-email').value = person.email;
     const role = activeRole();
     document.getElementById('settings-role').value = isSuperAdminContext()
         ? 'Super Admin (unrestricted cross-org access)'
@@ -6385,6 +6387,8 @@ function linkOrderCustomerOrg(orderId) {
 function showOrderDetail(id) {
     const o = getOrderById(id);
     if (!o) return;
+    // Same rule as the order list: a customer opens only its own, non-draft orders.
+    if (isCustomerView() && (o.customer_org_id !== activeOrgId() || o.status === 'DRAFT')) return;
     const lines = getOrderLines(id);
     const row = (label, value) => `
         <div style="display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid #f5f5f7">
@@ -7843,7 +7847,8 @@ function ticketEntitlementCard(snap, serialNo) {
             ${snap.sla_plan ? `<span class="badge badge-blue">SLA ${esc(snap.sla_plan)}</span>` : ''}
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:8px;font-size:12.5px">
-            <div><span style="color:#86868b">${snap.coverage_kind === 'license' ? 'License key' : 'Serial'}</span><div style="margin-top:2px"><span class="tk-mono">${esc(serialNo || snap.license_key || '—')}</span></div></div>
+            <div><span style="color:#86868b">${snap.coverage_kind === 'license' ? 'License key' : 'Serial'}</span><div style="margin-top:2px"><span class="tk-mono">${esc(serialNo || snap.license_key || '—')}</span></div>
+                ${snap.license_units ? `<div style="font-size:11.5px;color:#86868b;margin-top:2px">${esc(snap.license_units)}</div>` : ''}</div>
             <div><span style="color:#86868b">Expires</span><div style="margin-top:2px;font-weight:600">${esc(snap.coverage_end || '—')}</div></div>
             <div><span style="color:#86868b">Supplier</span><div style="margin-top:2px;font-weight:600">${esc(snap.supplier_name || '—')}</div></div>
             <div><span style="color:#86868b">System integrator</span><div style="margin-top:2px;font-weight:600">${esc(snap.si_name || '—')}</div></div>
@@ -7872,9 +7877,23 @@ function unitLicenses(hwLine, serialNo) {
         })));
 }
 
-// Build the snapshot a ticket keeps from the order + line (+ serial) it points at.
-function buildTicketSnapshot(order, line, serialNo = '') {
+// The distinct keys on a SW line, each with the units it is bound to, so a
+// ticket can name the key it is about. A key shared by several units is one
+// choice; "All units" and unbundled lines carry no unit label.
+function lineLicenseChoices(line) {
+    const parent = line.parent_line_id ? ORDER_LINES.find(l => l.id === line.parent_line_id) : null;
+    const byKey = new Map();
+    (line.license_keys || []).filter(lk => lk.key).forEach(lk => {
+        if (!byKey.has(lk.key)) byKey.set(lk.key, []);
+        if (parent) byKey.get(lk.key).push(licenseUnitLabel(parent, lk.unit));
+    });
+    return [...byKey].map(([key, units]) => ({ key, units: units.join(', ') }));
+}
+
+// Build the snapshot a ticket keeps from the order + line (+ serial or key) it points at.
+function buildTicketSnapshot(order, line, serialNo = '', licenseKey = '') {
     const isSw = line.scope === 'SW';
+    const keyChoice = isSw ? (lineLicenseChoices(line).find(c => c.key === licenseKey) || lineLicenseChoices(line)[0]) : null;
     return {
         order_no: order.order_no,
         line_no: line.line_no,
@@ -7884,7 +7903,8 @@ function buildTicketSnapshot(order, line, serialNo = '') {
         coverage_end: isSw ? (line.license_end || '') : (line.warranty_end || ''),
         supplier_name: isSw ? (line.supplier_name || order.sw_supplier_name || '') : (order.hw_supplier_name || ''),
         si_name: order.si_name || '',
-        license_key: isSw ? (line.license_keys || []).find(k => k.key)?.key || '' : '',
+        license_key: keyChoice?.key || '',
+        license_units: keyChoice?.units || '',
         licenses: !isSw && serialNo ? unitLicenses(line, serialNo) : [],
     };
 }
@@ -7901,7 +7921,7 @@ function showTicketCreateModal({ lineId = null } = {}) {
     }
     ticketDraft = {
         customer_name: isCustomerView() ? (activeOrg()?.name || '') : (document.getElementById('ticket-customer')?.value || ''),
-        order_id: '', order_line_id: '', serial_no: '',
+        order_id: '', order_line_id: '', serial_no: '', license_key: '',
         channel: isCustomerView() ? 'Workspace' : 'Email',
         priority: 'MEDIUM', category: TICKET_CATEGORIES[0],
         subject: '', description: '',
@@ -7917,6 +7937,8 @@ function showTicketCreateModal({ lineId = null } = {}) {
             ticketDraft.order_line_id = line.id;
             const serials = (line.serial_nos || []).filter(s => s.trim());
             if (serials.length === 1) ticketDraft.serial_no = serials[0];
+            const keys = lineLicenseChoices(line);
+            if (keys.length === 1) ticketDraft.license_key = keys[0].key;
         }
     }
     renderTicketCreateModal();
@@ -7924,12 +7946,14 @@ function showTicketCreateModal({ lineId = null } = {}) {
 
 function tkSet(key, value) {
     ticketDraft[key] = value;
-    if (key === 'customer_name') { ticketDraft.order_id = ''; ticketDraft.order_line_id = ''; ticketDraft.serial_no = ''; }
-    if (key === 'order_id') { ticketDraft.order_line_id = ''; ticketDraft.serial_no = ''; }
+    if (key === 'customer_name') { ticketDraft.order_id = ''; ticketDraft.order_line_id = ''; ticketDraft.serial_no = ''; ticketDraft.license_key = ''; }
+    if (key === 'order_id') { ticketDraft.order_line_id = ''; ticketDraft.serial_no = ''; ticketDraft.license_key = ''; }
     if (key === 'order_line_id') {
         const line = ORDER_LINES.find(l => l.id === value);
         const serials = (line?.serial_nos || []).filter(s => s.trim());
         ticketDraft.serial_no = serials.length === 1 ? serials[0] : '';
+        const keys = line ? lineLicenseChoices(line) : [];
+        ticketDraft.license_key = keys.length === 1 ? keys[0].key : '';
     }
     renderTicketCreateModal();
 }
@@ -7941,6 +7965,7 @@ function ticketDraftReady() {
     const line = ORDER_LINES.find(l => l.id === d.order_line_id);
     if (!line) return false;
     if (line.scope === 'HW' && (line.serial_nos || []).some(s => s.trim()) && !d.serial_no) return false;
+    if (line.scope === 'SW' && lineLicenseChoices(line).length > 1 && !d.license_key) return false;
     return true;
 }
 
@@ -7956,7 +7981,8 @@ function renderTicketCreateModal() {
     const order = line ? getOrderById(line.order_id) : null;
     const serials = (line?.serial_nos || []).filter(s => s.trim());
     const ready = ticketDraftReady();
-    const snap = ready ? buildTicketSnapshot(order, line, d.serial_no) : null;
+    const keyChoices = line?.scope === 'SW' ? lineLicenseChoices(line) : [];
+    const snap = ready ? buildTicketSnapshot(order, line, d.serial_no, d.license_key) : null;
 
     // Keep typed text across re-renders triggered by picker clicks.
     const keep = id => document.getElementById(id)?.value;
@@ -8007,11 +8033,21 @@ function renderTicketCreateModal() {
                     ${serials.map(s => `<button class="tk-pick ${s === d.serial_no ? 'sel' : ''}" onclick="ticketDraft.serial_no='${esc(s)}';renderTicketCreateModal()" style="width:auto;padding:6px 12px"><span class="tk-mono" style="background:transparent;padding:0">${esc(s)}</span></button>`).join('')}
                 </div>
                 <div class="field-hint">One unit per ticket. Two units with the same fault are two tickets.</div>` : ''}
+
+                ${keyChoices.length > 1 ? `
+                <div class="tk-step"><span class="n">4</span>License key</div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                    ${keyChoices.map(c => `<button class="tk-pick ${c.key === d.license_key ? 'sel' : ''}" onclick="ticketDraft.license_key='${esc(c.key)}';renderTicketCreateModal()">
+                        <span class="tk-mono" style="background:transparent;padding:0">${esc(c.key)}</span>
+                        ${c.units ? `<span style="margin-left:auto;font-size:11.5px;color:#86868b">${esc(c.units)}</span>` : ''}
+                    </button>`).join('')}
+                </div>
+                <div class="field-hint">Pick the key the request is about.</div>` : ''}
             </div>
 
             <div style="min-height:0;padding:26px 28px;overflow-y:auto;background:var(--bg-subtle)">
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin-bottom:8px">Entitlement</div>
-                ${ready ? ticketEntitlementCard(snap, d.serial_no) : `<div style="border:1px dashed var(--border);border-radius:12px;padding:22px;text-align:center;font-size:12.5px;color:#86868b"><i class="ph ph-shield-check" style="font-size:22px;display:block;margin-bottom:6px"></i>Warranty / license and SLA appear here once a line${line && line.scope === 'HW' && serials.length ? ' and serial' : ''} is selected.</div>`}
+                ${ready ? ticketEntitlementCard(snap, d.serial_no) : `<div style="border:1px dashed var(--border);border-radius:12px;padding:22px;text-align:center;font-size:12.5px;color:#86868b"><i class="ph ph-shield-check" style="font-size:22px;display:block;margin-bottom:6px"></i>Warranty / license and SLA appear here once a line${line && line.scope === 'HW' && serials.length ? ' and serial' : ''}${keyChoices.length > 1 ? ' and license key' : ''} is selected.</div>`}
                 ${ready ? '<div style="font-size:11px;color:#86868b;margin-top:6px"><i class="ph ph-camera"></i> Copied onto the ticket at creation; later order edits do not change it.</div>' : ''}
 
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:20px 0 8px">Request</div>
@@ -8059,7 +8095,7 @@ function renderTicketCreateModal() {
 function saveTicket() {
     const d = ticketDraft;
     const errors = [];
-    if (!ticketDraftReady()) errors.push('Pick an order line (and serial) first.');
+    if (!ticketDraftReady()) errors.push('Pick an order line (and serial or license key) first.');
     if (!d.subject.trim()) errors.push('Subject is required.');
     if (!d.description.trim()) errors.push('Description is required.');
     const errEl = document.getElementById('tk-error');
@@ -8083,7 +8119,7 @@ function saveTicket() {
         subject: d.subject.trim(), description: d.description.trim(),
         category: d.category, priority: d.priority, status: 'OPEN',
         channel: d.channel, reported_by: d.reported_by.trim(),
-        snapshot: buildTicketSnapshot(order, line, d.serial_no),
+        snapshot: buildTicketSnapshot(order, line, d.serial_no, d.license_key),
         internal_state: 'NONE', internal_party: '', internal_since: null,
         created_at: now, updated_at: now, first_response_at: null, resolved_at: null,
     };
