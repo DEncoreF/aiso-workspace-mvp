@@ -7484,6 +7484,12 @@ function ticketInternalChip(t, { compact = false } = {}) {
 function setTicketInternalState(ticketId, state, { assigneeId = null, note = '' } = {}) {
     const t = getTicketById(ticketId);
     if (!t || !canManageTickets() || !TICKET_INTERNAL_STATES.includes(state) || ticketInternalState(t) === state) return;
+    // A resolved or closed ticket waits on nobody; reopen it first.
+    if (state !== 'NONE' && (t.status === 'RESOLVED' || t.status === 'CLOSED')) {
+        showToast(`${t.ticket_no} is ${TICKET_STATUS_LABEL[t.status].toLowerCase()}. Reopen it before referring.`, 'error');
+        showTicketDetail(t.id);
+        return;
+    }
     // Internal work goes to a named colleague when there is one to name.
     if (state === 'AISO_INTERNAL' && !assigneeId && deskStaff().some(u => u.id !== actingUser()?.id)) {
         showReferInternalModal(t.id);
@@ -7502,6 +7508,7 @@ function setTicketInternalState(ticketId, state, { assigneeId = null, note = '' 
         t.internal_state = state;
         t.internal_party = state === 'NONE' ? '' : party;
         t.internal_since = state === 'NONE' ? null : now;
+        if (from === 'AISO_INTERNAL') settlePendingConfirmations(t);
         t.internal_assignee_id = state === 'AISO_INTERNAL' ? (assigneeId || null) : null;
         t.internal_referred_by = state === 'AISO_INTERNAL' && assigneeId ? (actingUser()?.id || null) : null;
         t.updated_at = now;
@@ -7592,6 +7599,13 @@ function isWaitingOnMe(t) {
 
 // Opening a ticket reads my notifications on it. A confirmation request stays
 // on the Needs me list until it is confirmed, whatever its read state.
+// Once a ticket no longer waits on anyone, open confirmation requests on it
+// are moot: mark them read so they leave the bell and Needs me.
+function settlePendingConfirmations(ticket) {
+    const now = new Date().toISOString();
+    NOTIFICATIONS.filter(n => n.ticket_id === ticket.id && n.kind === 'CONFIRM' && !n.read_at).forEach(n => { n.read_at = now; });
+}
+
 function markTicketNotificationsRead(ticketId) {
     const unread = myNotifications().filter(n => n.ticket_id === ticketId && !n.read_at);
     if (!unread.length) return;
@@ -8239,7 +8253,7 @@ function showTicketDetail(id) {
                 </select>` : `<div>${ticketStatusBadge(t.status)}</div>`}
                 ${manage ? `
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:16px 0 8px">Internal handling</div>
-                <select class="input-field" onchange="setTicketInternalState('${t.id}', this.value)">
+                <select class="input-field" onchange="setTicketInternalState('${t.id}', this.value)" ${t.status === 'RESOLVED' || t.status === 'CLOSED' ? 'disabled title="Reopen the ticket to refer it"' : ''}>
                     ${TICKET_INTERNAL_STATES.map(st => `<option value="${st}" ${st === ticketInternalState(t) ? 'selected' : ''}>${TICKET_INTERNAL_STATE_LABEL[st]}</option>`).join('')}
                 </select>
                 ${isTicketReferred(t) ? `<div style="margin-top:8px">${ticketInternalChip(t)}</div>
@@ -8302,8 +8316,12 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
             if (thenStatus) t.status = thenStatus;
             else if (t.status === 'OPEN') t.status = 'IN_PROGRESS';
         }
-        // A customer answering an information request puts the ball back with the desk.
-        if (!manage && t.status === 'AWAITING_CUSTOMER_INFO') t.status = 'IN_PROGRESS';
+        // A customer answering an information request, or writing again after
+        // resolution, puts the ball back with the desk.
+        if (!manage && (t.status === 'AWAITING_CUSTOMER_INFO' || t.status === 'RESOLVED')) {
+            t.status = 'IN_PROGRESS';
+            t.resolved_at = null;
+        }
         logActivity(isNote ? 'Ticket note added' : (manage ? 'Ticket replied' : 'Customer replied'), t.ticket_no, (body || `${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`).slice(0, 80));
     });
     if (!ok) return;
@@ -8330,6 +8348,7 @@ function setTicketStatus(ticketId, status) {
             t.internal_since = null;
             t.internal_assignee_id = null;
             t.internal_referred_by = null;
+            settlePendingConfirmations(t);
         } else t.resolved_at = null;
         logActivity('Ticket status changed', t.ticket_no, `${TICKET_STATUS_LABEL[from]} → ${TICKET_STATUS_LABEL[status]}`);
     });

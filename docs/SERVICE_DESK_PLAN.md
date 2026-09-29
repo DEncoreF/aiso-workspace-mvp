@@ -26,6 +26,11 @@ TICKET_MESSAGES[] = { id, ticket_id, author_type, author_name, is_internal, body
 ```
 
 狀態：`OPEN → IN_PROGRESS ⇄ AWAITING_CUSTOMER_INFO → RESOLVED → CLOSED`（select 直接切，無鎖）。
+- AISO 第一次對客回覆：OPEN → IN_PROGRESS，記 `first_response_at`；可「Send & mark awaiting customer」。
+- 客戶回覆：AWAITING_CUSTOMER_INFO 或 RESOLVED → IN_PROGRESS（RESOLVED 會清 `resolved_at`，2026-09-29 補上，
+  以免客戶說「還是壞的」卻沒人發現）。CLOSED 不能再回覆，要由 AISO 從狀態下拉重開。
+- RESOLVED / CLOSED 時內部處理歸零，Internal handling 下拉鎖住，不能再轉出（2026-09-29 補上）；
+  尚未確認的 CONFIRM 通知一併標為已讀，不會殘留在鈴鐺與 Needs me。
 
 **內部處理狀態（2026-09-23 新增）**：公開狀態給客戶看，內部狀態說「desk 現在在等誰」，
 兩者分開存。`internal_state` = `NONE` / `HW_SUPPLIER` / `SW_SUPPLIER` / `SI` / `AISO_INTERNAL`，
