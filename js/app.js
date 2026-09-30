@@ -5647,16 +5647,21 @@ function ordLineCard(l, i) {
                 </div>
             </div>
             <div style="margin-top:12px">
-                <label class="field-label">Serial Numbers (${l.serial_nos.filter(s => s.trim()).length} of ${l.qty})</label>
-                <div style="display:flex;flex-direction:column;gap:8px">
-                    ${l.serial_nos.map((sn, si) => `
-                    <div style="display:flex;align-items:center;gap:10px">
-                        <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0">Unit ${si + 1}</span>
-                        <input type="text" class="input-field" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="Serial number"
-                               value="${esc(sn)}" oninput="orderDraft.lines[${i}].serial_nos[${si}]=this.value.trim()">
-                    </div>`).join('')}
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                    <label class="field-label" style="margin:0">Serial Numbers (${l.serial_nos.filter(s => s.trim()).length} of ${l.qty})</label>
+                    ${l._snPaste ? '' : `<button class="btn-link" style="font-size:12px" onclick="orderDraft.lines[${i}]._snPaste=true;renderOrderDraftLines()"><i class="ph ph-clipboard-text"></i> Paste serials</button>`}
                 </div>
-                <div class="field-hint">One serial per unit — the row count follows Qty. Required before the order is confirmed.</div>
+                ${ordSerialPastePanel(l, i)}
+                <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
+                    ${(() => { const collapsed = l.serial_nos.length > BULK_COLLAPSE_AT && !l._snShowAll;
+                        return (collapsed ? l.serial_nos.slice(0, BULK_COLLAPSED_ROWS) : l.serial_nos).map((sn, si) => `
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span style="font-size:11.5px;font-weight:600;color:#86868b;width:56px;flex-shrink:0">Unit ${si + 1}</span>
+                        <input type="text" class="input-field" data-sn="${i}-${si}" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="Serial number"
+                               value="${esc(sn)}" oninput="orderDraft.lines[${i}].serial_nos[${si}]=this.value.trim()" onkeydown="ordSerialKeydown(event, ${i}, ${si})">
+                    </div>`).join('') + (collapsed ? bulkMoreButton(l.serial_nos.length, BULK_COLLAPSED_ROWS, `orderDraft.lines[${i}]._snShowAll=true;renderOrderDraftLines()`) : ''); })()}
+                </div>
+                <div class="field-hint">One serial per unit — the row count follows Qty. Enter moves to the next unit, so a barcode scanner can scan them in a row. Required before the order is confirmed.</div>
             </div>
             <div style="margin-top:12px;border:1px dashed var(--border);border-radius:10px;background:var(--bg-subtle);padding:12px 14px">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -5706,16 +5711,21 @@ function ordLineCard(l, i) {
                 </div>
             </div>
             <div style="margin-top:12px">
-                <label class="field-label">License Keys (${l.license_keys.filter(k => k.key).length} of ${l.qty})</label>
-                <div style="display:flex;flex-direction:column;gap:8px">
-                    ${l.license_keys.map((lk, ki) => `
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                    <label class="field-label" style="margin:0">License Keys (${l.license_keys.filter(k => k.key).length} of ${l.qty})</label>
+                    ${l._kp?.open ? '' : `<button class="btn-link" style="font-size:12px" onclick="openLicensePaste('${i}')"><i class="ph ph-clipboard-text"></i> Paste keys</button>`}
+                </div>
+                ${licensePastePanel(String(i))}
+                <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
+                    ${(() => { const collapsed = l.license_keys.length > BULK_COLLAPSE_AT && !l._keysShowAll;
+                        return (collapsed ? l.license_keys.slice(0, BULK_COLLAPSED_ROWS) : l.license_keys).map((lk, ki) => `
                     <div style="display:flex;align-items:center;gap:10px">
                         <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0">Key ${ki + 1}</span>
                         <input type="text" class="input-field" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="License key"
                                value="${esc(lk.key)}" oninput="orderDraft.lines[${i}].license_keys[${ki}].key=this.value.trim()">
                         ${parent ? `<select class="input-field" style="width:230px;flex-shrink:0" title="Which unit this key is for"
                                onchange="orderDraft.lines[${i}].license_keys[${ki}].unit=this.value===''?null:Number(this.value)">${ordUnitOptions(parent, lk.unit)}</select>` : ''}
-                    </div>`).join('')}
+                    </div>`).join('') + (collapsed ? bulkMoreButton(l.license_keys.length, BULK_COLLAPSED_ROWS, `orderDraft.lines[${i}]._keysShowAll=true;renderOrderDraftLines()`) : ''); })()}
                 </div>
                 <div class="field-hint">${parent
                     ? 'Bind each key to one unit or to all units. Repeat a key on several rows to share it between units.'
@@ -6097,6 +6107,215 @@ function licenseUnitLabel(parent, unit) {
     return `Unit ${unit + 1} · ${(parent.serial_nos[unit] || '').trim() || 'serial pending'}`;
 }
 
+// ── Bulk entry (docs/ORDER_MANAGEMENT_PLAN.md, 大量序號與 License 輸入) ──
+// Serials and keys usually already sit in a shipping list or license sheet,
+// so both take a pasted column. Long lists collapse so the modal stays usable.
+// Panel state lives on the draft line as _-prefixed fields, which saveOrder
+// never copies.
+
+const BULK_COLLAPSE_AT = 12;
+const BULK_COLLAPSED_ROWS = 10;
+const BULK_PREVIEW_ROWS = 50;
+
+function splitPastedRows(text) {
+    return String(text || '').split(/\r?\n/).map(r => r.trim()).filter(Boolean)
+        .map(r => r.split(/\t|,|;/).map(c => c.trim()).filter(Boolean));
+}
+function splitPastedValues(text) {
+    return String(text || '').split(/[\r\n\t,;]+/).map(v => v.trim()).filter(Boolean);
+}
+
+function bulkMoreButton(count, shown, onclick) {
+    return `<button class="btn-link" style="font-size:12px;margin-top:6px" onclick="${onclick}">Show all ${count} (${count - shown} more)</button>`;
+}
+
+// Serial paste panel on a HW line.
+function ordSerialPastePanel(l, i) {
+    if (!l._snPaste) return '';
+    return `
+                <div style="margin-top:8px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff">
+                    <textarea class="input-field" style="min-height:90px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="Paste a column of serial numbers from Excel, one per line"
+                              oninput="orderDraft.lines[${i}]._snText=this.value;ordRenderSerialPreview(${i})">${esc(l._snText || '')}</textarea>
+                    <div id="ord-sn-preview-${i}" style="margin-top:8px">${ordSerialPreview(l, i)}</div>
+                </div>`;
+}
+
+function ordSerialPreview(l, i) {
+    const values = splitPastedValues(l._snText);
+    if (!values.length) return `<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn-secondary text-xs" onclick="orderDraft.lines[${i}]._snPaste=false;renderOrderDraftLines()">Cancel</button></div>`;
+    const seen = new Set();
+    const dupes = [...new Set(values.filter(v => { const k = v.toUpperCase(); if (seen.has(k)) return true; seen.add(k); return false; }))];
+    return `
+        <div style="font-size:12.5px;color:#1d1d1f">${values.length} serial${values.length === 1 ? '' : 's'} → Qty becomes ${values.length}, filled in order.</div>
+        ${dupes.length ? `<div style="font-size:12px;color:#dc2626;margin-top:4px">Appears more than once: ${esc(dupes.slice(0, 5).join(', '))}${dupes.length > 5 ? ` and ${dupes.length - 5} more` : ''}. Remove the duplicates to apply.</div>` : ''}
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+            <button class="btn-secondary text-xs" onclick="orderDraft.lines[${i}]._snPaste=false;renderOrderDraftLines()">Cancel</button>
+            <button class="btn-primary text-xs" ${dupes.length ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''} onclick="ordApplySerialPaste(${i})">Apply ${values.length} serial${values.length === 1 ? '' : 's'}</button>
+        </div>`;
+}
+
+function ordRenderSerialPreview(i) {
+    const host = document.getElementById(`ord-sn-preview-${i}`);
+    if (host) host.innerHTML = ordSerialPreview(orderDraft.lines[i], i);
+}
+
+function ordApplySerialPaste(i) {
+    const l = orderDraft.lines[i];
+    const values = splitPastedValues(l._snText);
+    if (!values.length) return;
+    l.qty = values.length;
+    l.serial_nos = values;
+    l._snPaste = false;
+    l._snText = '';
+    renderOrderDraftLines();
+    showToast(`${values.length} serial${values.length === 1 ? '' : 's'} filled`);
+}
+
+// A barcode scanner types the code and presses Enter: move to the next unit
+// so a stack of machines can be scanned in one go.
+function ordSerialKeydown(e, i, si) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const l = orderDraft.lines[i];
+    if (si + 1 >= l.qty) { e.target.blur(); return; }
+    let next = document.querySelector(`[data-sn="${i}-${si + 1}"]`);
+    if (!next) { l._snShowAll = true; renderOrderDraftLines(); next = document.querySelector(`[data-sn="${i}-${si + 1}"]`); }
+    next?.focus();
+}
+
+// License paste: shared by the order editor ('0', '1', … = draft line index)
+// and Adjust license ('adjust').
+function licensePasteTarget(ref) {
+    if (ref === 'adjust') {
+        const line = ORDER_LINES.find(l => l.id === licenseDraft.lineId);
+        return {
+            state: licenseDraft,
+            parent: line?.parent_line_id ? ORDER_LINES.find(l => l.id === line.parent_line_id) : null,
+            rerender: renderLicenseAdjustModal,
+            apply: keys => { licenseDraft.license_keys = keys; },
+        };
+    }
+    const l = orderDraft.lines[Number(ref)];
+    return {
+        state: l,
+        parent: l.parent_line_id ? orderDraft.lines.find(x => x.id === l.parent_line_id) : null,
+        rerender: renderOrderDraftLines,
+        apply: keys => { l.license_keys = keys; l.qty = Math.max(1, keys.length); },
+    };
+}
+
+// Turn pasted text into keys. Two columns bind by serial; one column binds
+// in unit order or, for a single key, to all units. Nothing is applied while
+// `errors` is non-empty.
+function planLicensePaste(text, parent, mode) {
+    const rows = splitPastedRows(text);
+    const plan = { rows: [], keys: [], errors: [], notes: [], twoColumn: false };
+    if (!rows.length) return plan;
+    plan.twoColumn = rows.every(r => r.length >= 2);
+    if (plan.twoColumn) {
+        if (!parent) { plan.errors.push('Serial + key pairs need a line bundled with hardware. Paste keys only.'); return plan; }
+        const seenUnits = new Map();
+        rows.forEach(([sn, key]) => {
+            const unit = parent.serial_nos.findIndex(s => s.trim().toUpperCase() === sn.toUpperCase());
+            let issue = '';
+            if (unit < 0) issue = 'Serial not on this hardware line';
+            else if (seenUnits.has(unit)) issue = `Serial already listed with ${seenUnits.get(unit)}`;
+            plan.rows.push({ unit: unit < 0 ? null : unit, sn, key, issue });
+            if (!issue) { seenUnits.set(unit, key); plan.keys.push({ key, unit }); }
+        });
+        const bad = plan.rows.filter(r => r.issue).length;
+        if (bad) plan.errors.push(`${bad} row${bad === 1 ? '' : 's'} could not be matched to a unit.`);
+        const unbound = parent.qty - seenUnits.size;
+        if (!bad && unbound > 0) plan.notes.push(`${unbound} unit${unbound === 1 ? '' : 's'} will have no key.`);
+        return plan;
+    }
+    const keys = rows.map(r => r[0]);
+    if (parent && mode === 'shared') {
+        if (keys.length > 1) plan.errors.push('"Shared by all units" takes one key. Paste a single key, or pick one per unit.');
+        else { plan.keys = [{ key: keys[0], unit: null }]; plan.rows = [{ unit: null, sn: 'All units', key: keys[0], issue: '' }]; }
+        return plan;
+    }
+    if (parent) {
+        if (keys.length > parent.qty) plan.errors.push(`${keys.length} keys for ${parent.qty} units. Remove ${keys.length - parent.qty} or add units first.`);
+        keys.forEach((key, u) => {
+            const issue = u >= parent.qty ? 'No unit left for this key' : '';
+            plan.rows.push({ unit: u < parent.qty ? u : null, sn: u < parent.qty ? (parent.serial_nos[u] || '').trim() || 'serial pending' : '—', key, issue });
+            if (!issue) plan.keys.push({ key, unit: u });
+        });
+        if (!plan.errors.length && keys.length < parent.qty) plan.notes.push(`Units ${keys.length + 1}–${parent.qty} will have no key.`);
+        return plan;
+    }
+    plan.keys = keys.map(key => ({ key, unit: null }));
+    plan.rows = keys.map(key => ({ unit: null, sn: '', key, issue: '' }));
+    return plan;
+}
+
+function licensePastePanel(ref) {
+    const t = licensePasteTarget(ref);
+    const p = t.state._kp;
+    if (!p?.open) return '';
+    return `
+                <div style="margin-top:8px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff">
+                    <textarea class="input-field" style="min-height:90px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace"
+                              placeholder="${t.parent ? 'Paste two columns (serial, key) from Excel, or one column of keys' : 'Paste a column of keys, one per line'}"
+                              oninput="licensePasteTarget('${ref}').state._kp.text=this.value;renderLicensePastePreview('${ref}')">${esc(p.text || '')}</textarea>
+                    <div id="kp-preview-${ref}" style="margin-top:8px">${licensePastePreview(ref)}</div>
+                </div>`;
+}
+
+function licensePastePreview(ref) {
+    const t = licensePasteTarget(ref);
+    const p = t.state._kp;
+    const oneColumn = splitPastedRows(p.text).length && !splitPastedRows(p.text).every(r => r.length >= 2);
+    const mode = p.mode || 'order';
+    const plan = planLicensePaste(p.text, t.parent, mode);
+    const cancel = `<button class="btn-secondary text-xs" onclick="licensePasteTarget('${ref}').state._kp={open:false};licensePasteTarget('${ref}').rerender()">Cancel</button>`;
+    if (!plan.rows.length && !plan.errors.length) return `<div style="display:flex;justify-content:flex-end">${cancel}</div>`;
+    const shown = plan.rows.slice(0, BULK_PREVIEW_ROWS);
+    return `
+        ${t.parent && oneColumn ? `<div style="display:flex;gap:14px;font-size:12.5px;margin-bottom:8px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="kp-mode-${ref}" ${mode === 'order' ? 'checked' : ''} onchange="licensePasteTarget('${ref}').state._kp.mode='order';renderLicensePastePreview('${ref}')"> One per unit, in order</label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="kp-mode-${ref}" ${mode === 'shared' ? 'checked' : ''} onchange="licensePasteTarget('${ref}').state._kp.mode='shared';renderLicensePastePreview('${ref}')"> Shared by all units</label>
+        </div>` : ''}
+        ${plan.twoColumn ? '<div style="font-size:12px;color:#86868b;margin-bottom:6px">Two columns detected: keys bind by matching the serial.</div>' : ''}
+        ${shown.length ? `<div style="max-height:220px;overflow-y:auto;border:1px solid var(--border-light);border-radius:8px">
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+                <thead><tr style="background:var(--bg-subtle)">${t.parent ? '<th style="text-align:left;padding:5px 8px;color:#86868b;font-weight:600">Unit</th><th style="text-align:left;padding:5px 8px;color:#86868b;font-weight:600">Serial</th>' : ''}<th style="text-align:left;padding:5px 8px;color:#86868b;font-weight:600">Key</th><th></th></tr></thead>
+                <tbody>${shown.map(r => `<tr style="border-top:1px solid var(--border-light);${r.issue ? 'background:#fef2f2' : ''}">
+                    ${t.parent ? `<td style="padding:4px 8px;white-space:nowrap">${r.unit === null ? (r.sn === 'All units' ? 'All' : '—') : `Unit ${r.unit + 1}`}</td><td style="padding:4px 8px;font-family:ui-monospace,Menlo,monospace">${esc(r.sn)}</td>` : ''}
+                    <td style="padding:4px 8px;font-family:ui-monospace,Menlo,monospace">${esc(r.key)}</td>
+                    <td style="padding:4px 8px;color:#dc2626">${esc(r.issue)}</td></tr>`).join('')}</tbody>
+            </table></div>
+            ${plan.rows.length > shown.length ? `<div style="font-size:11.5px;color:#86868b;margin-top:4px">and ${plan.rows.length - shown.length} more rows</div>` : ''}` : ''}
+        ${plan.errors.map(e => `<div style="font-size:12px;color:#dc2626;margin-top:6px">${esc(e)}</div>`).join('')}
+        ${plan.notes.map(n => `<div style="font-size:12px;color:#b45309;margin-top:6px">${esc(n)}</div>`).join('')}
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+            ${cancel}
+            <button class="btn-primary text-xs" ${plan.errors.length || !plan.keys.length ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''} onclick="applyLicensePaste('${ref}')">Apply ${plan.keys.length} key${plan.keys.length === 1 ? '' : 's'}</button>
+        </div>`;
+}
+
+function renderLicensePastePreview(ref) {
+    const host = document.getElementById(`kp-preview-${ref}`);
+    if (host) host.innerHTML = licensePastePreview(ref);
+}
+
+function openLicensePaste(ref) {
+    const t = licensePasteTarget(ref);
+    t.state._kp = { open: true, text: '', mode: 'order' };
+    t.rerender();
+}
+
+function applyLicensePaste(ref) {
+    const t = licensePasteTarget(ref);
+    const plan = planLicensePaste(t.state._kp.text, t.parent, t.state._kp.mode || 'order');
+    if (plan.errors.length || !plan.keys.length) return;
+    t.apply(plan.keys);
+    t.state._kp = { open: false };
+    t.rerender();
+    showToast(`${plan.keys.length} key${plan.keys.length === 1 ? '' : 's'} applied`);
+}
+
 // ── Adjust license (confirmed orders) ──
 // Keys get reissued, renewed or rebound after an order is confirmed. Only the
 // SW line's license fields are editable here; the rest of the order stays
@@ -6137,9 +6356,13 @@ function renderLicenseAdjustModal() {
                 ${input('License Start', 'license_start', 'date')}
                 ${input('License End', 'license_end', 'date')}
             </div>
-            <label class="field-label" style="margin-top:14px">License Keys (${d.license_keys.length})</label>
-            <div style="display:flex;flex-direction:column;gap:8px">
-                ${d.license_keys.map((lk, ki) => `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:14px">
+                <label class="field-label" style="margin:0">License Keys (${d.license_keys.length})</label>
+                ${d._kp?.open ? '' : `<button class="btn-link" style="font-size:12px" onclick="openLicensePaste('adjust')"><i class="ph ph-clipboard-text"></i> Paste keys</button>`}
+            </div>
+            ${licensePastePanel('adjust')}
+            <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
+                ${(d.license_keys.length > BULK_COLLAPSE_AT && !d._keysShowAll ? d.license_keys.slice(0, BULK_COLLAPSED_ROWS) : d.license_keys).map((lk, ki) => `
                 <div style="display:flex;align-items:center;gap:10px">
                     <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0">Key ${ki + 1}</span>
                     <input type="text" class="input-field" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="License key"
@@ -6148,6 +6371,7 @@ function renderLicenseAdjustModal() {
                            onchange="licenseDraft.license_keys[${ki}].unit=this.value===''?null:Number(this.value)">${ordUnitOptions(parent, lk.unit)}</select>` : ''}
                     ${d.license_keys.length > 1 ? `<button onclick="licenseDraft.license_keys.splice(${ki},1);renderLicenseAdjustModal()" class="btn-ghost" title="Remove key"><i class="ph ph-x"></i></button>` : ''}
                 </div>`).join('')}
+                ${d.license_keys.length > BULK_COLLAPSE_AT && !d._keysShowAll ? bulkMoreButton(d.license_keys.length, BULK_COLLAPSED_ROWS, 'licenseDraft._keysShowAll=true;renderLicenseAdjustModal()') : ''}
             </div>
             <button onclick="licenseDraft.license_keys.push({ key: '', unit: null });renderLicenseAdjustModal()" class="btn-secondary text-xs" style="margin-top:10px"><i class="ph ph-plus"></i> Add Key</button>
             <p id="la-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin-top:12px"></p>
@@ -7972,6 +8196,76 @@ function tkSet(key, value) {
     renderTicketCreateModal();
 }
 
+// ── Find (docs/SERVICE_DESK_PLAN.md, New Ticket 直接搜尋) ──
+// Customers usually know the serial on the sticker, or a key from their
+// license mail. One box finds the unit, key or order across every eligible
+// order and fills the steps below.
+const TICKET_FIND_LIMIT = 8;
+
+function ticketFindMatches(query) {
+    const q = String(query || '').trim().toLowerCase();
+    if (q.length < 2) return [];
+    const orders = ORDERS.filter(o => o.status === 'CONFIRMED' && (!isCustomerView() || o.customer_org_id === activeOrgId()));
+    const out = [];
+    for (const o of orders) {
+        if (o.order_no.toLowerCase().includes(q)) out.push({ kind: 'order', order: o });
+        for (const l of getOrderLines(o.id)) {
+            (l.serial_nos || []).filter(sn => sn && sn.toLowerCase().includes(q))
+                .forEach(sn => out.push({ kind: 'serial', order: o, line: l, value: sn }));
+            lineLicenseChoices(l).filter(c => c.key.toLowerCase().includes(q))
+                .forEach(c => out.push({ kind: 'key', order: o, line: l, value: c.key, units: c.units }));
+        }
+        if (out.length > TICKET_FIND_LIMIT * 4) break;
+    }
+    return out;
+}
+
+function ticketFindResults(query) {
+    const q = String(query || '').trim();
+    if (q.length < 2) return '';
+    const all = ticketFindMatches(q);
+    if (!all.length) return '<div style="font-size:12.5px;color:#86868b;padding:8px 2px">No serial, key or order matches. Check the spelling, or pick step by step below.</div>';
+    const icon = { order: 'ph-shopping-cart', serial: 'ph-barcode', key: 'ph-key' };
+    return `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+        ${all.slice(0, TICKET_FIND_LIMIT).map((m, idx) => `<button class="tk-pick" onclick="tkPickFound(${idx})">
+            <i class="ph ${icon[m.kind]}" style="color:#1432E6"></i>
+            <div style="flex:1;min-width:0">
+                <div style="font-size:13px;font-weight:600">${m.kind === 'order' ? esc(m.order.order_no) : `<span class="tk-mono" style="background:transparent;padding:0">${esc(m.value)}</span>`}</div>
+                <div style="font-size:11.5px;color:#86868b">${m.kind === 'order' ? 'Order' : `${esc(m.line.product_name)} · ${esc(m.order.order_no)}${m.units ? ` · ${esc(m.units)}` : ''}`}${isCustomerView() ? '' : ` · ${esc(m.order.customer_name)}`}</div>
+            </div>
+        </button>`).join('')}
+        ${all.length > TICKET_FIND_LIMIT ? `<div style="font-size:11.5px;color:#86868b">Showing ${TICKET_FIND_LIMIT} of ${all.length}${all.length > TICKET_FIND_LIMIT * 4 ? '+' : ''}. Type more to narrow it down.</div>` : ''}
+    </div>`;
+}
+
+// Typing only refreshes the results, so the box keeps focus.
+function tkFind(value) {
+    ticketDraft.find = value;
+    const host = document.getElementById('tk-find-results');
+    if (host) host.innerHTML = ticketFindResults(value);
+}
+
+function tkPickFound(idx) {
+    const m = ticketFindMatches(ticketDraft.find)[idx];
+    if (!m) return;
+    const d = ticketDraft;
+    if (!isCustomerView()) d.customer_name = m.order.customer_name;
+    d.order_id = m.order.id;
+    d.order_line_id = m.line?.id || '';
+    d.serial_no = m.kind === 'serial' ? m.value : '';
+    d.license_key = m.kind === 'key' ? m.value : '';
+    if (m.line && m.kind !== 'serial') {
+        const serials = (m.line.serial_nos || []).filter(s => s.trim());
+        if (serials.length === 1) d.serial_no = serials[0];
+    }
+    if (m.line && m.kind !== 'key') {
+        const keys = lineLicenseChoices(m.line);
+        if (keys.length === 1) d.license_key = keys[0].key;
+    }
+    d.find = '';
+    renderTicketCreateModal();
+}
+
 function tkSetText(key, value) { ticketDraft[key] = value; }
 
 function ticketDraftReady() {
@@ -8012,6 +8306,12 @@ function renderTicketCreateModal() {
                 <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#1432E6">Service Desk</div>
                 <div style="font-size:20px;font-weight:700;margin-top:2px">New Ticket</div>
                 <div style="font-size:12.5px;color:#86868b;margin-top:2px">Pick what the request is about. Only confirmed orders are eligible.</div>
+
+                <div class="filter-search" style="margin-top:14px;max-width:none">
+                    <i class="ph ph-magnifying-glass"></i>
+                    <input id="tk-find" type="text" autocomplete="off" placeholder="Find by serial, license key or order no" value="${esc(d.find || '')}" oninput="tkFind(this.value)">
+                </div>
+                <div id="tk-find-results">${ticketFindResults(d.find)}</div>
 
                 <div class="tk-step"><span class="n">1</span>Customer</div>
                 ${isCustomerView()

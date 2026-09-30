@@ -102,3 +102,10 @@ Email 通知、SLA 日曆（工作日/假日）、供應商轉派、票務 CSV �
   沒有成員的角色不再出現在選單。Super Admin 自己不屬於任何 org，沒有鈴鐺。
 - 通知對象 = operator org 裡角色含 `ticket.u` 的 active 成員（`deskStaff()`）。
 - 確認人只能由被指定的那位按 Mark confirmed；其他人仍可用 Internal handling 下拉改回。
+
+## New Ticket 直接搜尋（2026-09-30）
+
+訂單與機器一多，「客戶 → 訂單 → 訂單行 → 序號」逐步點選很難找。New Ticket 最上方加搜尋框，
+輸入序號、License key 或訂單號即時列出符合項（最多 8 筆），點一下就帶入客戶、訂單、訂單行與序號 / key。
+只搜 CONFIRMED 訂單；客戶視角只搜自己組織的。原本逐步點選保留，給不知道序號的人用。
+票務列表的分頁、依緊急度排序、更多篩選，等資料量上來再做。
