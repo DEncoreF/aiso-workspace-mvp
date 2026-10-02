@@ -1,22 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AISO Workspace v4 | Back-office Prototype</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/@phosphor-icons/web"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        aiso: { DEFAULT: '#1432E6', light: '#8da4ff', dark: '#0f28b8', 50: '#eef1ff', 100: '#dde4ff' },
-                    }
-                }
-            }
-        }
-    </script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AISO Workspace v4 | Account Flows Mockup</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/@phosphor-icons/web"></script>
+<script>tailwind.config={theme:{extend:{colors:{aiso:{DEFAULT:'#1432E6',light:'#8da4ff',dark:'#0f28b8',50:'#eef1ff',100:'#dde4ff'}}}}}</script>
+    <!-- Styles copied from index.html so the screens match the Workspace. -->
     <style>
         /* Helvetica-style system font stack */
         :root {
@@ -790,463 +781,380 @@
         .view-as-item:hover { background:#f5f5f7 } .view-as-item.active { background:#eef1ff; color:#1432E6; font-weight:600 }
         .view-as-label { font-size:10px; color:#c7c7cc; text-transform:uppercase; letter-spacing:0.06em; padding:6px 10px 4px }
     </style>
+    <style>
+        body { background: #f5f7fd; }
+        .mk-banner { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; padding: 10px 18px; background: #fff7ed; color: #9a3412; font-size: 12.5px; border-bottom: 1px solid #fed7aa; }
+        .mk-back { margin-left: auto; color: #1432E6; font-weight: 600; text-decoration: none; white-space: nowrap; }
+        .mk-layout { display: grid; grid-template-columns: 250px 1fr; min-height: calc(100vh - 42px); }
+        .mk-nav { background: #1d1d1f; padding: 16px 10px; }
+        .mk-nav-group { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: rgba(255,255,255,.4); padding: 14px 10px 6px; }
+        .mk-nav button { display: block; width: 100%; text-align: left; padding: 7px 10px; border-radius: 8px; border: none; background: transparent; color: rgba(255,255,255,.65); font-size: 13px; cursor: pointer; }
+        .mk-nav button:hover { background: rgba(255,255,255,.08); color: #fff; }
+        .mk-nav button.active { background: rgba(255,255,255,.14); color: #fff; font-weight: 600; }
+        .mk-main { padding: 26px 30px 60px; min-width: 0; }
+        .mk-screen { display: none; }
+        .mk-screen.active { display: block; }
+        .mk-caption { font-size: 12px; color: #86868b; margin-bottom: 12px; }
+        .mk-stage { background: rgba(0,0,0,.06); border-radius: 18px; padding: 24px; overflow: hidden; }
+        .mk-list { border: 1px solid var(--border-light); border-radius: 12px; overflow: hidden; }
+        .mk-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border-light); }
+        .mk-row:last-child { border-bottom: none; }
+        .mk-av { width: 30px; height: 30px; border-radius: 50%; background: #eef1ff; color: #1432E6; font-weight: 700; font-size: 11px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .mk-av-muted { background: #f3f4f6; color: #86868b; font-size: 15px; }
+        .mk-who { flex: 1; min-width: 0; } .mk-who b { display: block; font-size: 13px; } .mk-who small { display: block; font-size: 12px; color: #86868b; }
+        .mk-sub { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #86868b; margin: 18px 0 8px; }
+        .mk-check { display: flex; gap: 10px; padding: 9px 12px; border: 1px solid var(--border-light); border-radius: 10px; }
+        .mk-check b { display: block; font-size: 13px; } .mk-check small { display: block; font-size: 12px; color: #86868b; }
+        .mk-notes { display: grid; gap: 8px; font-size: 13px; } .mk-notes > div { background: #fff; border-radius: 12px; padding: 12px 14px; }
+        .mk-table { background: #fff; border-radius: 14px; overflow: hidden; font-size: 13px; }
+        .mk-tr { display: grid; grid-template-columns: 200px 1fr 1fr; gap: 14px; padding: 11px 16px; border-bottom: 1px solid var(--border-light); }
+        .mk-th { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #86868b; }
+        .mk-err { color: #dc2626; font-size: 12.5px; }
+        .mk-outbox { display: grid; grid-template-columns: 320px 1fr; background: #fff; border-radius: 16px; overflow: hidden; min-height: 380px; }
+        .mk-mail-list { border-right: 1px solid var(--border-light); }
+        .mk-mail { padding: 12px 16px; border-bottom: 1px solid var(--border-light); font-size: 13px; }
+        .mk-mail small { display: block; color: #86868b; font-size: 11.5px; margin-top: 2px; }
+        .mk-mail.active { background: #eef1ff; }
+        .mk-mail-body { padding: 22px 26px; font-size: 13.5px; line-height: 1.7; } .mk-mail-body p { margin: 0 0 12px; }
+        .mk-login { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 520px; background: #f5f7fd; border-radius: 18px; padding: 24px; }
+        .mk-lockup { display: flex; align-items: center; gap: 10px; margin-bottom: 1.2rem; }
+        .mk-lockup span { background: #eef1ff; color: #1432E6; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 980px; }
+        .mk-card { background: #fff; border-radius: 16px; padding: 2rem; max-width: 440px; width: 100%; box-shadow: 0 10px 40px rgba(8,15,38,.08); }
+        .mk-card p { font-size: 13px; color: #1d1d1f; line-height: 1.6; margin: 10px 0; }
+        .mk-foot { margin-top: 1rem; color: #86868b; font-size: 12px; }
+        .mk-warn { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #fff7ed; color: #9a3412; font-size: 12.5px; }
+        .mk-link { color: #1432E6; font-size: 12px; font-weight: 600; text-decoration: none; }
+        .mk-kv { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f5f5f7; font-size: 13px; } .mk-kv span { color: #86868b; }
+        .mk-two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+        .mk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+        @media (max-width: 860px) { .mk-layout { grid-template-columns: 1fr; } .mk-two, .mk-outbox { grid-template-columns: 1fr; } .mk-tr { grid-template-columns: 1fr; } }
+        .mk-toast { position: absolute; right: 36px; bottom: 30px; display: inline-flex; align-items: center; gap: 8px; background: #059669; color: #fff; font-size: 13px; font-weight: 600; padding: 10px 16px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.18); }
+        .mk-stage { position: relative; }
+    </style>
 </head>
-<body class="min-h-screen">
+<body>
+<div class="mk-banner">
+    <i class="ph ph-info"></i>
+    <span><strong>Static preview</strong>：帳號開通與忘記密碼的畫面（SA V2 §4.1.4、§4.1.6、§4.2）。資料為示意，按鈕不會改任何東西；寄信以 Demo outbox 代替。截圖日期 2026-10-01。</span>
+    <a href="../../index.html" class="mk-back"><i class="ph ph-arrow-left"></i> Back to Workspace</a>
+</div>
+<div class="mk-layout">
+    <nav class="mk-nav" id="mk-nav">
+        <div class="mk-nav-group">Inviting (desk / customer admin)</div>
+        <button data-screen="members">Members · invitations</button>
+        <button data-screen="resend">Resend · after resending</button>
+        <button data-screen="invite">Invite member</button>
+        <button data-screen="invite-blocked">Invite · blocked cases</button>
+        <button data-screen="accounts">Accounts · Not activated</button>
+        <div class="mk-nav-group">Invitee</div>
+        <button data-screen="outbox">Demo outbox</button>
+        <button data-screen="setup">Accept · new account setup</button>
+        <button data-screen="accept">Accept · existing account</button>
+        <button data-screen="links">Link states</button>
+        <div class="mk-nav-group">Password</div>
+        <button data-screen="forgot">Forgot password</button>
+        <button data-screen="forgot-sent">Reset link sent</button>
+        <button data-screen="reset">Set a new password</button>
+        <button data-screen="reset-invalid">Reset link invalid</button>
+        <div class="mk-nav-group">Session</div>
+        <button data-screen="logout-dirty">Log out with unsaved changes</button>
+    </nav>
 
-    <!-- ============== LOGIN SCREEN ============== -->
-    <div id="login-screen" style="position:fixed;inset:0;z-index:60;background:#f5f7fd;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem">
-        <!-- Lockup -->
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:1.5rem">
-            <img src="images/logo-aiso.svg" alt="AISO" style="height:30px">
-            <span style="background:#eef1ff;color:#1432E6;font-size:12px;font-weight:600;padding:2px 10px;border-radius:980px">Workspace</span>
+    <main class="mk-main">
+
+    <!-- ── Members with invitations (SA 4.3.5 / 4.2.5) ── -->
+    <section class="mk-screen" id="members">
+        <div class="mk-caption">Organizations → MegaBank Corp → Members · Super Admin · invitations listed under members</div>
+        <div class="mk-stage"><div class="modal-card modal-lg" style="margin:0 auto">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+                <div><div style="font-size:18px;font-weight:700">MegaBank Corp</div>
+                <div style="display:flex;gap:6px;margin-top:6px"><span class="badge badge-customer">Customer</span><span class="badge badge-zinc">Enterprise</span><span class="badge badge-green">Active</span></div></div>
+                <button class="btn-secondary text-xs"><i class="ph ph-pencil-simple"></i> Edit</button>
+            </div>
+            <div class="filter-tabs" style="margin:18px 0 14px">
+                <button class="filter-tab">Profile</button><button class="filter-tab active">Members (3)</button><button class="filter-tab">Roles (2)</button>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
+                <div style="font-size:12.5px;color:#86868b">Each member holds one or more of this organization's roles.</div>
+                <button class="btn-primary text-xs" data-screen-link="invite"><i class="ph ph-paper-plane-tilt"></i> Invite member</button>
+            </div>
+            <div class="mk-list">
+                <div class="mk-row"><span class="mk-av">AZ</span><span class="mk-who"><b>Amy Zhang</b><small>amy@megabank.com</small></span><span class="badge badge-zinc">Member</span></div>
+                <div class="mk-row"><span class="mk-av">RK</span><span class="mk-who"><b>Robert Kim</b><small>robert@govcloud.gov</small></span><span class="badge badge-amber">Member · Suspended</span></div>
+                <div class="mk-row"><span class="mk-av">TB</span><span class="mk-who"><b>Tom Baker</b><small>tom@megabank.com</small></span><span class="badge badge-zinc">Admin</span></div>
+            </div>
+            <div class="mk-sub">Invitations (2)</div>
+            <div class="mk-list">
+                <div class="mk-row"><span class="mk-av mk-av-muted"><i class="ph ph-envelope-simple"></i></span>
+                    <span class="mk-who"><b>lisa.wu@megabank.com</b><small>Member · invited by Tom Baker · sent 2026-09-29 · expires 2026-10-06</small></span>
+                    <span class="badge badge-blue">Pending</span>
+                    <button class="btn-ghost" title="Resend"><i class="ph ph-arrow-clockwise"></i></button><button class="btn-ghost" title="Revoke"><i class="ph ph-x-circle"></i></button></div>
+                <div class="mk-row"><span class="mk-av mk-av-muted"><i class="ph ph-envelope-simple"></i></span>
+                    <span class="mk-who"><b>ken.ho@megabank.com</b><small>Admin · invited by Tom Baker · sent 2026-09-18 · expired 2026-09-25</small></span>
+                    <span class="badge badge-amber">Expired</span>
+                    <button class="btn-ghost" title="Resend"><i class="ph ph-arrow-clockwise"></i></button><button class="btn-ghost" title="Revoke"><i class="ph ph-x-circle"></i></button></div>
+            </div>
+            <div class="field-hint" style="margin-top:8px">Only pending and expired invitations are listed. Resending sends a new link, stops the old one, and restarts the validity period. Accepted invitations move to the member list; revoked ones are removed.</div>
+            <div style="display:flex;justify-content:flex-end;margin-top:20px"><button class="btn-primary text-xs">Close</button></div>
+        </div></div>
+    </section>
+
+    <!-- ── After resending an expired invitation (SA 4.2.5) ── -->
+    <section class="mk-screen" id="resend">
+        <div class="mk-caption">Organizations → MegaBank Corp → Members · Super Admin · invitations listed under members</div>
+        <div class="mk-stage"><div class="modal-card modal-lg" style="margin:0 auto">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+                <div><div style="font-size:18px;font-weight:700">MegaBank Corp</div>
+                <div style="display:flex;gap:6px;margin-top:6px"><span class="badge badge-customer">Customer</span><span class="badge badge-zinc">Enterprise</span><span class="badge badge-green">Active</span></div></div>
+                <button class="btn-secondary text-xs"><i class="ph ph-pencil-simple"></i> Edit</button>
+            </div>
+            <div class="filter-tabs" style="margin:18px 0 14px">
+                <button class="filter-tab">Profile</button><button class="filter-tab active">Members (3)</button><button class="filter-tab">Roles (2)</button>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
+                <div style="font-size:12.5px;color:#86868b">Each member holds one or more of this organization's roles.</div>
+                <button class="btn-primary text-xs" data-screen-link="invite"><i class="ph ph-paper-plane-tilt"></i> Invite member</button>
+            </div>
+            <div class="mk-list">
+                <div class="mk-row"><span class="mk-av">AZ</span><span class="mk-who"><b>Amy Zhang</b><small>amy@megabank.com</small></span><span class="badge badge-zinc">Member</span></div>
+                <div class="mk-row"><span class="mk-av">RK</span><span class="mk-who"><b>Robert Kim</b><small>robert@govcloud.gov</small></span><span class="badge badge-amber">Member · Suspended</span></div>
+                <div class="mk-row"><span class="mk-av">TB</span><span class="mk-who"><b>Tom Baker</b><small>tom@megabank.com</small></span><span class="badge badge-zinc">Admin</span></div>
+            </div>
+            <div class="mk-sub">Invitations (2)</div>
+            <div class="mk-list">
+                <div class="mk-row"><span class="mk-av mk-av-muted"><i class="ph ph-envelope-simple"></i></span>
+                    <span class="mk-who"><b>lisa.wu@megabank.com</b><small>Member · invited by Tom Baker · sent 2026-09-29 · expires 2026-10-06</small></span>
+                    <span class="badge badge-blue">Pending</span>
+                    <button class="btn-ghost" title="Resend"><i class="ph ph-arrow-clockwise"></i></button><button class="btn-ghost" title="Revoke"><i class="ph ph-x-circle"></i></button></div>
+                <div class="mk-row"><span class="mk-av mk-av-muted"><i class="ph ph-envelope-simple"></i></span>
+                    <span class="mk-who"><b>ken.ho@megabank.com</b><small>Admin · invited by Tom Baker · sent 2026-10-02 · expires 2026-10-09</small></span>
+                    <span class="badge badge-blue">Pending</span>
+                    <button class="btn-ghost" title="Resend"><i class="ph ph-arrow-clockwise"></i></button><button class="btn-ghost" title="Revoke"><i class="ph ph-x-circle"></i></button></div>
+            </div>
+            <div class="field-hint" style="margin-top:8px">Only pending and expired invitations are listed. Resending sends a new link, stops the old one, and restarts the validity period. Accepted invitations move to the member list; revoked ones are removed.</div>
+            <div style="display:flex;justify-content:flex-end;margin-top:20px"><button class="btn-primary text-xs">Close</button></div>
         </div>
-        <!-- Card -->
-        <div style="background:#fff;border-radius:16px;padding:2.5rem;max-width:480px;width:100%;box-shadow:0 10px 40px rgba(8,15,38,0.08)">
-            <div id="login-form-panel">
-            <form onsubmit="event.preventDefault();login()">
-                <label class="field-label" for="login-email">Email</label>
-                <input id="login-email" class="input-field" type="email" placeholder="Enter your account email" autocomplete="username" maxlength="100" onblur="validateLoginField('email')" oninput="onLoginInput('email')">
-                <div id="login-email-error" class="field-error-text"></div>
-                <div style="height:0.75rem"></div>
-                <label class="field-label" for="login-password">Password</label>
-                <div style="position:relative">
-                    <input id="login-password" class="input-field" type="password" placeholder="Enter your password" autocomplete="current-password" maxlength="100" style="padding-right:2.4rem" onblur="validateLoginField('password')" oninput="onLoginInput('password')">
-                    <button type="button" onclick="toggleLoginPassword()" aria-label="Show password" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#86868b"><i class="ph ph-eye" id="login-pw-eye"></i></button>
-                </div>
-                <div id="login-password-error" class="field-error-text"></div>
-                <button id="login-submit" type="submit" class="btn-primary" style="width:100%;justify-content:center;background:#1432E6;padding:0.7rem;margin-top:0.5rem" disabled>Enter Workspace</button>
-                <div id="login-form-error" role="alert" style="display:none;margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff7ed;color:#9a3412;font-size:12.5px;line-height:1.5"></div>
-            </form>
-            <div style="text-align:center;margin-top:1rem">
-                <a href="#" onclick="event.preventDefault();forgotPassword()" style="color:#1432E6;font-size:12px;font-weight:600;text-decoration:none">Forgot password?</a>
+        <div class="mk-toast"><i class="ph ph-check-circle"></i> Invitation resent to ken.ho@megabank.com</div></div>
+    </section>
+
+    <!-- ── Invite modal (SA 4.3.5 / 4.2.2) ── -->
+    <section class="mk-screen" id="invite">
+        <div class="mk-caption">Invite member · Tom Baker (MegaBank · Admin) · email has no account yet</div>
+        <div class="mk-stage"><div class="modal-card modal-md" style="margin:0 auto">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 4px">Invite member</h3>
+            <div style="font-size:13px;color:#86868b;margin-bottom:18px">MegaBank Corp</div>
+            <label class="field-label">Email <span class="req">*</span></label>
+            <input class="input-field" value="lisa.wu@megabank.com">
+            <div class="field-hint">No account uses this email. An invitation to set one up will be sent; the account stays Not activated until then.</div>
+            <div style="margin-top:12px"><label class="field-label">Name <span class="req">*</span></label><input class="input-field" value="Lisa Wu"></div>
+            <div class="field-label" style="margin-top:14px">Roles <span class="req">*</span></div>
+            <div style="display:grid;gap:8px">
+                <label class="mk-check"><input type="checkbox"> <span><b>Admin</b><small>Manages MegaBank members and roles.</small></span></label>
+                <label class="mk-check"><input type="checkbox" checked> <span><b>Member</b><small>Reads orders and raises tickets.</small></span></label>
             </div>
+            <div class="field-hint" style="margin-top:10px">The link is valid for 7 days (Parameter Center → Invitation link validity).</div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+                <button class="btn-secondary">Cancel</button><button class="btn-primary"><i class="ph ph-paper-plane-tilt"></i> Send invitation</button>
             </div>
-            <div id="login-role-picker" style="display:none"></div>
+        </div></div>
+        <div class="mk-caption" style="margin-top:22px">Same field when the email already has an account</div>
+        <div class="mk-notes">
+            <div><span class="badge badge-blue">Desk view</span> Existing account: Robert Kim. It keeps its other roles and gets these after accepting. Its password is not reset.</div>
+            <div><span class="badge badge-customer">Customer admin view</span> This email already has an account. It will get these roles after accepting the invitation.</div>
         </div>
-        <div style="margin-top:1rem;color:#86868b;font-size:12px;text-align:center;line-height:1.7">Demo access — root@aiso.com / aiso1234<br>Preview any organization role with <strong>View as</strong>, bottom right.</div>
-    </div>
+    </section>
 
-    <!-- ============== SIDEBAR ============== -->
-    <aside id="sidebar" class="fixed left-0 top-0 bottom-0 w-[240px] z-40 flex flex-col" style="background:#1d1d1f">
-        <div class="px-5 py-5" style="border-bottom:1px solid rgba(255,255,255,0.08)">
-            <div class="flex items-center gap-2.5">
-                <img src="images/logo-aiso.svg" alt="AISO" style="height:20px;filter:brightness(0) invert(1)">
-                <span style="width:1px;height:14px;background:rgba(255,255,255,0.25)"></span>
-                <span class="text-[11px] font-semibold uppercase" style="color:rgba(255,255,255,0.55);letter-spacing:0.18em">Workspace</span>
+    <!-- ── Blocked invite cases (SA 4.2.2) ── -->
+    <section class="mk-screen" id="invite-blocked">
+        <div class="mk-caption">Invite member · messages under the Email field when the invitation cannot be sent</div>
+        <div class="mk-table">
+            <div class="mk-tr mk-th"><span>Case</span><span>Desk sees</span><span>Customer admin sees</span></div>
+            <div class="mk-tr"><span>Account is disabled</span><span class="mk-err">This account is disabled. Re-enable it before inviting.</span><span class="mk-err">This email cannot be invited. Please contact AISO.</span></div>
+            <div class="mk-tr"><span>Super Admin email</span><span class="mk-err">This email cannot be invited. Please contact AISO.</span><span class="mk-err">This email cannot be invited. Please contact AISO.</span></div>
+            <div class="mk-tr"><span>Already a member here</span><span class="mk-err" style="grid-column:span 2">This account is already a member here. Change its roles from the member list instead.</span></div>
+            <div class="mk-tr"><span>Expired invitation exists</span><span class="mk-err" style="grid-column:span 2">An invitation to this email has expired. Resend it, or revoke it and invite again.</span></div>
+            <div class="mk-tr"><span>Pending invitation exists</span><span class="mk-err" style="grid-column:span 2">An invitation to this email is already pending. Resend it, or revoke it and invite again.</span></div>
+        </div>
+    </section>
+
+    <!-- ── Accounts tab (SA 4.3.7) ── -->
+    <section class="mk-screen" id="accounts">
+        <div class="mk-caption">Organizations → Accounts · Super Admin · account status kept apart from invitation status</div>
+        <div class="mk-stage" style="background:#fff;padding:0">
+            <table class="data-table w-full" style="table-layout:fixed">
+                <thead><tr><th style="width:30%">Account</th><th style="width:44%">Organizations &amp; roles</th><th style="width:14%">Status</th><th style="width:12%">Actions</th></tr></thead>
+                <tbody>
+                    <tr><td><b style="font-size:13px">Lisa Wu</b><div style="font-size:11.5px;color:#86868b">lisa.wu@megabank.com</div></td><td><span style="font-size:12px;color:#86868b">Invited to MegaBank Corp · Member</span></td><td><span class="badge badge-amber">Not activated</span></td><td class="text-right"><button class="btn-ghost"><i class="ph ph-prohibit"></i></button></td></tr>
+                    <tr><td><b style="font-size:13px">Robert Kim</b><div style="font-size:11.5px;color:#86868b">robert@govcloud.gov</div></td><td><span class="badge badge-customer">GovCloud Agency · Admin</span> <span class="badge badge-customer">MegaBank Corp · Member (suspended)</span></td><td><span class="badge badge-green">Active</span></td><td class="text-right"><button class="btn-ghost"><i class="ph ph-prohibit"></i></button></td></tr>
+                    <tr><td><b style="font-size:13px">Tom Baker</b><div style="font-size:11.5px;color:#86868b">tom@megabank.com</div></td><td><span class="badge badge-customer">MegaBank Corp · Admin</span></td><td><span class="badge badge-green">Active</span></td><td class="text-right"><button class="btn-ghost"><i class="ph ph-prohibit"></i></button></td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- ── Demo outbox (SA 4.2.7) ── -->
+    <section class="mk-screen" id="outbox">
+        <div class="mk-caption">Demo outbox · stands in for email in the prototype</div>
+        <div class="mk-outbox">
+            <div class="mk-mail-list">
+                <div class="mk-mail active"><b>You're invited to MegaBank Corp</b><small>to lisa.wu@megabank.com · new account · 2026-09-29 10:12</small></div>
+                <div class="mk-mail"><b>MegaBank Corp added you as Member</b><small>to robert@govcloud.gov · existing account · 2026-09-29 09:40</small></div>
+                <div class="mk-mail"><b>Your AISO Workspace account is active</b><small>to lisa.wu@megabank.com · 2026-09-29 10:30</small></div>
+                <div class="mk-mail"><b>Reset your password</b><small>to amy@megabank.com · 2026-09-30 15:02</small></div>
+                <div class="mk-mail"><b>Your password was changed</b><small>to amy@megabank.com · 2026-09-30 15:06</small></div>
+            </div>
+            <div class="mk-mail-body">
+                <div style="font-size:12px;color:#86868b">From AISO Workspace · To lisa.wu@megabank.com</div>
+                <h3 style="font-size:1.1rem;font-weight:700;margin:6px 0 14px">You're invited to MegaBank Corp</h3>
+                <p>Tom Baker invited you to join <b>MegaBank Corp</b> on AISO Workspace as <b>Member</b>.</p>
+                <p>Set up your account to accept. This link works once and expires on <b>2026-10-06</b>.</p>
+                <p><button class="btn-primary" data-screen-link="setup">Set up your account</button></p>
+                <p style="font-size:12px;color:#86868b">If you weren't expecting this, you can ignore this email.</p>
             </div>
         </div>
-        <nav id="dynamic-nav" class="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto"></nav>
-        <div class="px-3 py-4" style="border-top:1px solid rgba(255,255,255,0.08)">
-            <div style="position:relative">
-                <button id="user-menu-btn" onclick="toggleUserMenu(event)" aria-label="Account menu" style="display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:12px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);cursor:pointer">
-                    <span id="user-avatar" style="width:30px;height:30px;border-radius:50%;background:#eef1ff;color:#1432E6;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0">—</span>
-                    <span style="flex:1;min-width:0;text-align:left">
-                        <span id="user-name" style="display:block;color:rgba(255,255,255,0.9);font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</span>
-                        <span id="user-role" style="display:block;color:rgba(255,255,255,0.45);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</span>
-                    </span>
-                    <i class="ph ph-caret-down" style="font-size:14px;color:rgba(255,255,255,0.5)" id="user-menu-caret"></i>
-                </button>
-                <div id="user-menu-dropdown" style="display:none;position:absolute;bottom:52px;left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:12px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,0.25);z-index:50"></div>
+    </section>
+
+    <!-- ── New account setup (SA 4.2.3) ── -->
+    <section class="mk-screen" id="setup">
+        <div class="mk-caption">Invitation link · new account · Pending, not expired</div>
+        <div class="mk-login">
+            <div class="mk-lockup"><img src="../../images/logo-aiso.svg" alt="AISO" style="height:30px"><span>Workspace</span></div>
+            <div class="mk-card">
+                <div style="font-size:1.05rem;font-weight:700">Set up your account</div>
+                <div style="font-size:13px;color:#86868b;margin:4px 0 16px">Tom Baker invited you to <b style="color:#1d1d1f">MegaBank Corp</b> as <b style="color:#1d1d1f">Member</b>.</div>
+                <label class="field-label">Email</label><input class="input-field" value="lisa.wu@megabank.com" disabled style="background:var(--bg-subtle);color:#86868b">
+                <div style="height:10px"></div>
+                <label class="field-label">Name <span class="req">*</span></label><input class="input-field" value="Lisa Wu">
+                <div style="height:10px"></div>
+                <label class="field-label">Password <span class="req">*</span></label><input class="input-field" type="password" value="••••••••••">
+                <div class="field-hint">Must meet the password rules.</div>
+                <div style="height:10px"></div>
+                <label class="field-label">Confirm password <span class="req">*</span></label><input class="input-field field-error" type="password" value="•••••••">
+                <div class="field-error-text">Passwords do not match.</div>
+                <button class="btn-primary" style="width:100%;justify-content:center;margin-top:14px" disabled>Activate account</button>
             </div>
-            <button onclick="logout()" class="nav-item" style="width:100%;margin-top:6px"><span class="nav-icon"><i class="ph ph-sign-out"></i></span><span>Logout</span></button>
+            <div class="mk-foot">After activating, you are signed in to AISO Workspace.</div>
         </div>
-    </aside>
+    </section>
 
-    <!-- ============== MAIN CONTENT ============== -->
-    <main id="main-content" class="ml-[240px]" style="padding: 2.5rem 3rem">
-        <div id="top-bar" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-            <div id="page-heading"></div>
-            <div style="display:flex;align-items:center;gap:14px">
-                <div id="notif-root" style="position:relative"></div>
-                <div id="page-action"></div>
+    <!-- ── Existing account accept (SA 4.2.4) ── -->
+    <section class="mk-screen" id="accept">
+        <div class="mk-caption">Invitation link · existing account · signed in as the invited email</div>
+        <div class="mk-two">
+            <div class="mk-login" style="min-height:auto">
+                <div class="mk-card">
+                    <div style="font-size:1.05rem;font-weight:700">Join MegaBank Corp</div>
+                    <div style="font-size:13px;color:#86868b;margin:4px 0 16px">Signed in as robert@govcloud.gov</div>
+                    <div class="mk-kv"><span>Organization</span><b>MegaBank Corp</b></div>
+                    <div class="mk-kv"><span>Role</span><b>Member</b></div>
+                    <div class="mk-kv"><span>Invited by</span><b>Tom Baker</b></div>
+                    <div class="field-hint" style="margin-top:10px">You keep your other roles. Switch between them from the account menu.</div>
+                    <button class="btn-primary" style="width:100%;justify-content:center;margin-top:14px">Accept</button>
+                </div>
+            </div>
+            <div class="mk-login" style="min-height:auto">
+                <div class="mk-card">
+                    <div style="font-size:1.05rem;font-weight:700">This invitation is for someone else</div>
+                    <div style="font-size:13px;color:#86868b;margin:8px 0 16px;line-height:1.6">This invitation was sent to robert@govcloud.gov. Sign out and sign in with that account to accept it.</div>
+                    <button class="btn-secondary" style="width:100%;justify-content:center">Sign out</button>
+                </div>
+                <div class="mk-foot">Signed in as a different account</div>
             </div>
         </div>
-        <div id="view-container">
+    </section>
 
-            <!-- ====== SOFTWARE PRODUCTS ====== -->
-            <div id="view-sw-products" class="view hidden">
-                <div id="sw-stats-bar" style="display:flex;gap:12px;margin-bottom:16px"></div>
-                <div class="filter-bar">
-                    <div class="filter-tabs" id="sw-filter-tabs">
-                        <button class="filter-tab active" data-val="" onclick="setSwFilter('')">All</button>
-                        <button class="filter-tab" data-val="published" onclick="setSwFilter('published')">Published</button>
-                        <button class="filter-tab" data-val="draft" onclick="setSwFilter('draft')">Draft</button>
-                        <button class="filter-tab" data-val="archived" onclick="setSwFilter('archived')">Archived</button>
-                    </div>
-                    <div class="filter-search">
-                        <i class="ph ph-magnifying-glass"></i>
-                        <input id="sw-search" type="text" placeholder="Search..." oninput="resetProductPage('software');renderSwProducts()">
-                    </div>
-                </div>
-                <input type="hidden" id="sw-filter-status" value="">
-                <div class="overflow-x-auto border-t border-gray-100">
-                    <table class="data-table w-full">
-                        <thead><tr>
-                            <th style="width:30%;cursor:pointer" onclick="toggleSort('software','name')">Product <i class="ph ph-caret-up-down" style="font-size:10px;color:#c7c7cc"></i></th><th style="width:22%;cursor:pointer" onclick="toggleSort('software','vendor_name')">Vendor <i class="ph ph-caret-up-down" style="font-size:10px;color:#c7c7cc"></i></th><th style="width:24%">Category</th><th style="width:12%;cursor:pointer" onclick="toggleSort('software','status')">Status <i class="ph ph-caret-up-down" style="font-size:10px;color:#c7c7cc"></i></th><th style="width:12%">Actions</th>
-                        </tr></thead>
-                        <tbody id="sw-products-tbody"></tbody>
-                    </table>
-                </div>
-                <div id="sw-products-pagination"></div>
-            </div>
-
-            <!-- ====== HARDWARE PRODUCTS ====== -->
-            <div id="view-hw-products" class="view hidden">
-                <div id="hw-stats-bar" style="display:flex;gap:12px;margin-bottom:16px"></div>
-                <div class="filter-bar">
-                    <div class="filter-tabs" id="hw-filter-tabs">
-                        <button class="filter-tab active" data-val="" onclick="setHwFilter('')">All</button>
-                        <button class="filter-tab" data-val="published" onclick="setHwFilter('published')">Published</button>
-                        <button class="filter-tab" data-val="draft" onclick="setHwFilter('draft')">Draft</button>
-                        <button class="filter-tab" data-val="archived" onclick="setHwFilter('archived')">Archived</button>
-                    </div>
-                    <div class="filter-search">
-                        <i class="ph ph-magnifying-glass"></i>
-                        <input id="hw-search" type="text" placeholder="Search..." oninput="resetProductPage('hardware');renderHwProducts()">
-                    </div>
-                </div>
-                <input type="hidden" id="hw-filter-status" value="">
-                <div class="overflow-x-auto border-t border-gray-100">
-                    <table class="data-table w-full">
-                        <thead><tr>
-                            <th style="width:22%;cursor:pointer" onclick="toggleSort('hardware','name')">Product <i class="ph ph-caret-up-down" style="font-size:10px;color:#c7c7cc"></i></th><th style="width:14%;cursor:pointer" onclick="toggleSort('hardware','vendor_name')">Vendor <i class="ph ph-caret-up-down" style="font-size:10px;color:#c7c7cc"></i></th><th style="width:12%">Category</th><th style="width:10%">Format</th><th style="width:10%">aiDAPTIV</th><th style="width:10%;cursor:pointer" onclick="toggleSort('hardware','status')">Status <i class="ph ph-caret-up-down" style="font-size:10px;color:#c7c7cc"></i></th><th style="width:14%">Actions</th>
-                        </tr></thead>
-                        <tbody id="hw-products-tbody"></tbody>
-                    </table>
-                </div>
-                <div id="hw-products-pagination"></div>
-            </div>
-
-            <!-- ====== ORDERS ====== -->
-            <div id="view-orders" class="view hidden">
-                <div class="filter-bar">
-                    <div class="filter-tabs" id="order-filter-tabs">
-                        <button class="filter-tab active" data-val="" onclick="setOrderFilter('')">All</button>
-                        <button class="filter-tab" data-val="DRAFT" onclick="setOrderFilter('DRAFT')">Draft</button>
-                        <button class="filter-tab" data-val="CONFIRMED" onclick="setOrderFilter('CONFIRMED')">Confirmed</button>
-                        <button class="filter-tab" data-val="CANCELLED" onclick="setOrderFilter('CANCELLED')">Cancelled</button>
-                    </div>
-                    <div class="filter-search">
-                        <i class="ph ph-magnifying-glass"></i>
-                        <input id="order-search" type="text" placeholder="Search order no, customer, supplier, SI..." oninput="renderOrders()">
-                    </div>
-                </div>
-                <input type="hidden" id="order-filter-status" value="">
-                <div class="overflow-x-auto border-t border-gray-100">
-                    <table class="data-table w-full">
-                        <thead><tr>
-                            <th style="width:15%">Order No</th>
-                            <th style="width:19%">Customer</th>
-                            <th style="width:30%">Suppliers</th>
-                            <th style="width:12%">Order Date</th>
-                            <th style="width:7%">Lines</th>
-                            <th style="width:10%">Status</th>
-                            <th style="width:7%">Actions</th>
-                        </tr></thead>
-                        <tbody id="orders-tbody"></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- ====== ORGANIZATIONS ====== -->
-            <div id="view-organizations" class="view hidden">
-                <div id="org-page-tabs" class="page-tabs"></div>
-                <div class="filter-bar">
-                    <div class="filter-tabs" id="org-filter-tabs">
-                        <button class="filter-tab active" data-val="" onclick="setOrgFilter('')">All</button>
-                        <button class="filter-tab" data-val="OPERATOR" onclick="setOrgFilter('OPERATOR')">Operator</button>
-                        <button class="filter-tab" data-val="ENTERPRISE" onclick="setOrgFilter('ENTERPRISE')">Enterprise</button>
-                        <button class="filter-tab" data-val="INDIVIDUAL" onclick="setOrgFilter('INDIVIDUAL')">Individual</button>
-                        <button class="filter-tab" data-val="INFERRED" id="org-filter-inferred" style="display:none" onclick="setOrgFilter('INFERRED')">Type to confirm</button>
-                    </div>
-                    <div class="filter-search">
-                        <i class="ph ph-magnifying-glass"></i>
-                        <input id="org-search" type="text" placeholder="Search name or contact email..." oninput="renderOrganizations()">
-                    </div>
-                </div>
-                <input type="hidden" id="org-filter-type" value="">
-                <div class="overflow-x-auto border-t border-gray-100">
-                    <table class="data-table w-full" style="table-layout:fixed">
-                        <thead><tr>
-                            <th style="width:30%">Organization</th>
-                            <th style="width:17%">Type</th>
-                            <th style="width:9%">Members</th>
-                            <th style="width:8%">Roles</th>
-                            <th style="width:8%">Orders</th>
-                            <th style="width:11%">Status</th>
-                            <th style="width:9%">Actions</th>
-                        </tr></thead>
-                        <tbody id="orgs-tbody"></tbody>
-                    </table>
-                </div>
-                <div id="accounts-table-wrap" class="overflow-x-auto border-t border-gray-100" style="display:none">
-                    <table class="data-table w-full" style="table-layout:fixed">
-                        <thead><tr>
-                            <th style="width:28%">Account</th>
-                            <th style="width:46%">Organizations &amp; roles</th>
-                            <th style="width:14%">Status</th>
-                            <th style="width:12%">Actions</th>
-                        </tr></thead>
-                        <tbody id="accounts-tbody"></tbody>
-                    </table>
-                </div>
-                <div id="org-types-wrap" style="display:none"></div>
-            </div>
-
-            <!-- ====== SERVICE DESK ====== -->
-            <div id="view-service-desk" class="view hidden">
-                <div id="tk-stats-bar" style="display:flex;gap:12px;margin-bottom:16px"></div>
-                <div class="filter-bar">
-                    <div class="filter-tabs" id="ticket-filter-tabs">
-                        <button class="filter-tab active" data-val="" onclick="setTicketFilter('')">All</button>
-                        <button class="filter-tab" data-val="NEEDS_ME" id="ticket-needs-me-tab" style="display:none" onclick="setTicketFilter('NEEDS_ME')">Needs me</button>
-                        <button class="filter-tab" data-val="OPEN" onclick="setTicketFilter('OPEN')">Open</button>
-                        <button class="filter-tab" data-val="IN_PROGRESS" onclick="setTicketFilter('IN_PROGRESS')">In progress</button>
-                        <button class="filter-tab" data-val="AWAITING_CUSTOMER_INFO" onclick="setTicketFilter('AWAITING_CUSTOMER_INFO')">Awaiting customer</button>
-                        <button class="filter-tab" data-val="RESOLVED" onclick="setTicketFilter('RESOLVED')">Resolved</button>
-                        <button class="filter-tab" data-val="CLOSED" onclick="setTicketFilter('CLOSED')">Closed</button>
-                    </div>
-                    <div class="filter-search">
-                        <i class="ph ph-magnifying-glass"></i>
-                        <input id="ticket-search" type="text" placeholder="Search ticket, order no, serial, subject..." oninput="renderServiceDesk()">
-                    </div>
-                </div>
-                <input type="hidden" id="ticket-filter-status" value="">
-                <div class="overflow-x-auto border-t border-gray-100">
-                    <table class="data-table w-full">
-                        <thead><tr>
-                            <th style="width:9%">Ticket</th>
-                            <th style="width:27%">Subject</th>
-                            <th style="width:13%">Customer</th>
-                            <th style="width:27%">Order / Line</th>
-                            <th style="width:7%">Priority</th>
-                            <th style="width:13%">Status</th>
-                            <th style="width:4%"></th>
-                        </tr></thead>
-                        <tbody id="tickets-tbody"></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- ====== ASSET REGISTRY ====== -->
-            <div id="view-assets" class="view hidden">
-                <div id="asset-stats-bar" style="display:flex;gap:12px;margin-bottom:16px"></div>
-                <div class="filter-bar">
-                    <div class="filter-tabs" id="asset-filter-tabs">
-                        <button class="filter-tab active" data-val="" onclick="setAssetFilter('')">All</button>
-                        <button class="filter-tab" data-val="active" onclick="setAssetFilter('active')">In warranty</button>
-                        <button class="filter-tab" data-val="expiring" onclick="setAssetFilter('expiring')">Expiring soon</button>
-                        <button class="filter-tab" data-val="expired" onclick="setAssetFilter('expired')">Out of warranty</button>
-                        <button class="filter-tab" data-val="unclaimed" onclick="setAssetFilter('unclaimed')">Unclaimed</button>
-                    </div>
-                    <div class="filter-search">
-                        <i class="ph ph-magnifying-glass"></i>
-                        <input id="asset-search" type="text" placeholder="Search serial or model..." oninput="resetAssetPage();renderAssets()">
-                    </div>
-                </div>
-                <input type="hidden" id="asset-filter-status" value="">
-                <div class="overflow-x-auto border-t border-gray-100">
-                    <table class="data-table w-full">
-                        <thead><tr>
-                            <th style="width:20%;cursor:pointer" onclick="toggleAssetSort('serial_no')">Serial <i class="ph ph-caret-up-down" style="font-size:10px;color:#c7c7cc"></i></th>
-                            <th style="width:20%">Model</th>
-                            <th style="width:15%">Warranty</th>
-                            <th style="width:13%;cursor:pointer" onclick="toggleAssetSort('warranty_end')">Ends <i class="ph ph-caret-up-down" style="font-size:10px;color:#c7c7cc"></i></th>
-                            <th style="width:18%">Claimed by</th>
-                            <th style="width:14%">Actions</th>
-                        </tr></thead>
-                        <tbody id="assets-tbody"></tbody>
-                    </table>
-                </div>
-                <div id="assets-pagination"></div>
-            </div>
-
-            <!-- ====== PRODUCT DETAIL (SW) ====== -->
-            <div id="view-sw-detail" class="view hidden">
-                <div id="sw-detail-content"></div>
-            </div>
-
-            <!-- ====== PRODUCT DETAIL (HW) ====== -->
-            <div id="view-hw-detail" class="view hidden">
-                <div id="hw-detail-content"></div>
-            </div>
-
-            <!-- ====== SETTINGS ====== -->
-            <div id="view-param-center" class="view hidden">
-
-                <div class="flex gap-2 mb-5">
-                    <button class="tab-btn active" data-param-tab="sw" onclick="switchParamTab('sw')"><i class="ph ph-app-window"></i> Software Parameters</button>
-                    <button class="tab-btn" data-param-tab="hw" onclick="switchParamTab('hw')"><i class="ph ph-hard-drives"></i> Hardware Parameters</button>
-                </div>
-
-                <!-- ─── Software Parameters Tab ─── -->
-                <div id="param-tab-sw" class="param-tab-panel space-y-8">
-                    <section>
-                        <div class="mb-3">
-                            <h3 class="text-sm font-semibold flex items-center gap-2"><i class="ph ph-sort-ascending text-aiso"></i> Frontend Display Order</h3>
-                            <p class="text-xs text-[#86868b] mt-0.5">Drag to reorder how software products appear on the storefront. Only <strong>Published</strong> products are shown on the frontend.</p>
-                        </div>
-                        <div id="param-sw-order" class="border border-[#f1f3f5] rounded-lg overflow-hidden"></div>
-                    </section>
-
-                    <!-- Software Packaging: disabled and hidden. Packaging is no longer
-                         surfaced anywhere in the portal; markup kept for reference only. -->
-                    <section hidden>
-                        <div class="mb-3">
-                            <h3 class="text-sm font-semibold flex items-center gap-2"><i class="ph ph-package text-aiso"></i> Software Packaging</h3>
-                            <p class="text-xs text-[#86868b] mt-0.5">Determine how each software product is offered on the storefront: <strong>Bundled</strong> (included with hardware) or <strong>Add-on</strong> (optional purchase).</p>
-                        </div>
-                        <div class="overflow-x-auto border-t border-gray-100">
-                            <table class="data-table w-full">
-                                <thead><tr><th>Software Product</th><th>Vendor</th><th>Status</th><th>Packaging Type</th></tr></thead>
-                                <tbody id="param-sw-packaging-tbody"></tbody>
-                            </table>
-                        </div>
-                    </section>
-
-                    <section>
-                        <div class="mb-3">
-                            <h3 class="text-sm font-semibold flex items-center gap-2"><i class="ph ph-tag text-aiso"></i> Software Categories</h3>
-                            <p class="text-xs text-[#86868b] mt-0.5">Frontend category tags displayed on the software storefront. Disabled items are hidden from vendors.</p>
-                        </div>
-                        <div class="border border-[#f1f3f5] rounded-lg px-5 py-4" id="param-sw-categories"></div>
-                    </section>
-
-                    <section>
-                        <div class="mb-3">
-                            <h3 class="text-sm font-semibold flex items-center gap-2"><i class="ph ph-globe-hemisphere-west text-aiso"></i> Applicable Industries</h3>
-                            <p class="text-xs text-[#86868b] mt-0.5">Industry tags available for software products. Disabled items are hidden from vendors.</p>
-                        </div>
-                        <div class="border border-[#f1f3f5] rounded-lg px-5 py-4" id="param-sw-industries"></div>
-                    </section>
-
-                </div>
-
-                <!-- ─── Hardware Parameters Tab ─── -->
-                <div id="param-tab-hw" class="param-tab-panel space-y-8 hidden">
-                    <section>
-                        <div class="mb-3">
-                            <h3 class="text-sm font-semibold flex items-center gap-2"><i class="ph ph-sort-ascending text-aiso"></i> Frontend Display Order</h3>
-                            <p class="text-xs text-[#86868b] mt-0.5">Drag to reorder how hardware products appear on the storefront. Only <strong>Published</strong> products are shown on the frontend.</p>
-                        </div>
-                        <div id="param-hw-order" class="border border-[#f1f3f5] rounded-lg overflow-hidden"></div>
-                    </section>
-
-                    <section>
-                        <div class="mb-3">
-                            <h3 class="text-sm font-semibold flex items-center gap-2"><i class="ph ph-cpu text-aiso"></i> Hardware Product Types</h3>
-                            <p class="text-xs text-[#86868b] mt-0.5">Product type options in the hardware creation form dropdown. Disabled items are hidden from vendors.</p>
-                        </div>
-                        <div class="border border-[#f1f3f5] rounded-lg px-5 py-4" id="param-hw-types"></div>
-                    </section>
-                </div>
-
-                <div id="param-pending-bar" class="pending-bar" hidden></div>
-            </div>
-
-            <!-- ====== COMPATIBILITY MAPPING ====== -->
-            <div id="view-compatibility" class="view hidden">
-                <section class="space-y-4">
-                    <div id="compat-summary" class="flex flex-wrap gap-2"></div>
-                    <div class="filter-bar" style="padding-bottom:0">
-                        <div class="filter-search">
-                            <i class="ph ph-magnifying-glass"></i>
-                            <input id="compat-search" type="text" placeholder="Search software..." oninput="renderCompatibilityCenter()">
-                        </div>
-                    </div>
-                    <div class="overflow-x-auto border-t border-gray-100">
-                        <table class="data-table w-full">
-                            <thead><tr><th style="width:32%">Software Product</th><th style="width:56%">Compatible Hardware</th><th style="width:12%">Actions</th></tr></thead>
-                            <tbody id="compat-tbody"></tbody>
-                        </table>
-                    </div>
-                    <div id="compat-pending-bar" class="pending-bar" hidden></div>
-                </section>
-            </div>
-
-            <!-- ====== ACTIVITY LOG ====== -->
-            <div id="view-activity-log" class="view hidden">
-                <div id="activity-log-list"></div>
-            </div>
-
-            <div id="view-settings" class="view hidden">
-                <div class="w-full max-w-xl">
-                    <div class="card p-8 space-y-6">
-                        <div>
-                            <label class="block text-xs font-bold text-[#86868b] uppercase tracking-wider mb-2">Display Name</label>
-                            <input id="settings-name" type="text" class="w-full border border-[#e8eaed] rounded-lg px-4 py-2.5 text-sm" readonly>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold text-[#86868b] uppercase tracking-wider mb-2">Email</label>
-                            <input id="settings-email" type="text" class="w-full border border-[#e8eaed] rounded-lg px-4 py-2.5 text-sm" readonly>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold text-[#86868b] uppercase tracking-wider mb-2">Role</label>
-                            <input id="settings-role" type="text" class="w-full border border-[#e8eaed] rounded-lg px-4 py-2.5 text-sm bg-[#fafbfc]" readonly>
-                        </div>
-                    </div>
-                    <div class="card p-8 mt-6">
-                        <h3 class="text-sm font-bold mb-2">Save Toasts</h3>
-                        <p class="text-sm mb-4" style="color:#86868b">The two toasts every save attempt ends in. Green confirms the write went through; red means it failed and nothing was changed.</p>
-                        <div class="flex flex-wrap gap-2">
-                            <button onclick="showToast(TOAST_SAVE_SUCCESS)" class="btn-secondary"><i class="ph ph-check-circle"></i> Save succeeded</button>
-                            <button onclick="showToast(TOAST_SAVE_FAILURE, 'error')" class="btn-secondary" style="color:#dc2626;border-color:#fecaca;background:#fef2f2"><i class="ph ph-warning-circle"></i> Save failed</button>
-                        </div>
-                    </div>
-
-                    <div class="card p-8 mt-6">
-                        <h3 class="text-sm font-bold mb-2">Modal API Failure Demo</h3>
-                        <p class="text-sm mb-4" style="color:#86868b">Simulate a failed submit. Each test restores the data, keeps the modal and form values open, and shows a red error toast.</p>
-                        <div class="flex flex-wrap gap-2">
-                            <button onclick="showModalFailureDemo('create')" class="btn-secondary"><i class="ph ph-plus-circle"></i> Add</button>
-                            <button onclick="showModalFailureDemo('edit')" class="btn-secondary"><i class="ph ph-pencil-simple"></i> Edit</button>
-                            <button onclick="showModalFailureDemo('delete')" class="btn-secondary"><i class="ph ph-trash"></i> Delete</button>
-                            <button onclick="showModalFailureDemo('unpublish')" class="btn-secondary"><i class="ph ph-arrow-line-down"></i> Unpublish</button>
-                        </div>
-                    </div>
-                    <div class="card p-8 mt-6">
-                        <h3 class="text-sm font-bold mb-2">Error State Demo</h3>
-                        <p class="text-sm mb-4" style="color:#86868b">Preview the standard HTTP error screens shown when data cannot be loaded.</p>
-                        <div class="flex flex-wrap gap-2">
-                            <button onclick="showErrorStateDemo(400)" class="btn-secondary">400</button>
-                            <button onclick="showErrorStateDemo(401)" class="btn-secondary">401</button>
-                            <button onclick="showErrorStateDemo(403)" class="btn-secondary">403</button>
-                            <button onclick="showErrorStateDemo(404)" class="btn-secondary">404</button>
-                            <button onclick="showErrorStateDemo(500)" class="btn-secondary">500</button>
-                            <button onclick="showErrorStateDemo(503)" class="btn-secondary">503</button>
-                        </div>
-                    </div>
-                    <div class="card p-8 mt-6" style="border-color:#fecaca">
-                        <h3 class="text-sm font-bold mb-2" style="color:#dc2626">Danger Zone</h3>
-                        <p class="text-sm mb-4" style="color:#86868b">Clears all locally saved changes and restores the original demo data.</p>
-                        <button onclick="confirmResetDemoData()" class="btn-secondary" style="color:#dc2626;border-color:#fecaca;background:#fef2f2"><i class="ph ph-arrow-counter-clockwise"></i> Reset Demo Data</button>
-                    </div>
-                </div>
-            </div>
-
+    <!-- ── Link states (SA 4.2.5 / 4.2.6) ── -->
+    <section class="mk-screen" id="links">
+        <div class="mk-caption">Invitation link · what the invitee sees when it can no longer be used</div>
+        <div class="mk-grid">
+            <div class="mk-card"><span class="badge badge-amber">Expired</span><p>This invitation has expired. Ask your organization admin to resend it.</p></div>
+            <div class="mk-card"><span class="badge badge-zinc">Revoked · replaced · org inactive</span><p>This invitation is no longer valid.</p></div>
+            <div class="mk-card"><span class="badge badge-green">Accepted</span><p>This invitation has already been used. Please sign in.</p><button class="btn-secondary text-xs">Sign in</button></div>
+            <div class="mk-card"><span class="badge badge-red">Account disabled</span><p>This account is disabled. Please contact AISO to re-enable it.</p></div>
         </div>
+    </section>
+
+    <!-- ── Forgot password (SA 4.1.6) ── -->
+    <section class="mk-screen" id="forgot">
+        <div class="mk-caption">Forgot password? · request a reset link</div>
+        <div class="mk-login">
+            <div class="mk-lockup"><img src="../../images/logo-aiso.svg" alt="AISO" style="height:30px"><span>Workspace</span></div>
+            <div class="mk-card">
+                <div style="font-size:1.05rem;font-weight:700">Reset your password</div>
+                <div style="font-size:13px;color:#86868b;margin:4px 0 16px">Enter your account email and we'll send a reset link.</div>
+                <label class="field-label">Email</label><input class="input-field" value="amy@megabank.com">
+                <button class="btn-primary" style="width:100%;justify-content:center;margin-top:14px" data-screen-link="forgot-sent">Send reset link</button>
+                <div style="text-align:center;margin-top:1rem"><a href="../../index.html" class="mk-link">Back to sign in</a></div>
+            </div>
+        </div>
+    </section>
+    <section class="mk-screen" id="forgot-sent">
+        <div class="mk-caption">After sending · same message whether or not the email has an account</div>
+        <div class="mk-login">
+            <div class="mk-lockup"><img src="../../images/logo-aiso.svg" alt="AISO" style="height:30px"><span>Workspace</span></div>
+            <div class="mk-card" style="text-align:center">
+                <i class="ph ph-envelope-simple-open" style="font-size:34px;color:#1432E6"></i>
+                <div style="font-size:1.05rem;font-weight:700;margin-top:8px">Check your email</div>
+                <div style="font-size:13px;color:#86868b;margin:8px 0 16px;line-height:1.6">If an account exists for this email, we've sent a reset link. Accounts that are not activated or disabled do not receive one.</div>
+                <a href="../../index.html" class="mk-link">Back to sign in</a>
+            </div>
+        </div>
+    </section>
+    <section class="mk-screen" id="reset">
+        <div class="mk-caption">Reset link · valid, single use</div>
+        <div class="mk-login">
+            <div class="mk-lockup"><img src="../../images/logo-aiso.svg" alt="AISO" style="height:30px"><span>Workspace</span></div>
+            <div class="mk-card">
+                <div style="font-size:1.05rem;font-weight:700">Set a new password</div>
+                <div style="font-size:13px;color:#86868b;margin:4px 0 16px">amy@megabank.com</div>
+                <label class="field-label">New password <span class="req">*</span></label><input class="input-field" type="password" value="••••••••••">
+                <div style="height:10px"></div>
+                <label class="field-label">Confirm password <span class="req">*</span></label><input class="input-field" type="password" value="••••••••••">
+                <button class="btn-primary" style="width:100%;justify-content:center;margin-top:14px">Reset password</button>
+                <div class="field-hint" style="margin-top:10px">After resetting, every other signed-in session of this account ends and a "password changed" email is sent.</div>
+            </div>
+        </div>
+    </section>
+    <section class="mk-screen" id="reset-invalid">
+        <div class="mk-caption">Reset link · expired, already used, or replaced by a newer request</div>
+        <div class="mk-login">
+            <div class="mk-lockup"><img src="../../images/logo-aiso.svg" alt="AISO" style="height:30px"><span>Workspace</span></div>
+            <div class="mk-card" style="text-align:center">
+                <i class="ph ph-link-break" style="font-size:34px;color:#dc2626"></i>
+                <div style="font-size:1.05rem;font-weight:700;margin-top:8px">This link no longer works</div>
+                <div style="font-size:13px;color:#86868b;margin:8px 0 16px;line-height:1.6">Request a new reset link to continue.</div>
+                <button class="btn-primary" data-screen-link="forgot">Request a new link</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── Logout with staged changes (SA 4.1.4) ── -->
+    <section class="mk-screen" id="logout-dirty">
+        <div class="mk-caption">Logout while Parameter Center has staged changes · Super Admin</div>
+        <div class="mk-stage"><div class="modal-card" style="margin:0 auto">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Leave without saving?</h3>
+            <p style="font-size:13px;color:#86868b;line-height:1.6;margin:0 0 18px">You have 3 unsaved changes in Parameter Center. Logging out discards them.</p>
+            <div style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn-secondary">Stay on page</button>
+                <button class="btn-primary" style="background:#dc2626">Discard &amp; Leave</button>
+            </div>
+        </div></div>
+    </section>
+
     </main>
-
-    <!-- ============== MODAL CONTAINER ============== -->
-    <div id="modal-root"></div>
-
-    <!-- ============== PRODUCT ICON CROPPER ============== -->
-    <div id="product-icon-crop-root"></div>
-
-    <!-- ============== FULL-PAGE ERROR STATE ============== -->
-    <div id="error-state-root" hidden></div>
-
-    <!-- ============== TOAST CONTAINER ============== -->
-    <!-- ============== ATTACHMENT PREVIEW ============== -->
-    <div id="tk-preview-root"></div>
-
-    <!-- ============== VIEW-AS SWITCH ============== -->
-    <div id="view-as-root"></div>
-
-    <div id="toast-root" class="fixed bottom-20 right-6 z-[300] space-y-2"></div>
-
-<script src="js/seed-data.js"></script>
-<script src="js/store.js"></script>
-<script src="js/app.js"></script>
+</div>
+<script>
+    // Show one screen at a time; the hash picks it so the Workspace can link straight in.
+    function showScreen(id) {
+        const target = document.getElementById(id) ? id : 'members';
+        document.querySelectorAll('.mk-screen').forEach(s => s.classList.toggle('active', s.id === target));
+        document.querySelectorAll('#mk-nav button').forEach(b => b.classList.toggle('active', b.dataset.screen === target));
+        if (location.hash.slice(1) !== target) history.replaceState(null, '', '#' + target);
+    }
+    document.querySelectorAll('[data-screen]').forEach(b => b.addEventListener('click', () => showScreen(b.dataset.screen)));
+    document.querySelectorAll('[data-screen-link]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); showScreen(b.dataset.screenLink); }));
+    window.addEventListener('hashchange', () => showScreen(location.hash.slice(1)));
+    showScreen(location.hash.slice(1));
+</script>
 </body>
 </html>

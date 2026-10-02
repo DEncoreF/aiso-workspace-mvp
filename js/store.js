@@ -33,6 +33,7 @@ const Store = (function () {
             USERS,
             ROLES,
             ROLE_BINDINGS,
+            ORG_TYPE_REGISTRY,
             ACTIVITY_LOG,
             HARDWARE_PRODUCT_TYPES,
             SOFTWARE_CATEGORY_OPTIONS,
@@ -116,6 +117,10 @@ const Store = (function () {
         if (Array.isArray(data.ASSETS)) ASSETS = data.ASSETS;
         if (Array.isArray(data.ORDERS)) ORDERS = data.ORDERS;
         if (Array.isArray(data.ORDER_LINES)) ORDER_LINES = data.ORDER_LINES;
+        const orderUnitsNormalized = normalizeOrderLineUnits(ORDER_LINES);
+        // Orders saved before the creator was recorded have no known creator.
+        let creatorsAdded = false;
+        ORDERS.forEach(o => { if (!('created_by' in o)) { o.created_by = null; creatorsAdded = true; } });
         // Saves from before license-to-serial binding hold license keys as plain
         // strings; they become unbound keys, which is what they meant.
         let licenseKeysNormalized = false;
@@ -137,6 +142,28 @@ const Store = (function () {
         if (Array.isArray(data.USERS)) USERS = data.USERS;
         if (Array.isArray(data.ROLES)) ROLES = data.ROLES;
         if (Array.isArray(data.ROLE_BINDINGS)) ROLE_BINDINGS = data.ROLE_BINDINGS;
+        // Saved registry entries win; any entry a save predates keeps its default.
+        if (Array.isArray(data.ORG_TYPE_REGISTRY)) {
+            ORG_TYPE_REGISTRY = ORG_TYPE_REGISTRY.map(seed => data.ORG_TYPE_REGISTRY.find(e => e.key === seed.key) || seed);
+        }
+        // AISO is the operator only; its vendor side waits for vendor orgs (SA V2 D32).
+        let orgsMigrated = false;
+        ORGS.forEach(org => {
+            if (org.id !== 'v-aiso' || !(org.types || []).includes('VENDOR')) return;
+            org.types = org.types.filter(t => t !== 'VENDOR');
+            org.vendor_type = null;
+            orgsMigrated = true;
+        });
+        // A customer org saved without a subtype gets one inferred from its
+        // shape, flagged until the desk confirms it (SA V2 D17).
+        ORGS.forEach(org => {
+            if (!(org.types || []).includes('CUSTOMER') || org.customer_type) return;
+            const roles = ROLES.filter(r => r.org_id === org.id);
+            const members = new Set(ROLE_BINDINGS.filter(b => roles.some(r => r.id === b.role_id)).map(b => b.user_id));
+            org.customer_type = members.size >= 2 || roles.some(r => r.name !== 'Owner') ? 'ENTERPRISE' : 'INDIVIDUAL';
+            org.customer_type_inferred = true;
+            orgsMigrated = true;
+        });
         // Saves from before the AISO desk colleagues were seeded get them once.
         // The flag stops a later removal in the UI from being undone on reload.
         let aisoDeskAdded = false;
@@ -167,7 +194,7 @@ const Store = (function () {
         if (Array.isArray(data.HARDWARE_PRODUCT_TYPES)) HARDWARE_PRODUCT_TYPES = data.HARDWARE_PRODUCT_TYPES;
         if (Array.isArray(data.SOFTWARE_CATEGORY_OPTIONS)) SOFTWARE_CATEGORY_OPTIONS = data.SOFTWARE_CATEGORY_OPTIONS;
         if (Array.isArray(data.SOFTWARE_INDUSTRY_OPTIONS)) SOFTWARE_INDUSTRY_OPTIONS = data.SOFTWARE_INDUSTRY_OPTIONS;
-        if (mockDataMigrated || industriesNormalized || licenseKeysNormalized || channelsRenamed || aisoDeskAdded || !data.aisoDeskSeeded) {
+        if (mockDataMigrated || industriesNormalized || licenseKeysNormalized || channelsRenamed || aisoDeskAdded || orgsMigrated || orderUnitsNormalized || creatorsAdded || !data.aisoDeskSeeded) {
             try { localStorage.setItem(KEY, serialize()); } catch (e) { /* retry on the next normal save */ }
         }
         return true;

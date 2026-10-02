@@ -29,6 +29,7 @@ const PERMISSION_MODULES = [
     { key: 'ticket',        label: 'Service Desk' },
     { key: 'asset',         label: 'Asset Registry' },
     { key: 'organization',  label: 'Organizations' },
+    { key: 'org_type',      label: 'Organization Types' },
     { key: 'activity_log',  label: 'Activity Log' },
 ];
 const PERMISSION_ACTIONS = ['c', 'r', 'u', 'd'];
@@ -41,7 +42,7 @@ const PERMISSION_ACTIONS = ['c', 'r', 'u', 'd'];
 const ORG_TYPE_CAPABILITIES = {
     OPERATOR: {
         sw_product: 'crud', hw_product: 'crud', compatibility: 'cru', parameter: 'crud',
-        order: 'crud', ticket: 'cru', asset: 'crud', organization: 'crud', activity_log: 'r',
+        order: 'crud', ticket: 'cru', asset: 'crud', organization: 'crud', org_type: 'ru', activity_log: 'r',
     },
     // CUSTOMER resolves through CUSTOMER_TYPE_CAPABILITIES below.
     VENDOR: {}, // deferred — see the plan's Deferred section
@@ -58,8 +59,28 @@ const CUSTOMER_TYPE_CAPABILITIES = {
     },
 };
 
+// The type registry (SA V2 D15): one entry per type + subtype, holding the
+// ceiling the app reads. The desk may narrow a ceiling from the
+// Organization Types tab but never past ORG_TYPE_ALLOWED, so operator-only
+// modules stay out of customer reach. These defaults equal that maximum.
+const ORG_TYPE_ALLOWED = {
+    OPERATOR: { ...ORG_TYPE_CAPABILITIES.OPERATOR },
+    CUSTOMER_ENTERPRISE: { ...CUSTOMER_TYPE_CAPABILITIES.ENTERPRISE },
+    CUSTOMER_INDIVIDUAL: { ...CUSTOMER_TYPE_CAPABILITIES.INDIVIDUAL },
+};
+// Grants the operator ceiling always keeps, so the desk cannot lock itself
+// out of organizations or of this registry.
+const ORG_TYPE_PINNED = { OPERATOR: ['organization.r', 'organization.u', 'org_type.r', 'org_type.u'] };
+let ORG_TYPE_REGISTRY = [
+    { key: 'CUSTOMER_ENTERPRISE', type: 'CUSTOMER', subtype: 'ENTERPRISE', label: 'Customer · Enterprise', ceiling: { ...ORG_TYPE_ALLOWED.CUSTOMER_ENTERPRISE } },
+    { key: 'CUSTOMER_INDIVIDUAL', type: 'CUSTOMER', subtype: 'INDIVIDUAL', label: 'Customer · Individual', ceiling: { ...ORG_TYPE_ALLOWED.CUSTOMER_INDIVIDUAL } },
+    { key: 'OPERATOR', type: 'OPERATOR', subtype: null, label: 'Operator', ceiling: { ...ORG_TYPE_ALLOWED.OPERATOR } },
+];
+
 let ORGS = [
-    { id: 'v-aiso', customer_type: null, name: 'AISO', types: ['OPERATOR', 'VENDOR'], vendor_type: 'HARDWARE', status: 'active',
+    // AISO is the operator only. Its vendor side belongs in a separate org,
+    // which waits until vendor orgs open (SA V2 D32).
+    { id: 'v-aiso', customer_type: null, name: 'AISO', types: ['OPERATOR'], vendor_type: null, status: 'active',
       contact_email: 'service.desk@aiso.com', note: '', created_at: '2025-01-01T00:00:00.000Z', updated_at: '2025-01-01T00:00:00.000Z' },
     { id: 'v-phison', customer_type: null, name: 'Phison Electronics', types: ['VENDOR'], vendor_type: 'HARDWARE', status: 'active',
       contact_email: '', note: '', created_at: '2025-01-01T00:00:00.000Z', updated_at: '2025-01-01T00:00:00.000Z' },
@@ -102,6 +123,8 @@ let USERS = [
 const CUSTOMER_ADMIN_PERMISSIONS = ['order.r', 'ticket.c', 'ticket.r', 'ticket.u', 'asset.r', 'asset.u',
     'organization.c', 'organization.r', 'organization.u', 'organization.d', 'activity_log.r'];
 const CUSTOMER_MEMBER_PERMISSIONS = ['order.r', 'ticket.c', 'ticket.r', 'ticket.u', 'asset.r'];
+// An individual's Owner holds the whole individual ceiling (SA V2 D28).
+const CUSTOMER_OWNER_PERMISSIONS = ['order.r', 'ticket.c', 'ticket.r', 'ticket.u', 'asset.r', 'asset.u', 'activity_log.r'];
 
 let ROLES = [
     { id: 'r-aiso-desk', org_id: 'v-aiso', name: 'Service Desk', description: 'Works the Service Desk: replies, internal notes, handling.',
@@ -117,7 +140,7 @@ let ROLES = [
       permissions: [...CUSTOMER_MEMBER_PERMISSIONS], created_at: '2025-06-01T00:00:00.000Z', updated_at: '2025-06-01T00:00:00.000Z' },
     // An individual customer gets exactly one role, created with the org.
     { id: 'r-wt-owner', org_id: 'c-weiting', name: 'Owner', description: 'The individual customer themselves.',
-      permissions: [...CUSTOMER_MEMBER_PERMISSIONS], created_at: '2026-05-04T00:00:00.000Z', updated_at: '2026-05-04T00:00:00.000Z' },
+      permissions: [...CUSTOMER_OWNER_PERMISSIONS], created_at: '2026-05-04T00:00:00.000Z', updated_at: '2026-05-04T00:00:00.000Z' },
 ];
 
 // One row per account × role. Robert holds roles in two organizations to demo
@@ -533,6 +556,7 @@ let ORDERS = [
         notes: '',
         attachments: [{ id: 'att-seed-ord-0001', name: 'PO-2026-0001-signed.txt', type: 'text/plain', size: 42, is_image: false, doc_type: 'PO',
             data_url: 'data:text/plain;base64,UE8tMjAyNi0wMDAxIC0gc2lnbmVkIHB1cmNoYXNlIG9yZGVyIChkZW1vKQ==' }],
+        created_by: 'u-root',
         created_at: '2026-07-30T09:00:00.000Z', updated_at: '2026-08-02T10:00:00.000Z',
     },
     {
@@ -548,6 +572,7 @@ let ORDERS = [
         status: 'DRAFT',
         notes: 'Awaiting final GPU allocation.',
         attachments: [],
+        created_by: 'u-root',
         created_at: '2026-08-15T09:00:00.000Z', updated_at: '2026-08-15T09:00:00.000Z',
     },
     {
@@ -563,6 +588,7 @@ let ORDERS = [
         status: 'CONFIRMED',
         notes: '',
         attachments: [],
+        created_by: 'u-root',
         created_at: '2025-09-01T09:00:00.000Z', updated_at: '2025-09-10T10:00:00.000Z',
     },
     {
@@ -576,9 +602,26 @@ let ORDERS = [
         status: 'CONFIRMED',
         notes: 'Single-seat purchase by an individual customer.',
         attachments: [],
+        created_by: 'u-root',
         created_at: '2026-05-04T09:00:00.000Z', updated_at: '2026-05-04T09:00:00.000Z',
     },
 ];
+
+// HW lines record delivery and warranty start per unit (SA V2 D39), in arrays
+// that run parallel to serial_nos. Older data kept one warranty start per
+// line; it becomes every unit's start, which is what it meant. Returns
+// whether anything changed, so a load can write the result back.
+function normalizeOrderLineUnits(lines) {
+    let changed = false;
+    lines.forEach(l => {
+        const n = l.scope === 'HW' ? (l.serial_nos || []).length : 0;
+        const fit = (arr, legacy) => Array.from({ length: n }, (_, u) => (Array.isArray(arr) ? arr[u] : legacy) || '');
+        if (!Array.isArray(l.warranty_starts) || l.warranty_starts.length !== n) { l.warranty_starts = fit(l.warranty_starts, l.warranty_start); changed = true; }
+        if (!Array.isArray(l.delivered_dates) || l.delivered_dates.length !== n) { l.delivered_dates = fit(l.delivered_dates, ''); changed = true; }
+        if ('warranty_start' in l || 'warranty_end' in l) { delete l.warranty_start; delete l.warranty_end; changed = true; }
+    });
+    return changed;
+}
 
 // Per-line service level, matching the reference prototype's plan list.
 const ORDER_SLA_PLAN_OPTIONS = ['5x8', '7x24', 'On-site'];
@@ -593,7 +636,9 @@ let ORDER_LINES = [
     {
         id: 'ol-0001', order_id: 'ord-0001', line_no: 1, scope: 'HW',
         product_id: 'hw1', product_name: 'GIGABYTE Workstation', qty: 2, sla_plan: '7x24',
-        warranty_months: 36, warranty_start: '2026-08-05', warranty_end: '2029-08-04',
+        warranty_months: 36,
+        // Delivered in two batches; each unit's warranty starts on its own date (SA V2 D39).
+        delivered_dates: ['2026-08-01', '2026-08-20'], warranty_starts: ['2026-08-05', '2026-08-22'],
         license_keys: [], version: '', license_start: '', license_end: '',
         serial_nos: ['GBT-2026-0771', 'GBT-2026-0772'],
         bom: [
@@ -619,7 +664,7 @@ let ORDER_LINES = [
     {
         id: 'ol-0003', order_id: 'ord-0002', line_no: 1, scope: 'HW',
         product_id: 'hw2', product_name: 'Gigacomputing 4U Server (4x GPU)', qty: 1, sla_plan: '',
-        warranty_months: null, warranty_start: '', warranty_end: '',
+        warranty_months: null, delivered_dates: [''], warranty_starts: [''],
         serial_nos: [''],
         bom: [
             { component_type: 'GPU', brand: 'NVIDIA', model: 'Pro6000 Blackwell 96GB', qty: 4 },
@@ -629,7 +674,7 @@ let ORDER_LINES = [
     {
         id: 'ol-0004', order_id: 'ord-0003', line_no: 1, scope: 'HW',
         product_id: 'hw-aiso1', product_name: 'AISO1 AI Agent Workstation', qty: 1, sla_plan: '5x8',
-        warranty_months: 12, warranty_start: '2025-09-10', warranty_end: '2026-09-09',
+        warranty_months: 12, delivered_dates: ['2025-09-08'], warranty_starts: ['2025-09-10'],
         license_keys: [], version: '', license_start: '', license_end: '',
         serial_nos: ['AISO1-2025-0442'],
         bom: [
@@ -641,7 +686,7 @@ let ORDER_LINES = [
     {
         id: 'ol-0005', order_id: 'ord-0004', line_no: 1, scope: 'SW',
         product_id: null, product_name: 'digiRunner Lite', qty: 1, sla_plan: '5x8',
-        warranty_months: null, warranty_start: '', warranty_end: '',
+        warranty_months: null, delivered_dates: [], warranty_starts: [],
         parent_line_id: null, supplier_name: '',
         license_keys: [{ key: 'DGRL-7722-QW18-MK04', unit: null }], version: '3.8.2', license_start: '2026-05-04', license_end: '2027-05-03',
         serial_nos: [],
@@ -665,6 +710,15 @@ const TICKET_CHANNELS = ['Email', 'Phone', 'Workspace', 'On-site'];
 // Who the desk is waiting on while a ticket sits In progress. Desk-only:
 // the customer keeps seeing the public status, because AISO stays the single
 // window and which supplier is holding things up is not their business.
+// Whether AISO takes the request on and whether it is billed (SA V2 4.5.4).
+// Desk-only: a request out of warranty can still be opened and then judged here.
+const TICKET_ACCEPTANCE = ['PENDING', 'ACCEPTED_FREE', 'ACCEPTED_CHARGEABLE', 'NOT_ACCEPTED'];
+const TICKET_ACCEPTANCE_LABEL = {
+    PENDING: 'Not decided',
+    ACCEPTED_FREE: 'Accepted · no charge',
+    ACCEPTED_CHARGEABLE: 'Accepted · chargeable',
+    NOT_ACCEPTED: 'Not accepted',
+};
 const TICKET_INTERNAL_STATES = ['NONE', 'HW_SUPPLIER', 'SW_SUPPLIER', 'SI', 'AISO_INTERNAL'];
 const TICKET_INTERNAL_STATE_LABEL = {
     NONE: 'With the desk',

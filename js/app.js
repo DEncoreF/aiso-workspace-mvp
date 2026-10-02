@@ -6,11 +6,30 @@ function esc(v) { return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt
 
 let portalMutationDepth = 0;
 
+// The module an action belongs to, for the Activity Log filter (SA V2 4.7).
+const ACTIVITY_MODULES = ['Products', 'Compatibility', 'Parameter Center', 'Orders', 'Service Desk', 'Organizations', 'Accounts', 'Asset Registry'];
+function activityModule(action) {
+    if (/^(Ticket |Customer replied)/.test(action)) return 'Service Desk';
+    if (/^(Order |License adjusted|Delivery & warranty)/.test(action)) return 'Orders';
+    if (/^(Organization|Role |Member )/.test(action)) return 'Organizations';
+    if (/^(Account |Invitation |Password )/.test(action)) return 'Accounts';
+    if (/^Compatibility/.test(action)) return 'Compatibility';
+    if (/^Parameter/.test(action)) return 'Parameter Center';
+    if (/^(Added|Imported|Released|Warranty adjusted)$/.test(action)) return 'Asset Registry';
+    return 'Products';
+}
 function logActivity(action, productName, detail = '', pid = null) {
     const ts = new Date().toISOString();
-    const entry = { action, productName, detail, timestamp: ts, user: currentUser?.name || 'System', org_id: activeOrgId() };
+    const role = activeRole();
+    const entry = {
+        action, productName, detail, timestamp: ts, module: activityModule(action),
+        user: actingName() || 'System', org_id: activeOrgId(),
+        actor_role: role ? `${activeOrg()?.name || ''} · ${role.name}` : (currentUser?.is_super_admin ? 'Super Admin' : ''),
+    };
     ACTIVITY_LOG.unshift(entry);
-    if (ACTIVITY_LOG.length > 50) ACTIVITY_LOG.length = 50;
+    // Retention is a Parameter Center setting in the real system; the
+    // prototype only caps the list so localStorage stays small.
+    if (ACTIVITY_LOG.length > 500) ACTIVITY_LOG.length = 500;
     // Also write to product history
     const p = pid ? PRODUCTS.find(x => x.id === pid) : PRODUCTS.find(x => x.name === productName);
     if (p) {
@@ -64,6 +83,7 @@ function commitPortalMutation(
     failureMessage = TOAST_SAVE_FAILURE,
     persist = () => Store.save({ notify: false })
 ) {
+    if (!enforceActiveSession()) return false;
     const snapshot = capturePortalState();
     portalMutationDepth += 1;
     try {
@@ -77,7 +97,7 @@ function commitPortalMutation(
         portalMutationDepth -= 1;
     }
     try {
-        if (persist()) return true;
+        if (persist()) { enforceActiveSession(); return true; }
     } catch (error) {
         console.error('Portal persistence failed:', error);
     }
@@ -132,16 +152,31 @@ function orgHasType(org, type) { return !!org?.types?.includes(type) && ENABLED_
 // follow the org type, not a grant: a customer role never gets them.
 function isOperatorView() { return isSuperAdminContext() || orgHasType(activeOrg(), 'OPERATOR'); }
 function isCustomerView() { return !isOperatorView() && orgHasType(activeOrg(), 'CUSTOMER'); }
+// Record scope, deny by default (SA V2 D16): the desk sees everything, a
+// customer its own records, and a type with no scope defined here sees none.
+function canSeeOrder(o) {
+    if (isOperatorView()) return true;
+    return isCustomerView() && !!o && o.customer_org_id === activeOrgId() && o.status !== 'DRAFT';
+}
+function canSeeTicket(t) {
+    if (isOperatorView()) return true;
+    return isCustomerView() && !!t && t.customer_org_id === activeOrgId();
+}
 // The name messages go out under: whoever is acting, viewed-as or signed in.
 function actingName() { return actingUser()?.name || currentUser?.name || ''; }
 
 // What one type contributes to an org's ceiling. CUSTOMER resolves further by
 // customer_type: an individual customer is one person, so nothing about
 // organization management is on offer.
-function typeCapabilities(org, type) {
-    if (type !== 'CUSTOMER') return ORG_TYPE_CAPABILITIES[type] || {};
-    return CUSTOMER_TYPE_CAPABILITIES[org?.customer_type] || CUSTOMER_TYPE_CAPABILITIES.ENTERPRISE;
+// The ceiling lives in the type registry (SA V2 D15); a type with no entry
+// contributes nothing.
+function registryEntry(org, type) {
+    if (type !== 'CUSTOMER') return ORG_TYPE_REGISTRY.find(e => e.key === type) || null;
+    // A missing or unknown subtype gets the narrowest ceiling (SA V2 D17).
+    return ORG_TYPE_REGISTRY.find(e => e.key === `CUSTOMER_${org?.customer_type}`)
+        || ORG_TYPE_REGISTRY.find(e => e.key === 'CUSTOMER_INDIVIDUAL');
 }
+function typeCapabilities(org, type) { return registryEntry(org, type)?.ceiling || {}; }
 
 // Layer 1 ceiling for an org: the union over its enabled types.
 function orgCapabilities(org) {
@@ -854,8 +889,9 @@ function logout() {
     if (emailEl) emailEl.focus();
 }
 
+// The reset flow is a static preview in this round (SA V2 4.1.6).
 function forgotPassword() {
-    showToast('Please contact your administrator to reset your password.', 'info');
+    window.open('docs/mockups/account-flows-mockup.html#forgot', '_blank', 'noopener');
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -870,6 +906,7 @@ function setPageHeader(title, subtitle, actionHtml) {
 }
 
 function navigate(key) {
+    if (!enforceActiveSession()) return;
     // Asset Registry is off the nav while hidden but still guarded.
     const guard = NAV_ITEMS.find(n => n.key === key)?.permission || (key === 'assets' ? PORTAL_PERMISSIONS.ASSET_READ : null);
     if (guard && !hasPermission(guard)) {
@@ -935,7 +972,7 @@ function navigate(key) {
         'compatibility': { title: 'Compatibility Mapping', subtitle: 'Manage which published hardware products can be paired with each published software product. Edits are staged until you save them.' },
         'param-center': { title: 'Parameter Center', subtitle: hasPermission(PORTAL_PERMISSIONS.PARAMETER_UPDATE) ? 'System-level parameters. Edits are staged until you save them.' : 'System-level parameters. Your role can view them but not save changes.' },
         // Clearing the shared log is Super Admin only; no role grant reaches it.
-        'activity-log': { title: 'Activity Log', subtitle: 'Recent actions performed in this session.', action: isSuperAdminContext() ? `<button onclick="ACTIVITY_LOG=[];Store.save();renderActivityLog();showToast('Log cleared')" class="btn-secondary"><i class="ph ph-trash"></i> Clear</button>` : '' },
+        'activity-log': { title: 'Activity Log', subtitle: 'Who did what, and when. Entries cannot be edited or deleted.' },
         'settings': { title: 'Settings' },
     }[key] || {};
     setPageHeader(meta.title || '', meta.subtitle || '', meta.action || '');
@@ -4568,13 +4605,36 @@ function getVisibleActivityLog() {
 function renderActivityLog() {
     const target = document.getElementById('activity-log-list');
     if (!target) return;
-    const visibleLog = getVisibleActivityLog();
+    // The toolbar is built once so typing in the search box keeps focus.
+    if (!document.getElementById('al-search')) {
+        target.innerHTML = `
+            <div class="filter-bar" style="margin-bottom:12px">
+                <select id="al-module" class="select-field" onchange="renderActivityLogRows()">
+                    <option value="">All modules</option>
+                    ${ACTIVITY_MODULES.map(m => `<option value="${m}">${m}</option>`).join('')}
+                </select>
+                <div class="filter-search">
+                    <i class="ph ph-magnifying-glass"></i>
+                    <input id="al-search" type="text" placeholder="Search action, target, detail or person..." oninput="renderActivityLogRows()">
+                </div>
+            </div>
+            <div id="al-rows"></div>`;
+    }
+    renderActivityLogRows();
+}
+
+function renderActivityLogRows() {
+    const host = document.getElementById('al-rows');
+    if (!host) return;
+    const module = document.getElementById('al-module')?.value || '';
+    const q = (document.getElementById('al-search')?.value || '').trim().toLowerCase();
+    const visibleLog = getVisibleActivityLog().filter(log => {
+        if (module && (log.module || activityModule(log.action)) !== module) return false;
+        if (q && ![log.action, log.productName, log.detail, log.user, log.actor_role].some(v => (v || '').toLowerCase().includes(q))) return false;
+        return true;
+    });
     if (!visibleLog.length) {
-        target.innerHTML = `<div style="padding:32px 0">${emptyState(
-            'ph-clock-counter-clockwise',
-            EMPTY_STATE_NO_DATA,
-            '<div style="font-size:12px;color:#c7c7cc;margin-top:4px">Actions like publish, archive, and delete will appear here.</div>'
-        )}</div>`;
+        host.innerHTML = `<div style="padding:32px 0">${emptyState('ph-clock-counter-clockwise', module || q ? EMPTY_STATE_NO_RESULTS : EMPTY_STATE_NO_DATA, '')}</div>`;
         return;
     }
     const actionIcons = {
@@ -4586,21 +4646,22 @@ function renderActivityLog() {
         'Created': { icon: 'ph-plus-circle', color: '#2563eb', bg: '#eff6ff' },
         'Updated': { icon: 'ph-pencil-simple', color: '#1d1d1f', bg: '#f5f5f7' },
     };
-    target.innerHTML = `<div style="border:1px solid var(--border-light);border-radius:12px;overflow:hidden">${visibleLog.map((log, i) => {
+    host.innerHTML = `<div style="border:1px solid var(--border-light);border-radius:12px;overflow:hidden">${visibleLog.map((log, i) => {
         const a = actionIcons[log.action] || { icon: 'ph-info', color: '#86868b', bg: '#f5f5f7' };
         const time = new Date(log.timestamp);
-        const timeStr = time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        return `<div style="display:flex;align-items:center;gap:14px;padding:14px 18px;${i < visibleLog.length - 1 ? 'border-bottom:1px solid var(--border-light)' : ''};background:${i % 2 === 0 ? '#fff' : '#fafbfc'}">
+        const stamp = `${time.getFullYear()}-${String(time.getMonth() + 1).padStart(2, '0')}-${String(time.getDate()).padStart(2, '0')} ${time.toLocaleTimeString('en-GB')}`;
+        return `<div style="display:flex;align-items:flex-start;gap:14px;padding:14px 18px;${i < visibleLog.length - 1 ? 'border-bottom:1px solid var(--border-light)' : ''};background:${i % 2 === 0 ? '#fff' : '#fafbfc'}">
             <div style="width:34px;height:34px;border-radius:10px;background:${a.bg};display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ph ${a.icon}" style="font-size:16px;color:${a.color}"></i></div>
             <div style="flex:1;min-width:0">
-                <div style="font-size:13.5px;font-weight:600;color:#1d1d1f"><span style="color:${a.color}">${esc(log.action)}</span> · ${esc(log.productName)}</div>
+                <div style="font-size:13.5px;font-weight:600;color:#1d1d1f"><span style="color:${a.color}">${esc(log.action)}</span> · ${esc(log.productName)}
+                    <span class="badge badge-zinc" style="margin-left:6px">${esc(log.module || activityModule(log.action))}</span></div>
                 ${log.detail ? `<div style="font-size:12px;color:#86868b;margin-top:1px">${esc(log.detail)}</div>` : ''}
+                <div style="font-size:11.5px;color:#86868b;margin-top:3px"><i class="ph ph-user"></i> ${esc(log.user || 'System')}${log.actor_role ? ` · ${esc(log.actor_role)}` : ''}</div>
             </div>
-            <div style="font-size:11px;color:#c7c7cc;font-weight:500;flex-shrink:0;font-variant-numeric:tabular-nums">${timeStr}</div>
+            <div style="font-size:11px;color:#86868b;font-weight:500;flex-shrink:0;font-variant-numeric:tabular-nums;white-space:nowrap">${stamp}</div>
         </div>`;
     }).join('')}</div>`;
 }
-
 // ═══════════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════════
@@ -4782,7 +4843,8 @@ function getFilteredAssets() {
 
 // A customer sees the devices claimed by its own org; the desk sees all.
 function getScopedAssets() {
-    return isCustomerView() ? ASSETS.filter(a => a.service_org_id && a.service_org_id === activeOrgId()) : ASSETS;
+    if (isOperatorView()) return ASSETS;
+    return isCustomerView() ? ASSETS.filter(a => a.service_org_id && a.service_org_id === activeOrgId()) : [];
 }
 
 function renderAssetStats() {
@@ -5449,7 +5511,7 @@ function getFilteredOrders() {
     const q = (document.getElementById('order-search')?.value || '').trim().toLowerCase();
     return ORDERS.filter(o => {
         // A customer sees only their own orders, and never a draft.
-        if (isCustomerView() && (o.customer_org_id !== activeOrgId() || o.status === 'DRAFT')) return false;
+        if (!canSeeOrder(o)) return false;
         if (status && o.status !== status) return false;
         if (q && ![o.order_no, o.customer_name, o.hw_supplier_name, o.sw_supplier_name, o.si_name]
             .some(v => (v || '').toLowerCase().includes(q))) return false;
@@ -5498,7 +5560,7 @@ function newOrderLineDraft(lineNo) {
         line_no: lineNo, scope: 'HW', product_id: '', product_name: '', qty: 1,
         sla_plan: '',
         serial_nos: [''], bom: [],
-        warranty_months: '', warranty_start: '',
+        warranty_months: '', delivered_dates: [''], warranty_starts: [''],
         parent_line_id: null, supplier_name: '',
         license_keys: [], version: '', license_start: '', license_end: '',
         notes: '',
@@ -5628,23 +5690,13 @@ function ordLineCard(l, i) {
                 </div>
             </div>
             ${l.scope === 'HW' ? `
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:12px">
+            <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-top:12px">
                 <div>
                     <label class="field-label">Warranty (months)</label>
                     <input type="number" class="input-field" min="1" step="1" value="${esc(l.warranty_months)}"
-                           oninput="orderDraft.lines[${i}].warranty_months=this.value;ordRefreshWarrantyEnd(${i})">
+                           oninput="orderDraft.lines[${i}].warranty_months=this.value;unitDatesRefreshEnds('${i}')">
                 </div>
-                <div>
-                    <label class="field-label">Warranty Start</label>
-                    <input type="date" class="input-field" value="${esc(l.warranty_start)}"
-                           oninput="orderDraft.lines[${i}].warranty_start=this.value;ordRefreshWarrantyEnd(${i})">
-                    <div class="field-hint">Usually the ship date — leave blank until shipped.</div>
-                </div>
-                <div>
-                    <label class="field-label">Warranty End</label>
-                    <input type="text" class="input-field" id="ord-wend-${i}" value="${esc(ordWarrantyEnd(l) || '—')}" readonly tabindex="-1" style="background:var(--bg-subtle);color:#86868b">
-                    <div class="field-hint">Computed from start + term.</div>
-                </div>
+                <div class="field-hint" style="align-self:end">The term is per line. Delivery and warranty start are recorded per unit below, as they actually happen.</div>
             </div>
             <div style="margin-top:12px">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
@@ -5663,6 +5715,7 @@ function ordLineCard(l, i) {
                 </div>
                 <div class="field-hint">One serial per unit — the row count follows Qty. Enter moves to the next unit, so a barcode scanner can scan them in a row. Required before the order is confirmed.</div>
             </div>
+            ${unitDatesSection(l, String(i))}
             <div style="margin-top:12px;border:1px dashed var(--border);border-radius:10px;background:var(--bg-subtle);padding:12px 14px">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
                     <span style="font-size:12.5px;font-weight:700">Custom BOM</span>
@@ -5806,12 +5859,13 @@ function ordSetScope(i, scope) {
     l.product_name = '';
     if (scope === 'SW') {
         l.serial_nos = []; l.bom = [];
-        l.warranty_months = ''; l.warranty_start = '';
+        l.warranty_months = ''; l.delivered_dates = []; l.warranty_starts = [];
         l.license_keys = Array.from({ length: l.qty }, () => ({ key: '', unit: null }));
         // A SW line cannot carry bundled software.
         orderDraft.lines = orderDraft.lines.filter(x => x.parent_line_id !== l.id);
     } else {
         l.serial_nos = Array.from({ length: l.qty }, () => '');
+        fitUnitArrays(l);
         l.license_keys = []; l.version = ''; l.license_start = ''; l.license_end = '';
     }
     renderOrderDraftLines();
@@ -5836,23 +5890,115 @@ function ordSetQty(i, value) {
     // Keep what's typed; only grow or shrink the array to match qty.
     if (l.scope === 'HW') {
         l.serial_nos = Array.from({ length: l.qty }, (_, si) => l.serial_nos[si] || '');
+        fitUnitArrays(l);
     } else {
         l.license_keys = Array.from({ length: l.qty }, (_, ki) => l.license_keys[ki] || { key: '', unit: null });
     }
     renderOrderDraftLines();
 }
 
-// Same derivation the Asset Registry uses: end = start + term. Only computed
-// when both parts exist; the start usually waits for the ship date.
-function ordWarrantyEnd(l) {
-    const months = parseInt(l.warranty_months, 10);
-    if (!l.warranty_start || !months || months < 1) return '';
-    return addMonthsToDate(l.warranty_start, months);
+// ── Delivery & warranty per unit (SA V2 D39) ──
+// Each HW unit has its own delivery date and warranty start, parallel to
+// serial_nos; the term stays on the line. Nothing defaults (D19): an empty
+// start reads "Not set" and the ticket shows coverage as unknown.
+function unitWarrantyEnd(line, u) {
+    const months = parseInt(line.warranty_months, 10);
+    const start = line.warranty_starts?.[u];
+    return start && months >= 1 ? addMonthsToDate(start, months) : '';
+}
+function lineWarrantySummary(line) {
+    const n = (line.serial_nos || []).length;
+    const ends = Array.from({ length: n }, (_, u) => unitWarrantyEnd(line, u)).filter(Boolean);
+    if (!ends.length) return 'warranty not set';
+    const distinct = [...new Set(ends)];
+    if (ends.length === n && distinct.length === 1) return `warranty to ${distinct[0]}`;
+    return `warranty set for ${ends.length} of ${n} units`;
+}
+function fitUnitArrays(l) {
+    const n = l.serial_nos.length;
+    l.delivered_dates = Array.from({ length: n }, (_, u) => (l.delivered_dates || [])[u] || '');
+    l.warranty_starts = Array.from({ length: n }, (_, u) => (l.warranty_starts || [])[u] || '');
+    l._picked = (l._picked || []).filter(u => u < n);
 }
 
-function ordRefreshWarrantyEnd(i) {
-    const el = document.getElementById(`ord-wend-${i}`);
-    if (el) el.value = ordWarrantyEnd(orderDraft.lines[i]) || '—';
+// ns names the line being edited: an order-draft line index, or 'delivery'
+// for the post-confirmation window. Ticking units and applying a date sets
+// them together, which is how one delivery batch is recorded.
+function unitDatesTarget(ns) { return ns === 'delivery' ? deliveryDraft : orderDraft?.lines[Number(ns)]; }
+function unitDatesRerender(ns) { if (ns === 'delivery') renderDeliveryModal(); else renderOrderDraftLines(); }
+
+function unitDatesSection(l, ns) {
+    const n = l.serial_nos.length;
+    const picked = l._picked || [];
+    const collapsed = n > BULK_COLLAPSE_AT && !l._datesShowAll;
+    const shown = collapsed ? BULK_COLLAPSED_ROWS : n;
+    const rows = Array.from({ length: shown }, (_, u) => `
+        <tr>
+            <td style="padding:3px 6px 3px 0;width:28px"><input type="checkbox" ${picked.includes(u) ? 'checked' : ''} onchange="unitDatesPick('${ns}', ${u}, this.checked)" aria-label="Select unit ${u + 1}"></td>
+            <td style="font-size:11.5px;font-weight:600;color:#86868b;padding:3px 8px 3px 0;white-space:nowrap">Unit ${u + 1}</td>
+            <td style="padding:3px 8px 3px 0"><span class="tk-mono" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px">${esc(l.serial_nos[u].trim() || 'serial pending')}</span></td>
+            <td style="padding:3px 8px 3px 0"><input type="date" class="input-field" value="${esc(l.delivered_dates[u])}" oninput="unitDatesTarget('${ns}').delivered_dates[${u}]=this.value" aria-label="Delivered, unit ${u + 1}"></td>
+            <td style="padding:3px 8px 3px 0"><input type="date" class="input-field" value="${esc(l.warranty_starts[u])}" oninput="unitDatesTarget('${ns}').warranty_starts[${u}]=this.value;unitDatesRefreshEnds('${ns}')" aria-label="Warranty start, unit ${u + 1}"></td>
+            <td style="font-size:12.5px;padding:3px 0;white-space:nowrap" id="ud-end-${ns}-${u}">${unitWarrantyEnd(l, u) ? esc(unitWarrantyEnd(l, u)) : '<span style="color:#86868b">Not set</span>'}</td>
+        </tr>`).join('');
+    const head = t => `<th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0">${t}</th>`;
+    return `
+            <div style="margin-top:12px;border:1px solid var(--border-light);border-radius:10px;padding:12px 14px">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+                    <span style="font-size:12.5px;font-weight:700">Delivery &amp; warranty</span>
+                    <span class="field-hint" style="margin:0">per unit, as it actually happens</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--bg-subtle);border-radius:8px;padding:8px 10px;margin-bottom:8px">
+                    <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer"><input type="checkbox" ${n && picked.length === n ? 'checked' : ''} onchange="unitDatesPickAll('${ns}', this.checked)"> All</label>
+                    <span style="font-size:12px;color:#86868b">${picked.length} selected · Delivered</span>
+                    <input type="date" id="ud-batch-del-${ns}" class="input-field" style="width:150px">
+                    <span style="font-size:12px;color:#86868b">Warranty start</span>
+                    <input type="date" id="ud-batch-ws-${ns}" class="input-field" style="width:150px">
+                    <button onclick="unitDatesApply('${ns}')" class="btn-secondary text-xs" ${picked.length ? '' : 'disabled'}>Apply to selected</button>
+                </div>
+                <table style="width:100%;border-collapse:collapse">
+                    <thead><tr>${head('')}${head('Unit')}${head('Serial')}${head('Delivered')}${head('Warranty start')}${head('Warranty end')}</tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+                ${collapsed ? bulkMoreButton(n, BULK_COLLAPSED_ROWS, `unitDatesTarget('${ns}')._datesShowAll=true;unitDatesRerender('${ns}')`) : ''}
+            </div>`;
+}
+function unitDatesPick(ns, u, on) {
+    const l = unitDatesTarget(ns);
+    const set = new Set(l._picked || []);
+    if (on) set.add(u); else set.delete(u);
+    l._picked = [...set].sort((a, b) => a - b);
+    unitDatesRerender(ns);
+}
+function unitDatesPickAll(ns, on) {
+    const l = unitDatesTarget(ns);
+    l._picked = on ? l.serial_nos.map((_, u) => u) : [];
+    unitDatesRerender(ns);
+}
+// Only the dates filled in the batch bar are applied; a blank one leaves
+// the selected units' existing dates alone.
+function unitDatesApply(ns) {
+    const l = unitDatesTarget(ns);
+    const delivered = document.getElementById(`ud-batch-del-${ns}`)?.value || '';
+    const start = document.getElementById(`ud-batch-ws-${ns}`)?.value || '';
+    if (!(l._picked || []).length) return;
+    if (!delivered && !start) { showToast('Pick a delivery date or a warranty start to apply.', 'error'); return; }
+    l._picked.forEach(u => {
+        if (delivered) l.delivered_dates[u] = delivered;
+        if (start) l.warranty_starts[u] = start;
+    });
+    const count = l._picked.length;
+    l._picked = [];
+    unitDatesRerender(ns);
+    showToast(`Dates set on ${count} unit${count === 1 ? '' : 's'}`);
+}
+function unitDatesRefreshEnds(ns) {
+    const l = unitDatesTarget(ns);
+    if (!l) return;
+    l.serial_nos.forEach((_, u) => {
+        const el = document.getElementById(`ud-end-${ns}-${u}`);
+        if (el) el.innerHTML = unitWarrantyEnd(l, u) ? esc(unitWarrantyEnd(l, u)) : '<span style="color:#86868b">Not set</span>';
+    });
 }
 
 function ordAddBom(i) {
@@ -6068,6 +6214,17 @@ function validateOrderDraft(status) {
             }
         });
     }
+    // A serial belongs to one order (SA V2 D40); a cancelled order releases its serials.
+    const taken = new Map();
+    ORDER_LINES.forEach(l => {
+        const o = getOrderById(l.order_id);
+        if (!o || o.id === d.id || o.status === 'CANCELLED' || l.scope !== 'HW') return;
+        (l.serial_nos || []).forEach(sn => { const k = sn.trim().toUpperCase(); if (k) taken.set(k, o.order_no); });
+    });
+    d.lines.forEach((l, i) => {
+        if (l.scope !== 'HW') return;
+        l.serial_nos.forEach(sn => { const k = sn.trim().toUpperCase(); if (k && taken.has(k)) errors.push(`Line ${i + 1}: serial ${sn} is already on ${taken.get(k)}.`); });
+    });
     const duplicate = ORDERS.find(o => o.id !== d.id && o.order_no.toLowerCase() === d.order_no.toLowerCase());
     if (duplicate) errors.push(`Order No ${d.order_no} already exists.`);
     return errors;
@@ -6165,6 +6322,7 @@ function ordApplySerialPaste(i) {
     if (!values.length) return;
     l.qty = values.length;
     l.serial_nos = values;
+    fitUnitArrays(l);
     l._snPaste = false;
     l._snText = '';
     renderOrderDraftLines();
@@ -6456,6 +6614,8 @@ function saveOrder(status) {
             sales_contact: d.sales_contact, order_date: d.order_date,
             status, notes: d.notes,
             attachments: d.attachments || [],
+            // Whoever creates the order is its initiator (SA V2 D45).
+            created_by: isNew ? (actingUser()?.id || currentUser?.id || null) : (prev?.created_by ?? null),
             created_at: d.created_at || now, updated_at: now,
         };
         const idx = ORDERS.findIndex(o => o.id === record.id);
@@ -6471,8 +6631,8 @@ function saveOrder(status) {
             serial_nos: l.scope === 'HW' ? l.serial_nos.map(sn => sn.trim()) : [],
             bom: l.scope === 'HW' ? l.bom : [],
             warranty_months: l.scope === 'HW' && parseInt(l.warranty_months, 10) >= 1 ? parseInt(l.warranty_months, 10) : null,
-            warranty_start: l.scope === 'HW' ? l.warranty_start : '',
-            warranty_end: l.scope === 'HW' ? ordWarrantyEnd(l) : '',
+            delivered_dates: l.scope === 'HW' ? l.serial_nos.map((_, u) => l.delivered_dates?.[u] || '') : [],
+            warranty_starts: l.scope === 'HW' ? l.serial_nos.map((_, u) => l.warranty_starts?.[u] || '') : [],
             parent_line_id: l.scope === 'SW' ? (l.parent_line_id || null) : null,
             supplier_name: l.scope === 'SW' ? (l.supplier_name || '') : '',
             license_keys: l.scope === 'SW' ? l.license_keys.map(lk => ({ key: lk.key.trim(), unit: l.parent_line_id ? lk.unit : null })) : [],
@@ -6501,10 +6661,30 @@ function saveOrder(status) {
 function getOrgById(id) { return ORGS.find(o => o.id === id) || null; }
 function getCustomerOrgs() { return ORGS.filter(o => o.types?.includes('CUSTOMER')); }
 
+// A former name still points at the org that held it (SA V2 D30), so an
+// order typed under the old name keeps linking to the same customer.
 function matchCustomerOrgId(name) {
     const target = String(name || '').trim().toLowerCase();
     if (!target) return null;
-    return getCustomerOrgs().find(o => o.name.toLowerCase() === target)?.id || null;
+    return getCustomerOrgs().find(o => orgNames(o).includes(target))?.id || null;
+}
+
+// Names are unique within a type (SA V2 D18/D34): operator and customer orgs
+// per main type, vendors per main type + subtype, so one company may hold a
+// vendor org of each kind under the same name. An inactive org keeps its
+// name, and a former name stays reserved for the org that held it (D30).
+function orgNameScopes(org) {
+    return (org?.types || []).map(t => t === 'VENDOR' ? `VENDOR:${org.vendor_type || ''}` : t);
+}
+function orgNames(org) { return [org.name, ...(org.former_names || [])].map(n => String(n).toLowerCase()); }
+function findOrgNameClash(name, scopes, exceptId = null) {
+    const target = String(name || '').trim().toLowerCase();
+    return ORGS.find(o => o.id !== exceptId && orgNameScopes(o).some(sc => scopes.includes(sc)) && orgNames(o).includes(target)) || null;
+}
+function orgNameClashMessage(name, clash) {
+    return clash.name.toLowerCase() === String(name).trim().toLowerCase()
+        ? `An organization named ${name} already exists.`
+        : `${name} is a former name of ${clash.name} and stays reserved for it.`;
 }
 
 // Fill in links that are still missing; an existing link is never replaced,
@@ -6537,39 +6717,12 @@ function orderCustomerOrgCell(o) {
     return `<span style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end"><span class="badge badge-amber" title="No organization is named exactly “${esc(o.customer_name)}”">Not linked</span>${actions}</span>`;
 }
 
+// Creating the customer from an order goes through the regular form, so the
+// subtype is chosen up front like any other org (SA V2 4.3.5).
 function confirmCreateCustomerOrgFromOrder(orderId) {
     const o = getOrderById(orderId);
     if (!o) return;
-    showModal(`
-        <div style="padding:26px 28px">
-            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Create customer organization?</h3>
-            <p style="font-size:13px;color:#86868b;margin:0 0 20px;line-height:1.6">Creates <strong style="color:#1d1d1f">${esc(o.customer_name)}</strong> as a customer organization. Every order and ticket under exactly this name links to it.</p>
-            <div style="display:flex;gap:10px;justify-content:flex-end">
-                <button onclick="showOrderDetail('${o.id}')" class="btn-secondary">Cancel</button>
-                <button onclick="createCustomerOrgFromOrder('${o.id}')" class="btn-primary"><i class="ph ph-buildings"></i> Create</button>
-            </div>
-        </div>`);
-}
-
-function createCustomerOrgFromOrder(orderId) {
-    const o = getOrderById(orderId);
-    if (!o) return;
-    const name = o.customer_name.trim();
-    // Org names are the match key, so they stay unique across every type.
-    if (ORGS.some(x => x.name.toLowerCase() === name.toLowerCase())) {
-        showToast(`An organization named ${name} already exists. Link to it instead.`, 'error');
-        return;
-    }
-    const now = new Date().toISOString();
-    const ok = commitPortalMutation(() => {
-        ORGS.push({ id: `org-${Date.now()}`, name, types: ['CUSTOMER'], vendor_type: null, status: 'active',
-            contact_email: '', note: '', created_at: now, updated_at: now });
-        const linked = backfillCustomerOrgIds();
-        logActivity('Organization created', name, `Customer · from ${o.order_no} · ${linked} record${linked === 1 ? '' : 's'} linked`);
-    });
-    if (!ok) return;
-    showOrderDetail(orderId);
-    showToast(`${name} created and linked`);
+    showOrgModal(null, { prefillName: o.customer_name.trim(), fromOrderId: o.id });
 }
 
 function showLinkCustomerOrgModal(orderId) {
@@ -6612,7 +6765,7 @@ function showOrderDetail(id) {
     const o = getOrderById(id);
     if (!o) return;
     // Same rule as the order list: a customer opens only its own, non-draft orders.
-    if (isCustomerView() && (o.customer_org_id !== activeOrgId() || o.status === 'DRAFT')) return;
+    if (!canSeeOrder(o)) return;
     const lines = getOrderLines(id);
     const row = (label, value) => `
         <div style="display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid #f5f5f7">
@@ -6638,6 +6791,7 @@ function showOrderDetail(id) {
                 ${row('SW supplier', esc(o.sw_supplier_name || '—'))}
                 ${row('System integrator', esc(o.si_name || '—'))}
                 ${row('Sales contact', esc(o.sales_contact || '—'))}
+                ${row('Created by', esc(USERS.find(u => u.id === o.created_by)?.name || 'Unknown'))}
                 ${o.notes ? row('Notes', esc(o.notes)) : ''}
             </div>
 
@@ -6663,7 +6817,7 @@ function showOrderDetail(id) {
                 ${l.scope === 'SW' && (l.license_start || l.license_end || l.supplier_name) ? `
                 <div style="font-size:12.5px;color:#86868b;margin-top:6px">${l.license_start || l.license_end ? `License ${esc(l.license_start || '?')} → ${esc(l.license_end || '?')}` : ''}${l.supplier_name ? `${l.license_start || l.license_end ? ' · ' : ''}Supplier ${esc(l.supplier_name)}` : ''}</div>` : ''}
                 ${l.scope === 'HW' && l.warranty_months ? `
-                <div style="font-size:12.5px;color:#86868b;margin-top:6px">Warranty ${l.warranty_months} months${l.warranty_start ? ` · ${esc(l.warranty_start)} → ${esc(l.warranty_end || '?')}` : ' · starts on shipment'}</div>` : ''}
+                <div style="font-size:12.5px;color:#86868b;margin-top:6px">Warranty ${l.warranty_months} months per unit</div>` : ''}
                 ${(l.license_keys || []).length ? `
                 <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
                     ${l.license_keys.map(lk => `<span style="display:inline-flex;align-items:center;gap:6px">${lk.key
@@ -6673,11 +6827,19 @@ function showOrderDetail(id) {
                 ${l.scope === 'SW' && o.status === 'CONFIRMED' && canUpdateOrders() ? `
                 <div style="margin-top:8px"><button onclick="showLicenseAdjustModal('${l.id}')" class="btn-secondary text-xs" style="padding:4px 10px"><i class="ph ph-key"></i> Adjust license</button></div>` : ''}
                 ${l.serial_nos.length ? `
-                <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
-                    ${l.serial_nos.map(sn => sn.trim()
-                        ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(sn)}</span>`
-                        : '<span class="badge badge-amber">Serial missing</span>').join('')}
-                </div>` : ''}
+                <table style="width:100%;border-collapse:collapse;margin-top:8px">
+                    <thead><tr>${['Unit', 'Serial', 'Delivered', 'Warranty'].map(t => `<th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 10px 4px 0">${t}</th>`).join('')}</tr></thead>
+                    <tbody>${l.serial_nos.map((sn, u) => `
+                        <tr>
+                            <td style="font-size:11.5px;color:#86868b;padding:3px 10px 3px 0;white-space:nowrap">Unit ${u + 1}</td>
+                            <td style="padding:3px 10px 3px 0">${sn.trim()
+                                ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(sn)}</span>`
+                                : '<span class="badge badge-amber">Serial missing</span>'}</td>
+                            <td style="font-size:12.5px;padding:3px 10px 3px 0">${esc(l.delivered_dates?.[u] || '—')}</td>
+                            <td style="font-size:12.5px;padding:3px 0">${l.warranty_starts?.[u] ? `${esc(l.warranty_starts[u])} → ${esc(unitWarrantyEnd(l, u) || '?')}` : '<span style="color:#86868b">Not set</span>'}</td>
+                        </tr>`).join('')}</tbody>
+                </table>
+                ${o.status === 'CONFIRMED' && canUpdateOrders() ? `<div style="margin-top:8px"><button onclick="showDeliveryModal('${l.id}')" class="btn-secondary text-xs" style="padding:4px 10px"><i class="ph ph-truck"></i> Delivery &amp; warranty</button></div>` : ''}` : ''}
                 ${l.bom.length ? `
                 <div style="margin-top:10px;overflow-x:auto">
                     <table style="width:100%;border-collapse:collapse">
@@ -6710,18 +6872,98 @@ function showOrderDetail(id) {
     `, true);
 }
 
+// ── Delivery & warranty after confirmation (SA V2 4.4.5) ──
+// Delivery and warranty start arrive after the order is confirmed, so they
+// stay editable here while the rest of the order is locked.
+
+let deliveryDraft = null;
+
+function showDeliveryModal(lineId) {
+    const line = ORDER_LINES.find(l => l.id === lineId);
+    const order = line ? getOrderById(line.order_id) : null;
+    if (!line || line.scope !== 'HW' || order?.status !== 'CONFIRMED' || !canUpdateOrders()) return;
+    deliveryDraft = {
+        lineId, serial_nos: [...line.serial_nos], warranty_months: line.warranty_months,
+        delivered_dates: [...(line.delivered_dates || [])], warranty_starts: [...(line.warranty_starts || [])], _picked: [],
+    };
+    fitUnitArrays(deliveryDraft);
+    renderDeliveryModal();
+}
+
+function renderDeliveryModal() {
+    const d = deliveryDraft;
+    const line = ORDER_LINES.find(l => l.id === d.lineId);
+    const order = getOrderById(line.order_id);
+    showModal(`
+        <div style="padding:26px 28px;max-height:82vh;overflow-y:auto">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Delivery &amp; warranty · ${esc(line.product_name)}</h3>
+            <p style="font-size:13px;color:#86868b;margin:0 0 6px;line-height:1.6">${esc(order.order_no)} · line ${line.line_no} · Warranty ${line.warranty_months || '—'} months per unit. Changes are recorded in the Activity Log; tickets already opened keep the dates they were opened with.</p>
+            ${unitDatesSection(d, 'delivery')}
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
+                <button onclick="deliveryDraft=null;showOrderDetail('${order.id}')" class="btn-secondary text-xs">Cancel</button>
+                <button onclick="saveDelivery()" class="btn-primary text-xs">Save changes</button>
+            </div>
+        </div>`, true);
+}
+
+function saveDelivery() {
+    const d = deliveryDraft;
+    const line = ORDER_LINES.find(l => l.id === d.lineId);
+    const order = getOrderById(line.order_id);
+    if (!canUpdateOrders() || order.status !== 'CONFIRMED') return;
+    const changes = [];
+    line.serial_nos.forEach((sn, u) => {
+        const parts = [];
+        if ((line.delivered_dates?.[u] || '') !== d.delivered_dates[u]) parts.push(`delivered ${line.delivered_dates?.[u] || '—'} → ${d.delivered_dates[u] || '—'}`);
+        if ((line.warranty_starts?.[u] || '') !== d.warranty_starts[u]) parts.push(`warranty start ${line.warranty_starts?.[u] || '—'} → ${d.warranty_starts[u] || '—'}`);
+        if (parts.length) changes.push(`Unit ${u + 1} (${sn || 'serial pending'}): ${parts.join(', ')}`);
+    });
+    if (!changes.length) { deliveryDraft = null; showOrderDetail(order.id); return; }
+    const ok = commitPortalMutation(() => {
+        line.delivered_dates = [...d.delivered_dates];
+        line.warranty_starts = [...d.warranty_starts];
+        order.updated_at = new Date().toISOString();
+        logActivity('Delivery & warranty updated', order.order_no, `Line ${line.line_no} ${line.product_name}: ${changes.join('; ')}`);
+    });
+    if (!ok) return;
+    deliveryDraft = null;
+    showOrderDetail(order.id);
+    showToast(`Delivery & warranty updated on ${order.order_no}`);
+}
+
 // ── Cancel ──
 // Cancelling is a status change, not a delete: the order stays on file for
 // reference, matching how the backend spec retires records by status.
 
+// While tickets are still open, only the order's initiator may cancel it
+// (SA V2 D41/D45). The Super Admin passes every check (D10).
+function openTicketsForOrder(o) { return TICKETS.filter(t => t.order_id === o.id && t.status !== 'CLOSED'); }
+function isOrderInitiator(o) { return isSuperAdminContext() || (!!o.created_by && actingUser()?.id === o.created_by); }
+function cancelBlockedByTickets(o) { return openTicketsForOrder(o).length > 0 && !isOrderInitiator(o); }
+
 function confirmCancelOrder(id) {
     const o = getOrderById(id);
-    if (!o || o.status === 'CANCELLED') return;
+    if (!o || o.status === 'CANCELLED' || !canUpdateOrders()) return;
+    const open = openTicketsForOrder(o);
+    if (cancelBlockedByTickets(o)) {
+        const initiator = USERS.find(u => u.id === o.created_by)?.name;
+        showModal(`
+        <div style="padding:26px 28px">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">${esc(o.order_no)} cannot be cancelled yet</h3>
+            <p style="font-size:13px;color:#86868b;line-height:1.6;margin:0 0 18px">
+                ${open.length} ticket${open.length === 1 ? ' is' : 's are'} still open (${esc(open.map(t => t.ticket_no).join(', '))}).
+                While tickets are open, only the person who created this order${initiator ? `, ${esc(initiator)},` : ''} can cancel it.
+            </p>
+            <div style="display:flex;justify-content:flex-end"><button onclick="showOrderDetail('${o.id}')" class="btn-primary text-xs">Back to order</button></div>
+        </div>`);
+        return;
+    }
     showModal(`
         <div style="padding:26px 28px">
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Cancel ${esc(o.order_no)}?</h3>
             <p style="font-size:13px;color:#86868b;line-height:1.6;margin:0 0 18px">
                 The order stays on file as cancelled. This cannot be undone from the UI.
+                ${open.length ? `<br><strong style="color:#b45309">${open.length} ticket${open.length === 1 ? ' is' : 's are'} still open; ${open.length === 1 ? 'it stays' : 'they stay'} as ${open.length === 1 ? 'it is' : 'they are'}.</strong>` : ''}
             </p>
             <div style="display:flex;gap:8px;justify-content:flex-end">
                 <button onclick="showOrderDetail('${o.id}')" class="btn-secondary text-xs">Keep order</button>
@@ -6733,7 +6975,7 @@ function confirmCancelOrder(id) {
 
 function cancelOrder(id) {
     const o = getOrderById(id);
-    if (!o) return;
+    if (!o || o.status === 'CANCELLED' || !canUpdateOrders() || cancelBlockedByTickets(o)) return;
     const ok = commitPortalMutation(() => {
         o.status = 'CANCELLED';
         o.updated_at = new Date().toISOString();
@@ -6764,6 +7006,10 @@ function isIndividualOrg(org) { return orgHasType(org, 'CUSTOMER') && org?.custo
 function orgAllowsMembers(org) { return !isIndividualOrg(org); }
 function orgTypeBadge(org) {
     if (orgHasType(org, 'OPERATOR')) return '<span class="badge badge-blue">Operator</span>';
+    if (org?.customer_type_inferred) return `${orgTypeBadgeCustomer(org)} <span class="badge badge-amber" title="Type inferred; confirm it from Edit">Inferred</span>`;
+    return orgTypeBadgeCustomer(org);
+}
+function orgTypeBadgeCustomer(org) {
     return `<span style="display:inline-flex;gap:4px;white-space:nowrap"><span class="badge badge-customer">Customer</span><span class="badge badge-zinc">${isIndividualOrg(org) ? 'Individual' : 'Enterprise'}</span></span>`;
 }
 function orgStatusBadge(org) {
@@ -6785,7 +7031,12 @@ function getOrgMembers(orgId) {
     });
     return [...byUser.values()].sort((a, b) => a.user.name.localeCompare(b.user.name));
 }
-function getOrgOrders(org) { return orgHasType(org, 'CUSTOMER') ? ORDERS.filter(o => o.customer_org_id === org.id) : []; }
+// What the profile lists about an org follows the reader's own order scope
+// and grant, so a customer never sees its drafts here either.
+function getOrgOrders(org) {
+    if (!orgHasType(org, 'CUSTOMER') || !hasPermission('order.r')) return [];
+    return ORDERS.filter(o => o.customer_org_id === org.id && canSeeOrder(o));
+}
 
 // The desk manages every operator and customer org; anyone else only their own.
 function getScopedOrgs() {
@@ -6811,7 +7062,9 @@ function getFilteredOrgs() {
     const type = document.getElementById('org-filter-type')?.value || '';
     const q = (document.getElementById('org-search')?.value || '').trim().toLowerCase();
     return getScopedOrgs().filter(org => {
-        if (type === 'INDIVIDUAL' || type === 'ENTERPRISE') {
+        if (type === 'INFERRED') {
+            if (!org.customer_type_inferred) return false;
+        } else if (type === 'INDIVIDUAL' || type === 'ENTERPRISE') {
             if (!orgHasType(org, 'CUSTOMER') || (org.customer_type || 'ENTERPRISE') !== type) return false;
         } else if (type && !orgHasType(org, type)) return false;
         if (q && ![org.name, org.contact_email].some(v => (v || '').toLowerCase().includes(q))) return false;
@@ -6820,41 +7073,62 @@ function getFilteredOrgs() {
 }
 
 function canSeeAccountsTab() { return isOperatorView() && hasPermission('organization.r'); }
+function canSeeTypesTab() { return isOperatorView() && hasPermission('org_type.r'); }
+function canEditTypes() { return isOperatorView() && hasPermission('org_type.u'); }
 function setOrgPageTab(tab) {
-    orgPageTab = tab === 'accounts' && canSeeAccountsTab() ? 'accounts' : 'orgs';
+    orgPageTab = tab === 'accounts' && canSeeAccountsTab() ? 'accounts'
+        : tab === 'types' && canSeeTypesTab() ? 'types' : 'orgs';
     renderOrganizations();
 }
 
 function renderOrganizations() {
     if (orgPageTab === 'accounts' && !canSeeAccountsTab()) orgPageTab = 'orgs';
+    if (orgPageTab === 'types' && !canSeeTypesTab()) orgPageTab = 'orgs';
     const onAccounts = orgPageTab === 'accounts';
+    const onTypes = orgPageTab === 'types';
     const pageTabs = document.getElementById('org-page-tabs');
     if (pageTabs) {
-        pageTabs.style.display = canSeeAccountsTab() ? '' : 'none';
-        pageTabs.innerHTML = canSeeAccountsTab() ? `
-            <button class="page-tab ${onAccounts ? '' : 'active'}" onclick="setOrgPageTab('orgs')">Organizations (${getScopedOrgs().length})</button>
-            <button class="page-tab ${onAccounts ? 'active' : ''}" onclick="setOrgPageTab('accounts')">Accounts (${USERS.length})</button>` : '';
+        const tabsShown = canSeeAccountsTab() || canSeeTypesTab();
+        pageTabs.style.display = tabsShown ? '' : 'none';
+        pageTabs.innerHTML = tabsShown ? `
+            <button class="page-tab ${orgPageTab === 'orgs' ? 'active' : ''}" onclick="setOrgPageTab('orgs')">Organizations (${getScopedOrgs().length})</button>
+            ${canSeeAccountsTab() ? `<button class="page-tab ${onAccounts ? 'active' : ''}" onclick="setOrgPageTab('accounts')">Accounts (${USERS.length})</button>` : ''}
+            ${canSeeTypesTab() ? `<button class="page-tab ${onTypes ? 'active' : ''}" onclick="setOrgPageTab('types')">Organization Types (${ORG_TYPE_REGISTRY.length})</button>` : ''}` : '';
     }
     const orgTable = document.getElementById('orgs-tbody')?.closest('.overflow-x-auto');
     const accountsTable = document.getElementById('accounts-table-wrap');
-    if (orgTable) orgTable.style.display = onAccounts ? 'none' : '';
+    const typesWrap = document.getElementById('org-types-wrap');
+    const filterBar = document.querySelector('#view-organizations .filter-bar');
+    if (orgTable) orgTable.style.display = orgPageTab === 'orgs' ? '' : 'none';
     if (accountsTable) accountsTable.style.display = onAccounts ? '' : 'none';
+    if (typesWrap) typesWrap.style.display = onTypes ? '' : 'none';
+    if (filterBar) filterBar.style.display = onTypes ? 'none' : '';
     const search = document.getElementById('org-search');
     if (search) search.placeholder = onAccounts ? 'Search name or email...' : 'Search name or contact email...';
     // The header and the New Organization button describe the open tab.
     if (currentView === 'organizations') {
         setPageHeader('Organizations',
-            onAccounts
+            onTypes
+                ? 'What each organization type can be granted. Narrow a ceiling here; locked cells are never available to that type.'
+            : onAccounts
                 ? 'Every account and the organizations it holds roles in. Accounts span organizations, so this list is the desk\'s.'
                 : (isOperatorView()
                     ? 'AISO and customer organizations, their members and roles. Each type sets what its roles can be granted.'
                     : 'Your organization, its members and roles.'),
-            !onAccounts && canCreateOrgs() ? `<div style="white-space:nowrap"><button onclick="showOrgModal()" class="btn-primary"><i class="ph ph-plus"></i> New Organization</button></div>` : '');
+            orgPageTab === 'orgs' && canCreateOrgs() ? `<div style="white-space:nowrap"><button onclick="showOrgModal()" class="btn-primary"><i class="ph ph-plus"></i> New Organization</button></div>` : '');
     }
     // The type filter belongs to the organization list, not to accounts.
     const tabs = document.getElementById('org-filter-tabs');
     if (tabs) tabs.style.display = isOperatorView() && !onAccounts ? '' : 'none';
+    const inferredTab = document.getElementById('org-filter-inferred');
+    const inferredCount = getScopedOrgs().filter(o => o.customer_type_inferred).length;
+    if (inferredTab) {
+        inferredTab.style.display = inferredCount ? '' : 'none';
+        inferredTab.textContent = `Type to confirm (${inferredCount})`;
+        if (!inferredCount && document.getElementById('org-filter-type')?.value === 'INFERRED') { setOrgFilter(''); return; }
+    }
     if (onAccounts) { renderAccounts(); return; }
+    if (onTypes) { renderOrgTypes(); return; }
     const list = getFilteredOrgs();
     const searching = !!(document.getElementById('org-search')?.value || '').trim();
     document.getElementById('orgs-tbody').innerHTML = list.length ? list.map(org => {
@@ -6884,6 +7158,139 @@ function renderOrganizations() {
     )}</td></tr>`;
 }
 
+// ── Organization Types (SA V2 D15, 4.3.11) ──
+// Edits a draft of the registry; nothing changes until Save is confirmed.
+// A ceiling can only be narrowed or restored: cells outside ORG_TYPE_ALLOWED
+// are locked, and the operator's pinned grants cannot be dropped.
+
+let orgTypeDraft = null;
+
+function orgTypeCeilingSet(entry) {
+    return new Set(Object.entries(entry.ceiling || {}).flatMap(([mod, acts]) => [...acts].map(a => `${mod}.${a}`)));
+}
+function orgTypeUsage(key) {
+    const orgs = ORGS.filter(o => isManagedOrg(o) && (o.types || []).some(t => registryEntry(o, t)?.key === key));
+    const ids = new Set(orgs.map(o => o.id));
+    return { orgs: orgs.length, roles: ROLES.filter(r => ids.has(r.org_id)).length };
+}
+
+function renderOrgTypes() {
+    const wrap = document.getElementById('org-types-wrap');
+    if (!wrap) return;
+    if (!orgTypeDraft) orgTypeDraft = JSON.parse(JSON.stringify(ORG_TYPE_REGISTRY));
+    const editable = canEditTypes();
+    const dirty = orgTypeChanges().length > 0;
+    wrap.innerHTML = orgTypeDraft.map(entry => {
+        const allowed = ORG_TYPE_ALLOWED[entry.key] || {};
+        const pinned = ORG_TYPE_PINNED[entry.key] || [];
+        const have = orgTypeCeilingSet(entry);
+        const usage = orgTypeUsage(entry.key);
+        const head = PERMISSION_ACTIONS.map(a => `<th style="width:52px;text-align:center;text-transform:uppercase">${a}</th>`).join('');
+        const rows = PERMISSION_MODULES.map(mod => `<tr><td style="font-size:12.5px;color:#1d1d1f">${esc(mod.label)}</td>${PERMISSION_ACTIONS.map(a => {
+            const key = `${mod.key}.${a}`;
+            if (!(allowed[mod.key] || '').includes(a)) return '<td style="text-align:center"><span title="Never available to this type" style="color:#d2d2d7"><i class="ph ph-lock-simple"></i></span></td>';
+            const isPinned = pinned.includes(key);
+            return `<td style="text-align:center"><input type="checkbox" ${have.has(key) ? 'checked' : ''} ${!editable || isPinned ? 'disabled' : ''}
+                ${isPinned ? 'title="Always kept, so the desk cannot lock itself out"' : ''} onchange="onOrgTypeCell('${entry.key}', '${mod.key}', '${a}', this.checked)"></td>`;
+        }).join('')}</tr>`).join('');
+        return `
+        <div style="border:1px solid var(--border-light);border-radius:14px;padding:16px 18px;margin:14px 0">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <input class="input-field" style="max-width:280px;font-weight:600" maxlength="60" value="${esc(entry.label)}" ${editable ? '' : 'disabled'}
+                       oninput="onOrgTypeLabel('${entry.key}', this.value)" aria-label="Display name">
+                <span class="badge badge-zinc">${esc(entry.key)}</span>
+                <span style="font-size:12px;color:#86868b;margin-left:auto">${usage.orgs} organization${usage.orgs === 1 ? '' : 's'} · ${usage.roles} role${usage.roles === 1 ? '' : 's'}</span>
+            </div>
+            <table class="data-table w-full" style="margin-top:10px"><thead><tr><th>Module</th>${head}</tr></thead><tbody>${rows}</tbody></table>
+        </div>`;
+    }).join('') + (editable ? `
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin:6px 0 20px">
+            <button onclick="orgTypeDraft=null;renderOrgTypes()" class="btn-secondary" ${dirty ? '' : 'disabled'}>Discard</button>
+            <button onclick="confirmSaveOrgTypes()" class="btn-primary" ${dirty ? '' : 'disabled'}><i class="ph ph-check"></i> Save</button>
+        </div>` : '');
+}
+
+// Writing implies reading, and dropping read drops the writes with it.
+function onOrgTypeCell(key, mod, action, on) {
+    const entry = orgTypeDraft?.find(e => e.key === key);
+    if (!entry || !canEditTypes()) return;
+    const allowed = ORG_TYPE_ALLOWED[key]?.[mod] || '';
+    let acts = new Set(entry.ceiling[mod] || '');
+    if (on) { acts.add(action); if (action !== 'r' && allowed.includes('r')) acts.add('r'); }
+    else if (action === 'r') acts = new Set();
+    else acts.delete(action);
+    (ORG_TYPE_PINNED[key] || []).filter(p => p.startsWith(`${mod}.`)).forEach(p => acts.add(p.split('.')[1]));
+    const next = PERMISSION_ACTIONS.filter(a => acts.has(a) && allowed.includes(a)).join('');
+    if (next) entry.ceiling[mod] = next; else delete entry.ceiling[mod];
+    renderOrgTypes();
+}
+function onOrgTypeLabel(key, value) {
+    const entry = orgTypeDraft?.find(e => e.key === key);
+    if (!entry) return;
+    entry.label = value;
+    const wrap = document.getElementById('org-types-wrap');
+    const dirty = orgTypeChanges().length > 0;
+    wrap?.querySelectorAll('button').forEach(b => { if (/Discard|Save/.test(b.textContent)) b.disabled = !dirty; });
+}
+
+function orgTypeChanges() {
+    if (!orgTypeDraft) return [];
+    return orgTypeDraft.map(entry => {
+        const saved = ORG_TYPE_REGISTRY.find(e => e.key === entry.key);
+        const before = orgTypeCeilingSet(saved);
+        const after = orgTypeCeilingSet(entry);
+        const added = [...after].filter(p => !before.has(p));
+        const removed = [...before].filter(p => !after.has(p));
+        const label = entry.label.trim() !== saved.label ? entry.label.trim() : null;
+        return { entry, saved, added, removed, label };
+    }).filter(c => c.added.length || c.removed.length || c.label !== null);
+}
+
+function confirmSaveOrgTypes() {
+    if (!canEditTypes()) return;
+    const changes = orgTypeChanges();
+    if (!changes.length) return;
+    if (changes.some(c => c.label !== null && !c.label)) { showToast('Each type needs a display name.', 'error'); return; }
+    showModal(`
+        <div style="padding:26px 28px">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Save organization types?</h3>
+            <p style="font-size:13px;color:#86868b;margin:0 0 12px;line-height:1.6">A narrower ceiling applies at once to every role in those organizations; the roles themselves are not rewritten. A wider ceiling is not added to any role.</p>
+            ${changes.map(c => {
+                const u = orgTypeUsage(c.entry.key);
+                return `<div style="border-top:1px solid #f5f5f7;padding:9px 0;font-size:12.5px">
+                    <div style="font-weight:600;color:#1d1d1f">${esc(c.saved.label)} <span style="font-weight:400;color:#86868b">· ${u.orgs} organization${u.orgs === 1 ? '' : 's'}, ${u.roles} role${u.roles === 1 ? '' : 's'}</span></div>
+                    ${c.label !== null ? `<div style="color:#86868b">Renamed to ${esc(c.label)}</div>` : ''}
+                    ${c.removed.length ? `<div style="color:#dc2626">− ${esc(c.removed.join(', '))}</div>` : ''}
+                    ${c.added.length ? `<div style="color:#15803d">+ ${esc(c.added.join(', '))}</div>` : ''}
+                </div>`;
+            }).join('')}
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
+                <button onclick="closeModal()" class="btn-secondary">Cancel</button>
+                <button onclick="saveOrgTypes()" class="btn-primary"><i class="ph ph-check"></i> Confirm &amp; Save</button>
+            </div>
+        </div>`);
+}
+
+function saveOrgTypes() {
+    if (!canEditTypes()) return;
+    const changes = orgTypeChanges();
+    const next = orgTypeDraft.map(e => ({ ...e, label: e.label.trim(), ceiling: { ...e.ceiling } }));
+    const ok = commitPortalMutation(() => {
+        ORG_TYPE_REGISTRY = next;
+        changes.forEach(c => logActivity('Organization type updated', c.saved.label, [
+            c.label !== null ? `renamed to ${c.label}` : '',
+            c.removed.length ? `− ${c.removed.join(', ')}` : '',
+            c.added.length ? `+ ${c.added.join(', ')}` : '',
+        ].filter(Boolean).join(' · ')));
+    });
+    if (!ok) return;
+    orgTypeDraft = null;
+    closeModal();
+    buildNav();
+    renderOrganizations();
+    showToast('Organization types saved');
+}
+
 // ── Accounts (desk only) ──
 // One row per account, showing every organization and role it holds. This is
 // the only place the one-account-many-organizations shape is visible at once.
@@ -6903,7 +7310,7 @@ function accountOrgChips(held) {
     const byOrg = new Map();
     held.forEach(h => {
         if (!byOrg.has(h.org.id)) byOrg.set(h.org.id, { org: h.org, roles: [] });
-        byOrg.get(h.org.id).roles.push(h.role.name);
+        byOrg.get(h.org.id).roles.push(h.binding.status === 'suspended' ? `${h.role.name} (suspended)` : h.role.name);
     });
     return [...byOrg.values()].map(({ org, roles }) => {
         const label = `${org.name} · ${roles.sort().join(', ')}`;
@@ -6984,27 +7391,37 @@ function toggleAccountStatus(userId) {
 
 // ── Create / edit ──
 
-function showOrgModal(orgId = null) {
+let orgModalFromOrderId = null;
+function showOrgModal(orgId = null, { prefillName = '', fromOrderId = null } = {}) {
     const org = orgId ? getOrgById(orgId) : null;
     if (org ? !canEditOrgProfile() : !canCreateOrgs()) return;
+    orgModalFromOrderId = org ? null : fromOrderId;
     const isOperator = orgHasType(org, 'OPERATOR');
+    const inferred = !!org?.customer_type_inferred;
     showModal(`
         <div style="padding:26px 28px">
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 18px">${org ? `Edit ${esc(org.name)}` : 'New Organization'}</h3>
             <div style="display:grid;gap:14px">
                 <div>
                     <label class="field-label" for="org-name">Name <span class="req">*</span></label>
-                    <input id="org-name" class="input-field" maxlength="100" autocomplete="off" value="${esc(org?.name || '')}" placeholder="As it appears on orders">
+                    <input id="org-name" class="input-field" maxlength="100" autocomplete="off" value="${esc(org?.name || prefillName)}" placeholder="As it appears on orders">
                     <div class="field-hint">Orders whose customer name matches exactly link to this organization.</div>
                 </div>
                 <div>
                     <label class="field-label" for="org-type">Type <span class="req">*</span></label>
-                    ${org ? `<div style="padding:4px 0">${orgTypeBadge(org)}</div>
+                    ${org && inferred ? `<div style="display:flex;gap:8px;align-items:center">
+                        <select id="org-confirm-type" class="input-field" style="flex:1">
+                            <option value="ENTERPRISE" ${org.customer_type === 'ENTERPRISE' ? 'selected' : ''}>Customer · Enterprise</option>
+                            <option value="INDIVIDUAL" ${org.customer_type === 'INDIVIDUAL' ? 'selected' : ''}>Customer · Individual</option>
+                        </select>
+                        <button type="button" onclick="confirmOrgType('${org.id}')" class="btn-secondary text-xs" style="white-space:nowrap"><i class="ph ph-check-circle"></i> Confirm type</button>
+                    </div>
+                    <div class="field-hint">Inferred from its members and roles because the type was missing. Correct it if needed, then confirm; it is fixed after that.</div>`
+                    : org ? `<div style="padding:4px 0">${orgTypeBadge(org)}</div>
                     <div class="field-hint">Fixed after creation: the type sets what any role in this organization can be granted.</div>`
                     : `<select id="org-type" class="input-field" onchange="onOrgTypeChange()">
-                        <option value="CUSTOMER_ENTERPRISE">Customer · Enterprise</option>
-                        <option value="CUSTOMER_INDIVIDUAL">Customer · Individual</option>
-                        <option value="OPERATOR">Operator</option>
+                        ${ORG_TYPE_REGISTRY.filter(e => !(fromOrderId && e.type === 'OPERATOR'))
+                            .map(e => `<option value="${e.key}">${esc(e.label)}</option>`).join('')}
                     </select>
                     <div class="field-hint">Fixed after creation. An individual customer is one person: no members, no roles to manage.</div>`}
                 </div>
@@ -7056,8 +7473,9 @@ function saveOrg(orgId = null) {
     const err = document.getElementById('org-error');
     const fail = msg => { err.textContent = msg; err.style.display = 'block'; };
     if (!name) return fail('Name is required.');
-    // Names are the match key for free-text orders, so they stay unique across every type.
-    if (ORGS.some(o => o.id !== orgId && o.name.toLowerCase() === name.toLowerCase())) return fail(`An organization named ${name} already exists.`);
+    const choiceScopes = org ? orgNameScopes(org) : [document.getElementById('org-type')?.value === 'OPERATOR' ? 'OPERATOR' : 'CUSTOMER'];
+    const clash = findOrgNameClash(name, choiceScopes, orgId);
+    if (clash) return fail(orgNameClashMessage(name, clash));
     if (contact && validateLoginEmail(contact)) return fail('Enter a valid contact email.');
     const choice = document.getElementById('org-type')?.value || '';
     const individual = !org && choice === 'CUSTOMER_INDIVIDUAL';
@@ -7070,9 +7488,19 @@ function saveOrg(orgId = null) {
     }
     const now = new Date().toISOString();
     let linked = 0;
+    let renamed = 0;
     const ok = commitPortalMutation(() => {
         if (org) {
             const status = document.getElementById('org-status')?.value || org.status;
+            // A rename keeps the old name reserved for this org and carries the
+            // new one onto every linked order and ticket (SA V2 D30/D35).
+            if (name !== org.name) {
+                const former = (org.former_names || []).filter(n => n.toLowerCase() !== name.toLowerCase());
+                if (org.name.toLowerCase() !== name.toLowerCase() && !former.some(n => n.toLowerCase() === org.name.toLowerCase())) former.push(org.name);
+                org.former_names = former;
+                [...ORDERS, ...TICKETS].filter(r => r.customer_org_id === org.id && r.customer_name !== name)
+                    .forEach(r => { r.customer_name = name; renamed++; });
+            }
             Object.assign(org, { name, contact_email: contact, note, status, updated_at: now });
         } else {
             const isOperator = choice === 'OPERATOR';
@@ -7083,8 +7511,10 @@ function saveOrg(orgId = null) {
             // An individual customer arrives complete: the org, its one role
             // and the person's account are the same act.
             if (individual) {
+                // The Owner holds everything the ceiling allows at creation and
+                // keeps that set; a later ceiling change does not reach it (SA V2 D28).
                 const role = { id: `r-${Date.now()}`, org_id: record.id, name: 'Owner', description: 'The individual customer themselves.',
-                    permissions: ['order.r', 'ticket.c', 'ticket.r', 'ticket.u', 'asset.r', 'activity_log.r'], created_at: now, updated_at: now };
+                    permissions: [...orgCapabilities(record)], created_at: now, updated_at: now };
                 ROLES.push(role);
                 let user = findUserByEmail(personEmail);
                 if (!user) {
@@ -7097,12 +7527,54 @@ function saveOrg(orgId = null) {
         linked = backfillCustomerOrgIds();
         logActivity(org ? 'Organization updated' : 'Organization created', name,
             [org ? '' : (individual ? 'Customer · Individual' : choice === 'OPERATOR' ? 'Operator' : 'Customer · Enterprise'),
+             renamed ? `renamed on ${renamed} order/ticket record${renamed === 1 ? '' : 's'}` : '',
              linked ? `${linked} order/ticket record${linked === 1 ? '' : 's'} linked` : ''].filter(Boolean).join(' · '));
     });
     if (!ok) return;
-    closeModal();
+    const backToOrder = orgModalFromOrderId;
+    orgModalFromOrderId = null;
+    if (backToOrder) showOrderDetail(backToOrder); else closeModal();
     renderOrganizations();
-    showToast(`${name} ${org ? 'saved' : 'created'}${linked ? ` · ${linked} record${linked === 1 ? '' : 's'} linked` : ''}`);
+    showToast(`${name} ${org ? 'saved' : 'created'}${renamed ? ` · ${renamed} record${renamed === 1 ? '' : 's'} renamed` : ''}${linked ? ` · ${linked} record${linked === 1 ? '' : 's'} linked` : ''}`);
+}
+
+// An inferred subtype stays open to correction until the desk confirms it
+// (SA V2 D17). Turning an org into an individual leaves it one Owner role,
+// held by its only member, with the ceiling fixed at this moment (D28).
+function confirmOrgType(orgId) {
+    const org = getOrgById(orgId);
+    if (!org?.customer_type_inferred || !canEditOrgProfile()) return;
+    const type = document.getElementById('org-confirm-type')?.value;
+    const err = document.getElementById('org-error');
+    const members = getOrgMembers(org.id);
+    if (type === 'INDIVIDUAL' && members.length > 1) {
+        err.textContent = `An individual customer is one person. ${org.name} has ${members.length} members; remove all but one first.`;
+        err.style.display = 'block';
+        return;
+    }
+    const now = new Date().toISOString();
+    const ok = commitPortalMutation(() => {
+        if (type === 'INDIVIDUAL') {
+            const roleIds = new Set(getOrgRoles(org.id).map(r => r.id));
+            const kept = ROLE_BINDINGS.find(b => roleIds.has(b.role_id));
+            ROLE_BINDINGS = ROLE_BINDINGS.filter(b => !roleIds.has(b.role_id));
+            ROLES = ROLES.filter(r => !roleIds.has(r.id));
+            org.customer_type = 'INDIVIDUAL';
+            const owner = { id: `r-${Date.now()}`, org_id: org.id, name: 'Owner', description: 'The individual customer themselves.',
+                permissions: [...orgCapabilities(org)], created_at: now, updated_at: now };
+            ROLES.push(owner);
+            if (kept) ROLE_BINDINGS.push({ ...kept, id: `rb-${Date.now()}`, role_id: owner.id, created_at: now });
+        } else {
+            org.customer_type = 'ENTERPRISE';
+        }
+        delete org.customer_type_inferred;
+        org.updated_at = now;
+        logActivity('Organization type confirmed', org.name, type === 'INDIVIDUAL' ? 'Customer · Individual' : 'Customer · Enterprise');
+    });
+    if (!ok) return;
+    showOrgModal(org.id);
+    renderOrganizations();
+    showToast(`${org.name} confirmed as ${type === 'INDIVIDUAL' ? 'an individual' : 'an enterprise'} customer`);
 }
 
 // ── Detail ──
@@ -7148,28 +7620,31 @@ function orgProfileTab(org) {
             <span style="font-size:13px;color:#1d1d1f;text-align:right">${value}</span>
         </div>`;
     const orders = getOrgOrders(org);
-    const tickets = orgHasType(org, 'CUSTOMER') ? TICKETS.filter(t => t.customer_org_id === org.id).length : 0;
+    const showTickets = orgHasType(org, 'CUSTOMER') && hasPermission('ticket.r');
+    const tickets = showTickets ? TICKETS.filter(t => t.customer_org_id === org.id && canSeeTicket(t)).length : 0;
     return `
         ${row('Contact email', esc(org.contact_email || '—'))}
         ${row('Created', esc((org.created_at || '').slice(0, 10) || '—'))}
         ${org.note ? row('Note', esc(org.note)) : ''}
+        ${(org.former_names || []).length ? row('Former names', esc(org.former_names.join(', '))) : ''}
         ${orgHasType(org, 'OPERATOR') ? `
         <div class="field-hint" style="margin-top:12px">AISO is the single service window. The Super Admin is a system account: it belongs to no organization, holds no role here, and is never counted as a member.</div>` : `
-        ${row('Tickets', String(tickets))}
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:18px 0 8px">Linked orders</div>
+        ${showTickets ? row('Tickets', String(tickets)) : ''}
+        ${hasPermission('order.r') ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:18px 0 8px">Linked orders</div>
         ${orders.length ? orders.map(o => `
         <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f5f5f7">
             <a href="#" onclick="event.preventDefault();showOrderDetail('${o.id}')" style="font-size:13px;font-weight:600;color:#1432E6;text-decoration:none">${esc(o.order_no)}</a>
             <span style="font-size:12.5px;color:#86868b">${esc(o.order_date || '')}</span>
             <span style="margin-left:auto">${orderStatusBadge(o.status)}</span>
-        </div>`).join('') : '<div style="font-size:12.5px;color:#86868b">No orders are linked yet. Orders link when their customer name matches this organization exactly.</div>'}`}`;
+        </div>`).join('') : '<div style="font-size:12.5px;color:#86868b">No orders are linked yet. Orders link when their customer name matches this organization exactly.</div>'}` : ''}`}`;
 }
 
 function orgMembersTab(org, members, roles) {
     const noRoles = !roles.length;
     return `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
-            <div style="font-size:12.5px;color:#86868b">Each member holds one or more of this organization's roles.</div>
+            <div style="font-size:12.5px;color:#86868b">Each member holds one or more of this organization's roles.
+                <a href="docs/mockups/account-flows-mockup.html#members" target="_blank" rel="noopener" style="color:#1432E6;font-weight:600;text-decoration:none;white-space:nowrap">Invitation screens (preview) <i class="ph ph-arrow-square-out"></i></a></div>
             ${canAddMembers() ? `<button onclick="showAddMemberModal('${org.id}')" class="btn-primary text-xs" style="white-space:nowrap" ${noRoles ? 'disabled title="Create a role first"' : ''}><i class="ph ph-user-plus"></i> Add member</button>` : ''}
         </div>
         ${noRoles ? `<div style="font-size:12.5px;color:#9a3412;background:#fff7ed;border-radius:10px;padding:10px 12px;margin-bottom:10px">This organization has no roles yet. Create one under the Roles tab before adding members.</div>` : ''}
@@ -7180,11 +7655,43 @@ function orgMembersTab(org, members, roles) {
                 <span style="display:block;font-size:13px;font-weight:600;color:#1d1d1f">${esc(user.name)}${user.status !== 'active' ? ' <span class="badge badge-zinc">Disabled</span>' : ''}</span>
                 <span style="display:block;font-size:12px;color:#86868b">${esc(user.email)}</span>
             </span>
-            <span style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${bindings.map(b => `<span class="badge badge-zinc">${esc(ROLES.find(r => r.id === b.role_id)?.name || '')}</span>`).join('')}</span>
+            <span style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${bindings.map(b => memberRoleChip(org, b)).join('')}</span>
             ${canEditMembers() ? `<button onclick="showEditMemberModal('${org.id}', '${user.id}')" class="btn-ghost" title="Change roles"><i class="ph ph-pencil-simple"></i></button>` : ''}
             ${canRemoveMembers() ? `<button onclick="confirmRemoveMember('${org.id}', '${user.id}')" class="btn-ghost" title="Remove from organization"><i class="ph ph-user-minus"></i></button>` : ''}
         </div>`).join('')}</div>`
         : `<div style="padding:20px 0">${emptyState('ph-users', 'No members yet.', '')}</div>`}`;
+}
+
+// A role held by a member can be suspended without touching the account or
+// its other roles; the badge says so and the button flips it (SA V2 D27).
+function memberRoleChip(org, b) {
+    const name = esc(ROLES.find(r => r.id === b.role_id)?.name || '');
+    const suspended = b.status === 'suspended';
+    const toggle = canEditMembers()
+        ? `<button onclick="toggleBindingStatus('${org.id}', '${b.id}')" class="btn-ghost" style="padding:0 2px;font-size:13px" title="${suspended ? 'Resume this role' : 'Suspend this role'}"><i class="ph ${suspended ? 'ph-play-circle' : 'ph-pause-circle'}"></i></button>`
+        : '';
+    return `<span style="display:inline-flex;align-items:center;gap:1px"><span class="badge ${suspended ? 'badge-amber' : 'badge-zinc'}">${name}${suspended ? ' · Suspended' : ''}</span>${toggle}</span>`;
+}
+
+function toggleBindingStatus(orgId, bindingId) {
+    const org = getOrgById(orgId);
+    const b = getOrgBindings(orgId).find(x => x.id === bindingId);
+    if (!canSeeOrg(org) || !b || !canEditMembers()) return;
+    const suspending = b.status !== 'suspended';
+    if (suspending && wouldDropActiveBinding(b.user_id, [b.id])) {
+        showToast('You are signed in under this role. Switch to another role first.', 'error');
+        return;
+    }
+    const user = USERS.find(u => u.id === b.user_id);
+    const role = ROLES.find(r => r.id === b.role_id);
+    const ok = commitPortalMutation(() => {
+        b.status = suspending ? 'suspended' : 'active';
+        logActivity(suspending ? 'Role suspended' : 'Role resumed', org.name, `${user?.email || ''} · ${role?.name || ''}`);
+    });
+    if (!ok) return;
+    if (canSeeOrg(org)) showOrgDetail(org.id, 'members');
+    renderOrganizations();
+    showToast(`${role?.name} ${suspending ? 'suspended' : 'resumed'} for ${user?.name}`);
 }
 
 function orgRolesTab(org, roles) {
@@ -7570,6 +8077,36 @@ document.addEventListener('click', e => {
     if (!e.target.closest('#view-as-root')) closeViewAsMenu();
 });
 
+// Revocation applies on the next action (SA V2 D31): a disabled account, an
+// inactive org, or a suspended or removed binding ends the role in use. With
+// other usable roles left the account goes back to the role picker; with none
+// it is signed out. Returns false when the current context was ended.
+function enforceActiveSession() {
+    if (!currentUser) return true;
+    if (viewAsBindingId) {
+        const b = ROLE_BINDINGS.find(x => x.id === viewAsBindingId);
+        if (b && usableBindings(b.user_id).some(x => x.id === b.id) && USERS.find(u => u.id === b.user_id)?.status === 'active') return true;
+        setViewAs(null);
+        showToast('That member can no longer act under this role, so View as was reset.', 'info');
+        return false;
+    }
+    const user = USERS.find(u => u.id === currentUser.id);
+    if (!user || user.status !== 'active') {
+        endSession('This account is disabled. Ask your organization admin to re-enable it.');
+        return false;
+    }
+    if (user.is_super_admin) return true;
+    const usable = usableBindings(user.id);
+    if (usable.some(b => b.id === activeBindingId)) return true;
+    endSession(usable.length ? '' : 'This account has no role yet. Ask your organization admin to assign one.', usable.length ? user : null, usable);
+    return false;
+}
+function endSession(message, user = null, bindings = []) {
+    logout();
+    if (user && bindings.length) showLoginRolePicker(user, bindings);
+    else setLoginFormError(message);
+}
+
 function setViewAs(bindingId = null) {
     if (!currentUser?.is_super_admin) return;
     viewAsMenuOpen = false;
@@ -7678,6 +8215,26 @@ function ticketInternalState(t) {
     return TICKET_INTERNAL_STATES.includes(state) ? state : 'NONE';
 }
 function isTicketReferred(t) { return ticketInternalState(t) !== 'NONE'; }
+function ticketAcceptance(t) { return TICKET_ACCEPTANCE.includes(t?.acceptance) ? t.acceptance : 'PENDING'; }
+function ticketAcceptanceBadge(t) {
+    const a = ticketAcceptance(t);
+    const cls = { PENDING: 'badge-zinc', ACCEPTED_FREE: 'badge-green', ACCEPTED_CHARGEABLE: 'badge-blue', NOT_ACCEPTED: 'badge-red' }[a];
+    return `<span class="badge ${cls}">${esc(TICKET_ACCEPTANCE_LABEL[a])}</span>`;
+}
+function setTicketAcceptance(ticketId, value) {
+    const t = getTicketById(ticketId);
+    if (!t || !canManageTickets() || !TICKET_ACCEPTANCE.includes(value) || ticketAcceptance(t) === value) return;
+    const from = ticketAcceptance(t);
+    const ok = commitPortalMutation(() => {
+        t.acceptance = value;
+        t.updated_at = new Date().toISOString();
+        logActivity('Ticket acceptance changed', t.ticket_no, `${TICKET_ACCEPTANCE_LABEL[from]} → ${TICKET_ACCEPTANCE_LABEL[value]}`);
+    });
+    if (!ok) return;
+    renderServiceDesk();
+    showTicketDetail(t.id);
+    showToast(`${t.ticket_no}: ${TICKET_ACCEPTANCE_LABEL[value]}`);
+}
 
 // Who a referral goes to, read from the live order and falling back to the
 // snapshot taken when the ticket was opened.
@@ -7961,6 +8518,7 @@ function serviceDeskPageAction() {
     const names = [...new Set(TICKETS.map(t => t.customer_name).concat(ORDERS.filter(o => o.status === 'CONFIRMED').map(o => o.customer_name)))].filter(Boolean).sort();
     const current = document.getElementById('ticket-customer')?.value || '';
     const handling = document.getElementById('ticket-handling')?.value || '';
+    const acceptance = document.getElementById('ticket-acceptance')?.value || '';
     return `<div style="display:flex;align-items:center;gap:10px;white-space:nowrap">
         <select id="ticket-customer" class="select-field" onchange="renderServiceDesk()">
             <option value="">All customers</option>
@@ -7970,6 +8528,10 @@ function serviceDeskPageAction() {
             <option value="">All handling</option>
             <option value="REFERRED" ${handling === 'REFERRED' ? 'selected' : ''}>Referred (any)</option>
             ${TICKET_INTERNAL_STATES.map(st => `<option value="${st}" ${st === handling ? 'selected' : ''}>${TICKET_INTERNAL_STATE_LABEL[st]}</option>`).join('')}
+        </select>
+        <select id="ticket-acceptance" class="select-field" onchange="renderServiceDesk()" title="Acceptance and charging">
+            <option value="">All acceptance</option>
+            ${TICKET_ACCEPTANCE.map(a => `<option value="${a}" ${a === acceptance ? 'selected' : ''}>${TICKET_ACCEPTANCE_LABEL[a]}</option>`).join('')}
         </select>
         ${newBtn}
     </div>`;
@@ -7987,7 +8549,7 @@ function ticketCustomerScope() {
 
 // A customer sees its own org's tickets; the desk can narrow by customer name.
 function getScopedTickets() {
-    if (isCustomerView()) return TICKETS.filter(t => t.customer_org_id === activeOrgId());
+    if (!isOperatorView()) return TICKETS.filter(canSeeTicket);
     const customer = ticketCustomerScope();
     return TICKETS.filter(t => !customer || t.customer_name === customer);
 }
@@ -7996,11 +8558,13 @@ function getFilteredTickets() {
     const status = document.getElementById('ticket-filter-status')?.value || '';
     const q = (document.getElementById('ticket-search')?.value || '').trim().toLowerCase();
     const handling = isOperatorView() ? (document.getElementById('ticket-handling')?.value || '') : '';
+    const acceptance = isOperatorView() ? (document.getElementById('ticket-acceptance')?.value || '') : '';
     return getScopedTickets().filter(t => {
         if (status === 'NEEDS_ME') { if (!ticketNeedsMe(t)) return false; }
         else if (status && t.status !== status) return false;
         if (handling === 'REFERRED' && !isTicketReferred(t)) return false;
         if (handling && handling !== 'REFERRED' && ticketInternalState(t) !== handling) return false;
+        if (acceptance && ticketAcceptance(t) !== acceptance) return false;
         if (q && ![t.ticket_no, t.subject, t.customer_name, t.snapshot?.order_no, t.snapshot?.product_name, t.serial_no]
             .some(v => (v || '').toLowerCase().includes(q))) return false;
         return true;
@@ -8017,8 +8581,9 @@ function renderTicketStats() {
     const overdue = all.filter(t => ticketFirstResponse(t).overdue).length;
     const resolved = all.filter(t => (t.resolved_at || '').slice(0, 7) === month).length;
     const stat = (v, l, color = '#1d1d1f') => `<div class="tk-stat"><div class="v" style="color:${color}">${v}</div><div class="l">${l}</div></div>`;
+    // First-response timing is the desk's own measure; customers do not see it.
     target.innerHTML = stat(open, 'Open') + stat(awaiting, 'Awaiting customer', awaiting ? '#b45309' : '#1d1d1f')
-        + stat(overdue, 'First response overdue', overdue ? '#dc2626' : '#1d1d1f') + stat(resolved, 'Resolved this month');
+        + (isOperatorView() ? stat(overdue, 'First response overdue', overdue ? '#dc2626' : '#1d1d1f') : '') + stat(resolved, 'Resolved this month');
 }
 
 function renderServiceDesk() {
@@ -8048,8 +8613,9 @@ function renderServiceDesk() {
             <td><span style="font-size:13px;font-weight:600;color:#1d1d1f">${esc(t.snapshot?.order_no || '—')}</span>
                 <div style="font-size:11.5px;color:#86868b;margin-top:1px">${esc(t.scope)} · ${esc(t.snapshot?.product_name || '')}${t.serial_no ? ` · <span style="font-family:ui-monospace,Menlo,monospace;white-space:nowrap">${esc(t.serial_no)}</span>` : ''}</div></td>
             <td style="white-space:nowrap">${ticketPriorityBadge(t.priority)}</td>
-            <td style="white-space:nowrap">${ticketStatusBadge(t.status)}${fr.overdue ? ' <span class="badge badge-red" style="margin-left:4px" title="No AISO reply within the first-response target">Overdue</span>' : ''}
-                ${isOperatorView() && isTicketReferred(t) ? `<div style="margin-top:4px">${ticketInternalChip(t, { compact: true })}</div>` : ''}</td>
+            <td style="white-space:nowrap">${ticketStatusBadge(t.status)}${isOperatorView() && fr.overdue ? ' <span class="badge badge-red" style="margin-left:4px" title="No AISO reply within the first-response target">Overdue</span>' : ''}
+                ${isOperatorView() && isTicketReferred(t) ? `<div style="margin-top:4px">${ticketInternalChip(t, { compact: true })}</div>` : ''}
+                ${isOperatorView() && ticketAcceptance(t) !== 'PENDING' ? `<div style="margin-top:4px">${ticketAcceptanceBadge(t)}</div>` : ''}</td>
             <td class="text-right" onclick="event.stopPropagation()">
                 <button onclick="showTicketDetail('${t.id}')" class="btn-ghost" title="Details"><i class="ph ph-info"></i></button>
             </td>
@@ -8138,7 +8704,7 @@ function buildTicketSnapshot(order, line, serialNo = '', licenseKey = '') {
         product_name: line.product_name + (isSw && line.version ? ` v${line.version}` : ''),
         sla_plan: line.sla_plan || '',
         coverage_kind: isSw ? 'license' : 'warranty',
-        coverage_end: isSw ? (line.license_end || '') : (line.warranty_end || ''),
+        coverage_end: isSw ? (line.license_end || '') : unitWarrantyEnd(line, (line.serial_nos || []).indexOf(serialNo)),
         supplier_name: isSw ? (line.supplier_name || order.sw_supplier_name || '') : (order.hw_supplier_name || ''),
         si_name: order.si_name || '',
         license_key: keyChoice?.key || '',
@@ -8205,7 +8771,7 @@ const TICKET_FIND_LIMIT = 8;
 function ticketFindMatches(query) {
     const q = String(query || '').trim().toLowerCase();
     if (q.length < 2) return [];
-    const orders = ORDERS.filter(o => o.status === 'CONFIRMED' && (!isCustomerView() || o.customer_org_id === activeOrgId()));
+    const orders = ORDERS.filter(o => o.status === 'CONFIRMED' && canSeeOrder(o));
     const out = [];
     for (const o of orders) {
         if (o.order_no.toLowerCase().includes(q)) out.push({ kind: 'order', order: o });
@@ -8282,7 +8848,7 @@ function renderTicketCreateModal() {
     const customers = isCustomerView() ? [activeOrg()?.name || '']
         : [...new Set(ORDERS.filter(o => o.status === 'CONFIRMED').map(o => o.customer_name))].filter(Boolean).sort();
     // A customer picks from its org's orders, whatever name each was typed under.
-    const orders = ORDERS.filter(o => (isCustomerView() ? o.customer_org_id === activeOrgId() : o.customer_name === d.customer_name) && o.status === 'CONFIRMED')
+    const orders = ORDERS.filter(o => canSeeOrder(o) && (isCustomerView() || o.customer_name === d.customer_name) && o.status === 'CONFIRMED')
         .sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
     const lines = d.order_id ? getOrderLines(d.order_id) : [];
     const line = ORDER_LINES.find(l => l.id === d.order_line_id);
@@ -8337,7 +8903,7 @@ function renderTicketCreateModal() {
                 ${d.order_id ? lines.map(l => `<button class="tk-pick ${l.id === d.order_line_id ? 'sel' : ''}" onclick="tkSet('order_line_id', '${l.id}')" style="margin-bottom:6px">
                         <span class="badge ${l.scope === 'HW' ? 'badge-hw' : 'badge-sw'}">${l.scope}</span>
                         <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${esc(l.product_name)}${l.version ? ` <span style="font-weight:400;color:#86868b">v${esc(l.version)}</span>` : ''}</div>
-                        <div style="font-size:11.5px;color:#86868b">Qty ${l.qty}${l.sla_plan ? ` · SLA ${esc(l.sla_plan)}` : ''} · ${l.scope === 'HW' ? (l.warranty_end ? `warranty to ${esc(l.warranty_end)}` : 'warranty not set') : (l.license_end ? `license to ${esc(l.license_end)}` : 'license period not set')}</div></div>
+                        <div style="font-size:11.5px;color:#86868b">Qty ${l.qty}${l.sla_plan ? ` · SLA ${esc(l.sla_plan)}` : ''} · ${l.scope === 'HW' ? esc(lineWarrantySummary(l)) : (l.license_end ? `license to ${esc(l.license_end)}` : 'license period not set')}</div></div>
                     </button>`).join('')
                 : '<div style="font-size:12.5px;color:#c7c7cc;padding:8px 0">Select an order first.</div>'}
 
@@ -8435,6 +9001,7 @@ function saveTicket() {
         channel: d.channel, reported_by: d.reported_by.trim(),
         snapshot: buildTicketSnapshot(order, line, d.serial_no, d.license_key),
         internal_state: 'NONE', internal_party: '', internal_since: null,
+        acceptance: 'PENDING',
         created_at: now, updated_at: now, first_response_at: null, resolved_at: null,
     };
     const ok = commitPortalMutation(() => {
@@ -8462,7 +9029,7 @@ let ticketReplyMode = 'reply'; // 'reply' | 'note'
 function showTicketDetail(id) {
     const t = getTicketById(id);
     if (!t) return;
-    if (isCustomerView() && t.customer_org_id !== activeOrgId()) return;
+    if (!canSeeTicket(t)) return;
     const manage = canManageTickets();
     markTicketNotificationsRead(t.id);
     const staff = manage ? deskStaff().filter(u => u.id !== actingUser()?.id) : [];
@@ -8476,7 +9043,7 @@ function showTicketDetail(id) {
     // Reply text, pending files and the reply/note mode survive re-renders of
     // this modal, but not a switch to another ticket, which starts on Reply.
     if (ticketReplyDraft.ticketId !== t.id) {
-        ticketReplyDraft = { ticketId: t.id, text: '', attachments: [], notify: [] };
+        ticketReplyDraft = { ticketId: t.id, text: '', attachments: [], notify: [], email: false };
         ticketReplyMode = 'reply';
     }
     const reply = ticketReplyDraft;
@@ -8493,7 +9060,7 @@ function showTicketDetail(id) {
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                             <span style="font-size:18px;font-weight:700;color:#1d1d1f">${esc(t.ticket_no)}</span>
                             ${ticketStatusBadge(t.status)}${ticketPriorityBadge(t.priority)}
-                            ${fr.overdue ? '<span class="badge badge-red">Overdue</span>' : ''}
+                            ${manage && fr.overdue ? '<span class="badge badge-red">Overdue</span>' : ''}
                         </div>
                         <div style="font-size:15px;font-weight:600;color:#1d1d1f;margin-top:6px">${esc(t.subject)}</div>
                         <div style="font-size:12.5px;color:#86868b;margin-top:2px">${esc(t.customer_name)} · opened ${esc(ticketDateTime(t.created_at))} via ${esc(t.channel || '—')}${t.reported_by ? ` by ${esc(t.reported_by)}` : ''} · ${esc(t.category)}</div>
@@ -8516,7 +9083,7 @@ function showTicketDetail(id) {
                             <span class="badge ${m.is_internal ? 'badge-amber' : (m.author_type === 'CUSTOMER' ? 'badge-customer' : 'badge-zinc')}" style="margin-left:6px">${m.is_internal ? 'Internal note' : (m.author_type === 'CUSTOMER' ? 'Customer' : 'AISO')}</span>
                             <span class="when">${esc(ticketDateTime(m.created_at))}</span>
                             <div class="body">${esc(m.body)}</div>
-                            ${m.is_internal && (m.notify_user_ids || []).length ? `<div style="font-size:11.5px;color:#86868b;margin-top:4px"><i class="ph ph-bell"></i> Notified ${esc(m.notify_user_ids.map(userNameById).filter(Boolean).join(', '))}</div>` : ''}
+                            ${m.is_internal && (m.notify_user_ids || []).length ? `<div style="font-size:11.5px;color:#86868b;margin-top:4px"><i class="ph ph-bell"></i> Notified ${esc(m.notify_user_ids.map(userNameById).filter(Boolean).join(', '))}${m.email_notify ? ' · in-app and email' : ''}</div>` : ''}
                             ${(m.attachments || []).length ? `<div class="tk-att-list" style="margin-top:8px">${ticketAttachmentGallery(m.attachments, m.id)}</div>` : ''}
                         </div>
                     </div>`).join('')}
@@ -8534,6 +9101,8 @@ function showTicketDetail(id) {
                         <span style="font-size:11.5px;font-weight:600;color:#86868b"><i class="ph ph-bell"></i> Notify</span>
                         ${staff.length ? staff.map(u => `<button class="tk-chip ${(reply.notify || []).includes(u.id) ? 'active' : ''}" style="padding:4px 10px;font-size:12px" onclick="toggleReplyNotify('${u.id}')">${esc(u.name)}</button>`).join('')
                             : '<span style="font-size:11.5px;color:#86868b">No AISO colleagues with ticket access yet — add people to AISO under Organizations.</span>'}
+                        ${staff.length ? `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#1d1d1f;margin-left:6px;cursor:pointer" title="Besides the in-app notification">
+                            <input type="checkbox" ${reply.email ? 'checked' : ''} ${(reply.notify || []).length ? '' : 'disabled'} onchange="ticketReplyDraft.email=this.checked"> Also email</label>` : ''}
                     </div>` : ''}
                     <div id="tk-att-error" class="field-error-text"></div>
                     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px">
@@ -8558,15 +9127,20 @@ function showTicketDetail(id) {
                 </select>
                 ${isTicketReferred(t) ? `<div style="margin-top:8px">${ticketInternalChip(t)}</div>
                 ${t.internal_note ? `<div style="font-size:11.5px;color:#86868b;margin-top:6px">${esc(t.internal_note)}</div>` : ''}` : ''}
-                <div class="field-hint" style="margin-top:6px">Desk only. The customer keeps seeing ${esc(TICKET_STATUS_LABEL[t.status])}.</div>` : ''}
-                <div style="margin-top:14px">
+                <div class="field-hint" style="margin-top:6px">Desk only. The customer keeps seeing ${esc(TICKET_STATUS_LABEL[t.status])}.</div>
+                <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:16px 0 8px">Acceptance</div>
+                <select class="input-field" onchange="setTicketAcceptance('${t.id}', this.value)">
+                    ${TICKET_ACCEPTANCE.map(a => `<option value="${a}" ${a === ticketAcceptance(t) ? 'selected' : ''}>${TICKET_ACCEPTANCE_LABEL[a]}</option>`).join('')}
+                </select>
+                <div class="field-hint" style="margin-top:6px">Desk only. Whether AISO takes this on and whether it is billed.</div>` : ''}
+                ${manage ? `<div style="margin-top:14px">
                     <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#86868b;margin-bottom:4px"><span>Handled by</span><b style="color:#1d1d1f">AISO Service Desk</b></div>
                     <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#86868b;margin-bottom:4px">
                         <span>First response · ${fr.targetHours}h target${t.snapshot?.sla_plan ? ` (SLA ${esc(t.snapshot.sla_plan)})` : ''}</span>
                         <b style="color:${fr.overdue ? '#dc2626' : (fr.answered ? '#047857' : '#1d1d1f')}">${fr.answered ? `answered in ${fr.elapsedHours < 1 ? `${Math.round(fr.elapsedHours * 60)}m` : `${Math.round(fr.elapsedHours)}h`}` : `${Math.round(fr.elapsedHours)}h${fr.overdue ? ' · overdue' : ' · waiting'}`}</b>
                     </div>
                     <div class="tk-sla-bar"><i style="width:${Math.round(fr.ratio * 100)}%;background:${fr.overdue ? '#ef4444' : (fr.answered ? '#10b981' : '#f59e0b')}"></i></div>
-                </div>
+                </div>` : ''}
 
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:20px 0 8px">Entitlement snapshot</div>
                 ${ticketEntitlementCard(t.snapshot || {}, t.serial_no)}
@@ -8599,6 +9173,8 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
     const manage = canManageTickets();
     const isNote = manage && ticketReplyMode === 'note';
     const notify = isNote && ticketReplyDraft.ticketId === ticketId ? [...(ticketReplyDraft.notify || [])] : [];
+    // Named colleagues may also be emailed (SA V2 4.6); the prototype records the choice only.
+    const emailNotify = notify.length > 0 && !!ticketReplyDraft.email;
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
         const msgId = `tm-${Date.now()}`;
@@ -8608,6 +9184,7 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
             author_name: actingName(),
             is_internal: isNote, created_at: now, body, attachments,
             ...(notify.length ? { notify_user_ids: notify } : {}),
+            ...(emailNotify ? { email_notify: true } : {}),
         });
         if (notify.length) notifyUsers(notify, t, 'NOTE', msgId);
         t.updated_at = now;
@@ -8627,7 +9204,7 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
     if (!ok) return;
     // Stay in the mode just used: flipping back to Reply after a note made the
     // next message go to the customer when a second note was meant.
-    ticketReplyDraft = { ticketId: t.id, text: '', attachments: [], notify: [] };
+    ticketReplyDraft = { ticketId: t.id, text: '', attachments: [], notify: [], email: false };
     renderServiceDesk();
     showTicketDetail(t.id);
 }
