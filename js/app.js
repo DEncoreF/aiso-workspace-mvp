@@ -572,7 +572,7 @@ function clearLoginFields() {
 }
 
 function initPortal() {
-    // Link orders and tickets to customer orgs by name before anything reads them.
+    // Convert browser data saved while the customer was free text.
     if (backfillCustomerOrgIds()) Store.save({ notify: false });
     // Keep the user signed in across reloads (cleared on Logout or tab close),
     // as long as the account and its role are still usable.
@@ -943,7 +943,7 @@ function navigate(key) {
             subtitle: `Confirmed orders for ${activeOrg()?.name || ''}. Open a service ticket from any order line.`,
         } : {
             title: 'Orders',
-            subtitle: 'Purchase orders from customers. Names are free text; a customer name links to its organization when they match.',
+            subtitle: 'Purchase orders from customers. Each order belongs to a customer organization.',
             action: canCreateOrders() ? `<div style="white-space:nowrap"><button onclick="showOrderModal()" class="btn-primary"><i class="ph ph-plus"></i> New Order</button></div>` : ''
         },
         'service-desk': {
@@ -5469,9 +5469,9 @@ function saveAssetAdd() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// ORDERS — purchase orders with free-text customer/supplier names.
-// customer_org_id links by name (see Organization links below); the supplier
-// *_org_id columns stay null until vendor orgs ship.
+// ORDERS — the customer is picked by id (see Customer organization below);
+// suppliers are free-text names whose *_org_id columns stay null until
+// vendor orgs ship.
 // ═══════════════════════════════════════════════════════════════════
 
 function getOrderById(id) { return ORDERS.find(o => o.id === id) || null; }
@@ -5567,14 +5567,15 @@ function newOrderLineDraft(lineNo) {
     };
 }
 
-function showOrderModal(orderId = null) {
+function showOrderModal(orderId = null, { resume = false } = {}) {
     const existing = orderId ? getOrderById(orderId) : null;
     if (orderId && !existing) return;
     if (existing && existing.status !== 'DRAFT') {
         showToast('Only draft orders can be edited.', 'error');
         return;
     }
-    orderDraft = existing ? {
+    // Coming back from "+ New customer" keeps everything typed so far.
+    if (!(resume && orderDraft)) orderDraft = existing ? {
         ...JSON.parse(JSON.stringify(existing)),
         lines: JSON.parse(JSON.stringify(getOrderLines(orderId))),
         attachments: JSON.parse(JSON.stringify(existing.attachments || [])),
@@ -5606,8 +5607,7 @@ function showOrderModal(orderId = null) {
                 ${field('ord-contract', 'Contract No', 'contract_no', { placeholder: 'Optional' })}
                 ${field('ord-date', 'Order Date', 'order_date', { required: true, type: 'date' })}
                 ${field('ord-sales', 'Sales Contact', 'sales_contact', { placeholder: 'Optional' })}
-                ${field('ord-customer', 'Customer', 'customer_name', { required: true, placeholder: 'Type the customer name', hint: 'Free text. Pick a suggestion to link it to that organization.', list: 'ord-customer-orgs' })}
-                <datalist id="ord-customer-orgs">${getCustomerOrgs().map(org => `<option value="${esc(org.name)}"></option>`).join('')}</datalist>
+                ${orderCustomerField(d)}
                 ${field('ord-si', 'System Integrator', 'si_name', { placeholder: 'Optional', hint: 'Free text. The SI that delivers and installs, if any.' })}
                 ${field('ord-hw-sup', 'HW Supplier', 'hw_supplier_name', { placeholder: 'Required when the order has HW lines', hint: 'Free text. Required if any line is HW.' })}
                 ${field('ord-sw-sup', 'SW Supplier', 'sw_supplier_name', { placeholder: 'Required when the order has SW lines', hint: 'Free text. Required if any line is SW.' })}
@@ -6184,7 +6184,7 @@ function validateOrderDraft(status) {
     const errors = [];
     if (!d.order_no) errors.push('Order No is required.');
     if (!d.order_date) errors.push('Order Date is required.');
-    if (!d.customer_name) errors.push('Customer is required.');
+    if (!d.customer_org_id) errors.push('Please select Customer.');
     if (!d.lines.length) errors.push('At least one order line is required.');
     if (untypedDocError(d.attachments || [])) errors.push(untypedDocError(d.attachments));
     if (d.lines.some(l => l.scope === 'HW') && !d.hw_supplier_name) errors.push('HW Supplier is required because the order has HW lines.');
@@ -6600,14 +6600,12 @@ function saveOrder(status) {
     const isNew = !d.id;
     const now = new Date().toISOString();
     const prev = isNew ? null : getOrderById(d.id);
-    const customerOrgId = prev?.customer_org_id && prev.customer_name === d.customer_name
-        ? prev.customer_org_id
-        : matchCustomerOrgId(d.customer_name);
+    const customerOrg = getOrgById(d.customer_org_id);
     const ok = commitPortalMutation(() => {
         const record = {
             id: d.id || `ord-${Date.now()}`,
             order_no: d.order_no, contract_no: d.contract_no,
-            customer_name: d.customer_name, customer_org_id: customerOrgId,
+            customer_name: customerOrg?.name || '', customer_org_id: customerOrg?.id || null,
             hw_supplier_name: d.hw_supplier_name, hw_supplier_org_id: d.hw_supplier_org_id,
             sw_supplier_name: d.sw_supplier_name, sw_supplier_org_id: d.sw_supplier_org_id,
             si_name: d.si_name || '', si_org_id: d.si_org_id ?? null,
@@ -6653,16 +6651,14 @@ function saveOrder(status) {
     showToast(`${d.order_no} ${status === 'CONFIRMED' ? 'confirmed' : 'saved as draft'}`);
 }
 
-// ── Organization links (docs/ORG_MANAGEMENT_PLAN.md, flow E) ──
-// customer_name stays the free-text truth; customer_org_id is the link that
-// customer-side scoping reads. Links come from an exact name match, or by hand
-// from the order detail when the typed name differs from the org's.
+// ── Customer organization (SA V2 4.4.3) ──
+// An order points at its customer org by id; customer_name is a display copy
+// that follows the org's current name.
 
 function getOrgById(id) { return ORGS.find(o => o.id === id) || null; }
 function getCustomerOrgs() { return ORGS.filter(o => o.types?.includes('CUSTOMER')); }
 
-// A former name still points at the org that held it (SA V2 D30), so an
-// order typed under the old name keeps linking to the same customer.
+// Used only to convert data saved before orders picked their customer by id.
 function matchCustomerOrgId(name) {
     const target = String(name || '').trim().toLowerCase();
     if (!target) return null;
@@ -6687,9 +6683,8 @@ function orgNameClashMessage(name, clash) {
         : `${name} is a former name of ${clash.name} and stays reserved for it.`;
 }
 
-// Fill in links that are still missing; an existing link is never replaced,
-// since a hand-made one may point at an org whose name differs from the typed
-// one. A ticket follows its order first, then its own customer name.
+// One-time conversion of browser data saved while the customer was free text
+// (SA V2 4.4.6). A ticket follows its order first, then its own customer name.
 function backfillCustomerOrgIds() {
     let changed = 0;
     ORDERS.forEach(o => {
@@ -6705,58 +6700,31 @@ function backfillCustomerOrgIds() {
     return changed;
 }
 
-// An unlinked customer is shown, not left silently null — otherwise it looks
-// connected until that customer signs in and finds nothing.
-function orderCustomerOrgCell(o) {
-    const org = getOrgById(o.customer_org_id);
-    if (org) return `<span class="badge badge-customer"><i class="ph ph-buildings"></i> ${esc(org.name)}</span>`;
-    const actions = [
-        hasPermission('organization.c') ? `<button onclick="confirmCreateCustomerOrgFromOrder('${o.id}')" class="btn-secondary text-xs" style="padding:3px 9px">Create organization</button>` : '',
-        hasPermission('order.u') && getCustomerOrgs().length ? `<button onclick="showLinkCustomerOrgModal('${o.id}')" class="btn-secondary text-xs" style="padding:3px 9px">Link to existing</button>` : '',
-    ].join('');
-    return `<span style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end"><span class="badge badge-amber" title="No organization is named exactly “${esc(o.customer_name)}”">Not linked</span>${actions}</span>`;
+// Active customer orgs; a draft already pointing at one that went inactive
+// keeps it listed so the form does not silently drop the customer.
+function orderCustomerChoices(d) {
+    return getCustomerOrgs().filter(o => o.status === 'active' || o.id === d.customer_org_id)
+        .sort((a, b) => a.name.localeCompare(b.name));
 }
-
-// Creating the customer from an order goes through the regular form, so the
-// subtype is chosen up front like any other org (SA V2 4.3.5).
-function confirmCreateCustomerOrgFromOrder(orderId) {
-    const o = getOrderById(orderId);
-    if (!o) return;
-    showOrgModal(null, { prefillName: o.customer_name.trim(), fromOrderId: o.id });
+function orderCustomerLabel(org) {
+    return `${org.name} · ${org.customer_type === 'INDIVIDUAL' ? 'Individual' : 'Enterprise'}${org.status === 'active' ? '' : ' (Inactive)'}`;
 }
-
-function showLinkCustomerOrgModal(orderId) {
-    const o = getOrderById(orderId);
-    if (!o) return;
-    showModal(`
-        <div style="padding:26px 28px">
-            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Link to an existing organization</h3>
-            <p style="font-size:13px;color:#86868b;margin:0 0 16px;line-height:1.6">${esc(o.order_no)} names the customer <strong style="color:#1d1d1f">${esc(o.customer_name)}</strong>. The name stays as typed; the order and its tickets link to the organization you pick.</p>
-            <label class="field-label" for="link-org-select">Customer organization</label>
-            <select id="link-org-select" class="input-field">
-                ${getCustomerOrgs().map(org => `<option value="${org.id}">${esc(org.name)}</option>`).join('')}
-            </select>
-            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
-                <button onclick="showOrderDetail('${o.id}')" class="btn-secondary">Cancel</button>
-                <button onclick="linkOrderCustomerOrg('${o.id}')" class="btn-primary"><i class="ph ph-link-simple"></i> Link</button>
-            </div>
-        </div>`, 'md');
+function orderCustomerField(d) {
+    return `<div>
+        <label class="field-label" for="ord-customer">Customer <span class="req">*</span></label>
+        <select id="ord-customer" class="input-field" onchange="onOrderCustomerChange(this.value)">
+            <option value="">Select customer…</option>
+            ${orderCustomerChoices(d).map(org => `<option value="${org.id}" ${org.id === d.customer_org_id ? 'selected' : ''}>${esc(orderCustomerLabel(org))}</option>`).join('')}
+            ${canCreateOrgs() ? '<option value="__new__">+ New customer</option>' : ''}
+        </select>
+        <div class="field-hint">Active customer organizations.</div>
+    </div>`;
 }
-
-function linkOrderCustomerOrg(orderId) {
-    const o = getOrderById(orderId);
-    const org = getOrgById(document.getElementById('link-org-select')?.value);
-    if (!o || !org) return;
-    const ok = commitPortalMutation(() => {
-        o.customer_org_id = org.id;
-        o.updated_at = new Date().toISOString();
-        // The order's tickets belong to the same customer.
-        TICKETS.filter(t => t.order_id === o.id).forEach(t => { t.customer_org_id = org.id; });
-        logActivity('Order linked', o.order_no, `Customer “${o.customer_name}” → ${org.name}`);
-    });
-    if (!ok) return;
-    showOrderDetail(orderId);
-    showToast(`${o.order_no} linked to ${org.name}`);
+function onOrderCustomerChange(value) {
+    if (value === '__new__') { showOrgModal(null, { fromOrderDraft: true }); return; }
+    const org = getOrgById(value);
+    orderDraft.customer_org_id = org?.id || null;
+    orderDraft.customer_name = org?.name || '';
 }
 
 // ── Detail ──
@@ -6784,7 +6752,6 @@ function showOrderDetail(id) {
             </div>
 
             <div style="margin-top:16px">
-                ${isOperatorView() ? row('Customer organization', orderCustomerOrgCell(o)) : ''}
                 ${row('Contract No', esc(o.contract_no || '—'))}
                 ${row('Order date', esc(o.order_date || '—'))}
                 ${row('HW supplier', esc(o.hw_supplier_name || '—'))}
@@ -7391,11 +7358,11 @@ function toggleAccountStatus(userId) {
 
 // ── Create / edit ──
 
-let orgModalFromOrderId = null;
-function showOrgModal(orgId = null, { prefillName = '', fromOrderId = null } = {}) {
+let orgModalFromOrderDraft = false;
+function showOrgModal(orgId = null, { fromOrderDraft = false } = {}) {
     const org = orgId ? getOrgById(orgId) : null;
     if (org ? !canEditOrgProfile() : !canCreateOrgs()) return;
-    orgModalFromOrderId = org ? null : fromOrderId;
+    orgModalFromOrderDraft = !org && fromOrderDraft;
     const isOperator = orgHasType(org, 'OPERATOR');
     const inferred = !!org?.customer_type_inferred;
     showModal(`
@@ -7404,8 +7371,8 @@ function showOrgModal(orgId = null, { prefillName = '', fromOrderId = null } = {
             <div style="display:grid;gap:14px">
                 <div>
                     <label class="field-label" for="org-name">Name <span class="req">*</span></label>
-                    <input id="org-name" class="input-field" maxlength="100" autocomplete="off" value="${esc(org?.name || prefillName)}" placeholder="As it appears on orders">
-                    <div class="field-hint">Orders whose customer name matches exactly link to this organization.</div>
+                    <input id="org-name" class="input-field" maxlength="100" autocomplete="off" value="${esc(org?.name || '')}" placeholder="Organization name">
+                    <div class="field-hint">Unique within its type. Orders pick their customer from these organizations.</div>
                 </div>
                 <div>
                     <label class="field-label" for="org-type">Type <span class="req">*</span></label>
@@ -7420,7 +7387,7 @@ function showOrgModal(orgId = null, { prefillName = '', fromOrderId = null } = {
                     : org ? `<div style="padding:4px 0">${orgTypeBadge(org)}</div>
                     <div class="field-hint">Fixed after creation: the type sets what any role in this organization can be granted.</div>`
                     : `<select id="org-type" class="input-field" onchange="onOrgTypeChange()">
-                        ${ORG_TYPE_REGISTRY.filter(e => !(fromOrderId && e.type === 'OPERATOR'))
+                        ${ORG_TYPE_REGISTRY.filter(e => !(fromOrderDraft && e.type === 'OPERATOR'))
                             .map(e => `<option value="${e.key}">${esc(e.label)}</option>`).join('')}
                     </select>
                     <div class="field-hint">Fixed after creation. An individual customer is one person: no members, no roles to manage.</div>`}
@@ -7453,11 +7420,16 @@ function showOrgModal(orgId = null, { prefillName = '', fromOrderId = null } = {
             </div>
             <p id="org-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin:14px 0 0"></p>
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
-                <button onclick="closeModal()" class="btn-secondary">Cancel</button>
+                <button onclick="${orgModalFromOrderDraft ? 'cancelOrgFromOrder()' : 'closeModal()'}" class="btn-secondary">Cancel</button>
                 <button onclick="saveOrg(${org ? `'${org.id}'` : 'null'})" class="btn-primary"><i class="ph ph-check"></i> ${org ? 'Save' : 'Create'}</button>
             </div>
         </div>`, 'md');
     document.getElementById('org-name')?.focus();
+}
+
+function cancelOrgFromOrder() {
+    orgModalFromOrderDraft = false;
+    showOrderModal(orderDraft?.id || null, { resume: true });
 }
 
 function onOrgTypeChange() {
@@ -7487,13 +7459,13 @@ function saveOrg(orgId = null) {
         if (personEmailError) return fail(personEmailError);
     }
     const now = new Date().toISOString();
-    let linked = 0;
     let renamed = 0;
+    let createdId = null;
     const ok = commitPortalMutation(() => {
         if (org) {
             const status = document.getElementById('org-status')?.value || org.status;
-            // A rename keeps the old name reserved for this org and carries the
-            // new one onto every linked order and ticket (SA V2 D30/D35).
+            // A rename keeps the old name reserved for this org; orders and
+            // tickets show the org's current name (SA V2 4.4.6).
             if (name !== org.name) {
                 const former = (org.former_names || []).filter(n => n.toLowerCase() !== name.toLowerCase());
                 if (org.name.toLowerCase() !== name.toLowerCase() && !former.some(n => n.toLowerCase() === org.name.toLowerCase())) former.push(org.name);
@@ -7508,6 +7480,7 @@ function saveOrg(orgId = null) {
                 customer_type: isOperator ? null : (individual ? 'INDIVIDUAL' : 'ENTERPRISE'), status: 'active',
                 contact_email: contact, note, created_at: now, updated_at: now };
             ORGS.push(record);
+            createdId = record.id;
             // An individual customer arrives complete: the org, its one role
             // and the person's account are the same act.
             if (individual) {
@@ -7524,18 +7497,20 @@ function saveOrg(orgId = null) {
                 ROLE_BINDINGS.push({ id: `rb-${Date.now()}`, user_id: user.id, role_id: role.id, status: 'active', created_at: now });
             }
         }
-        linked = backfillCustomerOrgIds();
         logActivity(org ? 'Organization updated' : 'Organization created', name,
-            [org ? '' : (individual ? 'Customer · Individual' : choice === 'OPERATOR' ? 'Operator' : 'Customer · Enterprise'),
-             renamed ? `renamed on ${renamed} order/ticket record${renamed === 1 ? '' : 's'}` : '',
-             linked ? `${linked} order/ticket record${linked === 1 ? '' : 's'} linked` : ''].filter(Boolean).join(' · '));
+            org ? '' : (individual ? 'Customer · Individual' : choice === 'OPERATOR' ? 'Operator' : 'Customer · Enterprise'));
     });
     if (!ok) return;
-    const backToOrder = orgModalFromOrderId;
-    orgModalFromOrderId = null;
-    if (backToOrder) showOrderDetail(backToOrder); else closeModal();
+    const backToOrder = orgModalFromOrderDraft;
+    orgModalFromOrderDraft = false;
     renderOrganizations();
-    showToast(`${name} ${org ? 'saved' : 'created'}${renamed ? ` · ${renamed} record${renamed === 1 ? '' : 's'} renamed` : ''}${linked ? ` · ${linked} record${linked === 1 ? '' : 's'} linked` : ''}`);
+    if (backToOrder && orderDraft) {
+        // The new customer is picked straight away (SA V2 4.4.3).
+        orderDraft.customer_org_id = createdId;
+        orderDraft.customer_name = name;
+        showOrderModal(orderDraft.id || null, { resume: true });
+    } else closeModal();
+    showToast(`${name} ${org ? 'saved' : 'created'}`);
 }
 
 // An inferred subtype stays open to correction until the desk confirms it
@@ -7636,7 +7611,7 @@ function orgProfileTab(org) {
             <a href="#" onclick="event.preventDefault();showOrderDetail('${o.id}')" style="font-size:13px;font-weight:600;color:#1432E6;text-decoration:none">${esc(o.order_no)}</a>
             <span style="font-size:12.5px;color:#86868b">${esc(o.order_date || '')}</span>
             <span style="margin-left:auto">${orderStatusBadge(o.status)}</span>
-        </div>`).join('') : '<div style="font-size:12.5px;color:#86868b">No orders are linked yet. Orders link when their customer name matches this organization exactly.</div>'}` : ''}`}`;
+        </div>`).join('') : '<div style="font-size:12.5px;color:#86868b">No matching data found.</div>'}` : ''}`}`;
 }
 
 function orgMembersTab(org, members, roles) {
@@ -8724,7 +8699,7 @@ function showTicketCreateModal({ lineId = null } = {}) {
         return;
     }
     ticketDraft = {
-        customer_name: isCustomerView() ? (activeOrg()?.name || '') : (document.getElementById('ticket-customer')?.value || ''),
+        customer_org_id: isCustomerView() ? activeOrgId() : (getCustomerOrgs().find(o => o.name === document.getElementById('ticket-customer')?.value)?.id || ''),
         order_id: '', order_line_id: '', serial_no: '', license_key: '',
         channel: isCustomerView() ? 'Workspace' : 'Email',
         priority: 'MEDIUM', category: TICKET_CATEGORIES[0],
@@ -8736,7 +8711,7 @@ function showTicketCreateModal({ lineId = null } = {}) {
         const line = ORDER_LINES.find(l => l.id === lineId);
         const order = line ? getOrderById(line.order_id) : null;
         if (line && order) {
-            ticketDraft.customer_name = order.customer_name;
+            ticketDraft.customer_org_id = order.customer_org_id;
             ticketDraft.order_id = order.id;
             ticketDraft.order_line_id = line.id;
             const serials = (line.serial_nos || []).filter(s => s.trim());
@@ -8750,7 +8725,7 @@ function showTicketCreateModal({ lineId = null } = {}) {
 
 function tkSet(key, value) {
     ticketDraft[key] = value;
-    if (key === 'customer_name') { ticketDraft.order_id = ''; ticketDraft.order_line_id = ''; ticketDraft.serial_no = ''; ticketDraft.license_key = ''; }
+    if (key === 'customer_org_id') { ticketDraft.order_id = ''; ticketDraft.order_line_id = ''; ticketDraft.serial_no = ''; ticketDraft.license_key = ''; }
     if (key === 'order_id') { ticketDraft.order_line_id = ''; ticketDraft.serial_no = ''; ticketDraft.license_key = ''; }
     if (key === 'order_line_id') {
         const line = ORDER_LINES.find(l => l.id === value);
@@ -8815,7 +8790,7 @@ function tkPickFound(idx) {
     const m = ticketFindMatches(ticketDraft.find)[idx];
     if (!m) return;
     const d = ticketDraft;
-    if (!isCustomerView()) d.customer_name = m.order.customer_name;
+    if (!isCustomerView()) d.customer_org_id = m.order.customer_org_id;
     d.order_id = m.order.id;
     d.order_line_id = m.line?.id || '';
     d.serial_no = m.kind === 'serial' ? m.value : '';
@@ -8845,10 +8820,11 @@ function ticketDraftReady() {
 
 function renderTicketCreateModal() {
     const d = ticketDraft;
-    const customers = isCustomerView() ? [activeOrg()?.name || '']
-        : [...new Set(ORDERS.filter(o => o.status === 'CONFIRMED').map(o => o.customer_name))].filter(Boolean).sort();
-    // A customer picks from its org's orders, whatever name each was typed under.
-    const orders = ORDERS.filter(o => canSeeOrder(o) && (isCustomerView() || o.customer_name === d.customer_name) && o.status === 'CONFIRMED')
+    // Customer orgs that hold at least one confirmed order (SA V2 4.5.3).
+    const customers = isCustomerView() ? []
+        : getCustomerOrgs().filter(org => ORDERS.some(o => o.status === 'CONFIRMED' && o.customer_org_id === org.id))
+            .sort((a, b) => a.name.localeCompare(b.name));
+    const orders = ORDERS.filter(o => canSeeOrder(o) && o.customer_org_id === d.customer_org_id && o.status === 'CONFIRMED')
         .sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
     const lines = d.order_id ? getOrderLines(d.order_id) : [];
     const line = ORDER_LINES.find(l => l.id === d.order_line_id);
@@ -8881,15 +8857,15 @@ function renderTicketCreateModal() {
 
                 <div class="tk-step"><span class="n">1</span>Customer</div>
                 ${isCustomerView()
-                    ? `<div class="tk-pick sel" style="cursor:default"><i class="ph ph-buildings" style="color:#1432E6"></i><span style="font-size:13px;font-weight:600">${esc(d.customer_name)}</span></div>`
-                    : `<select class="input-field" onchange="tkSet('customer_name', this.value)">
+                    ? `<div class="tk-pick sel" style="cursor:default"><i class="ph ph-buildings" style="color:#1432E6"></i><span style="font-size:13px;font-weight:600">${esc(activeOrg()?.name || '')}</span></div>`
+                    : `<select class="input-field" onchange="tkSet('customer_org_id', this.value)">
                         <option value="">Select customer…</option>
-                        ${customers.map(c => `<option value="${esc(c)}" ${c === d.customer_name ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+                        ${customers.map(c => `<option value="${c.id}" ${c.id === d.customer_org_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
                        </select>
-                       <div class="field-hint">Grouped by customer name on confirmed orders.</div>`}
+                       <div class="field-hint">Customer organizations with a confirmed order.</div>`}
 
                 <div class="tk-step"><span class="n">2</span>Order</div>
-                ${d.customer_name ? (orders.length ? orders.map(o => {
+                ${d.customer_org_id ? (orders.length ? orders.map(o => {
                     const eligible = o.status === 'CONFIRMED';
                     return `<button class="tk-pick ${o.id === d.order_id ? 'sel' : ''} ${eligible ? '' : 'disabled'}" ${eligible ? `onclick="tkSet('order_id', '${o.id}')"` : 'disabled'} style="margin-bottom:6px">
                         <i class="ph ph-shopping-cart" style="color:#86868b"></i>

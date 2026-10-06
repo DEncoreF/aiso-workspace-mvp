@@ -533,9 +533,9 @@ let ASSETS = [
 
 // ═══════════════════════════════════════════════════════════════════
 // ORDERS — purchase orders from customers.
-// Supplier and customer are free-text names (the vendor_name pattern):
-// the *_org_id columns stay null until Organization Management ships,
-// then get backfilled by name matching. HW and SW suppliers are separate
+// The customer is picked from customer orgs (customer_org_id; customer_name
+// is a display copy). Suppliers are free-text names whose *_org_id columns
+// stay null until vendor orgs ship. HW and SW suppliers are separate
 // header fields because one order often mixes both from different vendors.
 // The system integrator (SI) is a third, optional party: the company that
 // delivers and installs on site, which is often neither supplier.
@@ -546,7 +546,7 @@ let ORDERS = [
         id: 'ord-0001',
         order_no: 'PO-2026-0001',
         contract_no: 'CTR-2026-0001',
-        customer_name: 'MegaBank Corp', customer_org_id: null,
+        customer_name: 'MegaBank Corp', customer_org_id: 'c-megabank',
         hw_supplier_name: 'Phison Electronics', hw_supplier_org_id: null,
         sw_supplier_name: 'TPIsoftware Corporation', sw_supplier_org_id: null,
         si_name: 'Systex Corporation', si_org_id: null,
@@ -563,7 +563,7 @@ let ORDERS = [
         id: 'ord-0002',
         order_no: 'PO-2026-0002',
         contract_no: '',
-        customer_name: 'GovCloud Agency', customer_org_id: null,
+        customer_name: 'GovCloud Agency', customer_org_id: 'c-govcloud',
         hw_supplier_name: 'Phison Electronics', hw_supplier_org_id: null,
         sw_supplier_name: '', sw_supplier_org_id: null,
         si_name: '', si_org_id: null,
@@ -579,7 +579,7 @@ let ORDERS = [
         id: 'ord-0003',
         order_no: 'PO-2025-0031',
         contract_no: 'CTR-2025-0031',
-        customer_name: 'GovCloud Agency', customer_org_id: null,
+        customer_name: 'GovCloud Agency', customer_org_id: 'c-govcloud',
         hw_supplier_name: 'AISO', hw_supplier_org_id: null,
         sw_supplier_name: '', sw_supplier_org_id: null,
         si_name: '', si_org_id: null,
@@ -593,7 +593,7 @@ let ORDERS = [
     },
     {
         id: 'ord-0004', order_no: 'PO-2026-0004', contract_no: '',
-        customer_name: 'Wei-Ting Chen', customer_org_id: null,
+        customer_name: 'Wei-Ting Chen', customer_org_id: 'c-weiting',
         hw_supplier_name: '', hw_supplier_org_id: null,
         sw_supplier_name: 'TPIsoftware Corporation', sw_supplier_org_id: null,
         si_name: '', si_org_id: null,
@@ -734,7 +734,7 @@ const TICKET_FIRST_RESPONSE_DEFAULT_HOURS = 24;
 let TICKETS = [
     {
         id: 'tk-0001', ticket_no: 'TK-0001',
-        customer_name: 'MegaBank Corp', customer_org_id: null,
+        customer_name: 'MegaBank Corp', customer_org_id: 'c-megabank',
         order_id: 'ord-0001', order_line_id: 'ol-0001', serial_no: 'GBT-2026-0771', scope: 'HW',
         subject: 'GPU node fails POST after firmware update',
         description: 'After applying BIOS F12 the node stops at POST code 94. The second unit on the same order is fine.',
@@ -749,7 +749,7 @@ let TICKETS = [
     },
     {
         id: 'tk-0002', ticket_no: 'TK-0002',
-        customer_name: 'MegaBank Corp', customer_org_id: null,
+        customer_name: 'MegaBank Corp', customer_org_id: 'c-megabank',
         order_id: 'ord-0001', order_line_id: 'ol-0002', serial_no: '', scope: 'SW',
         subject: 'digiRunner license activation error 0x41',
         description: 'Activation fails with error 0x41 on the second node after the cluster was re-imaged.',
@@ -763,7 +763,7 @@ let TICKETS = [
     },
     {
         id: 'tk-0003', ticket_no: 'TK-0003',
-        customer_name: 'MegaBank Corp', customer_org_id: null,
+        customer_name: 'MegaBank Corp', customer_org_id: 'c-megabank',
         order_id: 'ord-0001', order_line_id: 'ol-0001', serial_no: 'GBT-2026-0772', scope: 'HW',
         subject: 'Fan noise on unit 2 under sustained load',
         description: 'Audible fan surge every few minutes when all GPUs are busy. No thermal throttling observed.',
@@ -777,7 +777,7 @@ let TICKETS = [
     },
     {
         id: 'tk-0004', ticket_no: 'TK-0004',
-        customer_name: 'GovCloud Agency', customer_org_id: null,
+        customer_name: 'GovCloud Agency', customer_org_id: 'c-govcloud',
         order_id: 'ord-0003', order_line_id: 'ol-0004', serial_no: 'AISO1-2025-0442', scope: 'HW',
         subject: 'Request on-site check before warranty expiry',
         description: 'Warranty ends 2026-09-09. Please schedule a health check and confirm extension options.',
