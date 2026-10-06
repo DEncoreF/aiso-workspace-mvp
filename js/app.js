@@ -821,10 +821,11 @@ function renderUserMenu() {
 function switchRole(bindingId) {
     if (!currentUser || !usableBindings(currentUser.id).some(b => b.id === bindingId)) return;
     // Staged Parameter Center / Compatibility edits belong to the role that
-    // made them, so they must be settled before the role changes.
-    if (getDirtyScope()) {
+    // made them: switching asks first, the same way logging out does (SA V2 4.1.3).
+    const dirty = getDirtyScope();
+    if (dirty) {
         closeUserMenu();
-        showToast('Save or discard your staged changes before switching role.', 'error');
+        confirmLeavePending(dirty, { switchTo: bindingId });
         return;
     }
     activeBindingId = bindingId;
@@ -862,6 +863,14 @@ function renderSidebarUser() {
     document.getElementById('user-name').textContent = name;
     document.getElementById('user-role').textContent = viewAsBindingId ? `Viewing as · ${label}` : label;
     document.getElementById('user-avatar').textContent = getUserInitials(name);
+}
+
+// The Logout button asks first when Parameter Center or Compatibility has
+// staged edits (SA V2 4.1.4); a forced logout skips the question.
+function requestLogout() {
+    const dirty = getDirtyScope();
+    if (dirty) { confirmLeavePending(dirty, { logout: true }); return; }
+    logout();
 }
 
 function logout() {
@@ -4006,23 +4015,34 @@ function applyCompatDraft(changes) {
 
 /* ── Leaving a view with unsaved changes ── */
 
-function confirmLeavePending(scope, nextKey) {
+const PENDING_SCOPE_LABEL = { 'param-center': 'Parameter Center', compatibility: 'Compatibility' };
+
+// One dialog for leaving staged edits behind: going to another page,
+// switching role or logging out (SA V2 4.1.3, 4.1.4).
+function confirmLeavePending(scope, next) {
     const count = getPendingChanges(scope).length;
+    const changes = `${count} unsaved change${count === 1 ? '' : 's'}`;
+    const body = next?.logout ? `You have ${changes} in ${PENDING_SCOPE_LABEL[scope]}. Logging out discards them.`
+        : next?.switchTo ? `You have ${changes} in ${PENDING_SCOPE_LABEL[scope]}. Switching role discards them.`
+        : `You have ${changes} on this page. Leaving will discard ${count === 1 ? 'it' : 'them'}.`;
+    const action = next?.logout ? "{ logout: true }" : next?.switchTo ? `{ switchTo: '${next.switchTo}' }` : `'${next}'`;
     showModal(`
         <div>
             <div style="width:52px;height:52px;border-radius:16px;background:#fffbeb;display:grid;place-items:center;margin-bottom:16px"><i class="ph ph-warning-circle" style="font-size:26px;color:#d97706"></i></div>
             <h3 style="font-size:1.1rem;font-weight:700;margin:0 0 6px">Leave without saving?</h3>
-            <p style="font-size:13px;color:#86868b;margin:0 0 22px;line-height:1.6">You have ${count} unsaved change${count === 1 ? '' : 's'} on this page. Leaving will discard ${count === 1 ? 'it' : 'them'}.</p>
+            <p style="font-size:13px;color:#86868b;margin:0 0 22px;line-height:1.6">${body}</p>
             <div style="display:flex;gap:10px;justify-content:flex-end">
                 <button type="button" class="btn-secondary" onclick="closeModal()">Stay on page</button>
-                <button type="button" class="btn-primary" style="background:#dc2626" onclick="closeModal();leavePendingScope('${scope}','${nextKey}')"><i class="ph ph-arrow-right"></i> Discard &amp; Leave</button>
+                <button type="button" class="btn-primary" style="background:#dc2626" onclick="closeModal();leavePendingScope('${scope}', ${action})"><i class="ph ph-arrow-right"></i> ${next?.switchTo ? 'Discard &amp; Switch' : 'Discard &amp; Leave'}</button>
             </div>
         </div>`);
 }
 
-function leavePendingScope(scope, nextKey) {
+function leavePendingScope(scope, next) {
     if (scope === 'param-center') paramDraft = null; else compatDraft = null;
-    navigate(nextKey);
+    if (next?.logout) logout();
+    else if (next?.switchTo) switchRole(next.switchTo);
+    else navigate(next);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -7394,12 +7414,14 @@ function showOrgModal(orgId = null, { fromOrderDraft = false } = {}) {
                 </div>
                 <div id="org-person-wrap" style="display:none;border-top:1px solid var(--border-light);padding-top:14px">
                     <div class="field-label" style="margin-bottom:8px">The person <span class="req">*</span></div>
-                    <label class="field-label" for="org-person-name">Name</label>
-                    <input id="org-person-name" class="input-field" maxlength="100" autocomplete="off" placeholder="Full name">
-                    <div style="height:10px"></div>
                     <label class="field-label" for="org-person-email">Email</label>
-                    <input id="org-person-email" class="input-field" type="email" maxlength="100" autocomplete="off" placeholder="name@example.com">
-                    <div class="field-hint">Creates the account and its Owner role. An email already on file is reused.</div>
+                    <input id="org-person-email" class="input-field" type="email" maxlength="100" autocomplete="off" placeholder="name@example.com" onblur="onOrgPersonEmailBlur()">
+                    <div id="org-person-hint" class="field-hint"></div>
+                    <div id="org-person-name-wrap">
+                        <div style="height:10px"></div>
+                        <label class="field-label" for="org-person-name">Name</label>
+                        <input id="org-person-name" class="input-field" maxlength="100" autocomplete="off" placeholder="Full name">
+                    </div>
                 </div>
                 <div>
                     <label class="field-label" for="org-contact">Contact email</label>
@@ -7432,6 +7454,19 @@ function cancelOrgFromOrder() {
     showOrderModal(orderDraft?.id || null, { resume: true });
 }
 
+// Email comes first: an address that already has an account keeps that
+// account's name, so the Name field goes away (SA V2 4.3.2, same as 4.2.2).
+function onOrgPersonEmailBlur() {
+    const email = (document.getElementById('org-person-email')?.value || '').trim();
+    const user = email && !validateLoginEmail(email) ? findUserByEmail(email) : null;
+    const hint = document.getElementById('org-person-hint');
+    const nameWrap = document.getElementById('org-person-name-wrap');
+    if (nameWrap) nameWrap.style.display = user ? 'none' : '';
+    if (hint) hint.textContent = !email || validateLoginEmail(email) ? ''
+        : user ? `Existing account: ${user.name}. It keeps its other roles and gets these after accepting. Its password is not reset.`
+        : 'No account uses this email. An invitation to set one up will be sent; the account stays Not activated until then.';
+}
+
 function onOrgTypeChange() {
     const wrap = document.getElementById('org-person-wrap');
     if (wrap) wrap.style.display = document.getElementById('org-type')?.value === 'CUSTOMER_INDIVIDUAL' ? '' : 'none';
@@ -7454,9 +7489,10 @@ function saveOrg(orgId = null) {
     const personName = (document.getElementById('org-person-name')?.value || '').trim();
     const personEmail = (document.getElementById('org-person-email')?.value || '').trim();
     if (individual) {
-        if (!personName) return fail("Enter the person's name.");
         const personEmailError = validateLoginEmail(personEmail);
         if (personEmailError) return fail(personEmailError);
+        // An existing account keeps its own name; Name is asked only for a new one.
+        if (!findUserByEmail(personEmail) && !personName) return fail("Please enter the person's name.");
     }
     const now = new Date().toISOString();
     let renamed = 0;
