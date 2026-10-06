@@ -857,6 +857,7 @@
         <button data-screen="reset">Set a new password</button>
         <button data-screen="reset-invalid">Reset link invalid</button>
         <div class="mk-nav-group">Session</div>
+        <button data-screen="signin-notice">Sign in · notice</button>
         <button data-screen="logout-dirty">Log out with unsaved changes</button>
     </nav>
 
@@ -1130,6 +1131,25 @@
     </section>
 
     <!-- ── Logout with staged changes (SA 4.1.4) ── -->
+    <!-- ── Sign-in notice (SA 4.1.1) ── -->
+    <section class="mk-screen" id="signin-notice">
+        <div class="mk-caption">Back on the sign-in page after a password reset · "Your session has ended. Please sign in again." uses the same notice</div>
+        <div class="mk-login">
+            <div class="mk-lockup"><img src="../../images/logo-aiso.svg" alt="AISO" style="height:30px"><span>Workspace</span></div>
+            <div class="mk-card" style="max-width:480px;padding:2.5rem">
+                <div role="status" style="display:flex;gap:10px;align-items:flex-start;margin-bottom:18px;padding:10px 12px;border-radius:10px;background:#eef1ff;color:#1d1d1f;font-size:12.5px;line-height:1.5">
+                    <i class="ph ph-info" style="color:#1432E6;font-size:16px;margin-top:1px"></i>
+                    <span>Your password has been reset. Please sign in.</span>
+                </div>
+                <label class="field-label">Email</label><input class="input-field" placeholder="Enter your account email">
+                <div style="height:0.75rem"></div>
+                <label class="field-label">Password</label><input class="input-field" type="password" placeholder="Enter your password">
+                <button class="btn-primary" style="width:100%;justify-content:center;background:#1432E6;padding:0.7rem;margin-top:1rem" disabled>Enter Workspace</button>
+                <div style="text-align:center;margin-top:1rem"><a href="#" data-screen-link="forgot" class="mk-link">Forgot password?</a></div>
+            </div>
+        </div>
+    </section>
+
     <section class="mk-screen" id="logout-dirty">
         <div class="mk-caption">Logout while Parameter Center has staged changes · Super Admin</div>
         <div class="mk-stage"><div class="modal-card" style="margin:0 auto">
