@@ -145,9 +145,11 @@ let ROLES = [
 ];
 
 // One row per account × role. Robert holds roles in two organizations to demo
-// the one-to-many binding and the role switcher.
+// the one-to-many binding and the organization switcher.
 let ROLE_BINDINGS = [
     { id: 'rb-0001', user_id: 'u-tom',    role_id: 'r-mb-admin',  status: 'active', created_at: '2025-06-01T00:00:00.000Z' },
+    // Tom also holds Member in MegaBank: both roles apply at once (D71).
+    { id: 'rb-0001b', user_id: 'u-tom',   role_id: 'r-mb-member', status: 'active', created_at: '2026-10-16T00:00:00.000Z' },
     { id: 'rb-0002', user_id: 'u-amy',    role_id: 'r-mb-member', status: 'active', created_at: '2025-06-01T00:00:00.000Z' },
     { id: 'rb-0003', user_id: 'u-robert', role_id: 'r-gc-admin',  status: 'active', created_at: '2025-06-01T00:00:00.000Z' },
     { id: 'rb-0004', user_id: 'u-robert', role_id: 'r-mb-member', status: 'active', created_at: '2025-06-01T00:00:00.000Z' },

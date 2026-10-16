@@ -20,11 +20,11 @@ function activityModule(action) {
 }
 function logActivity(action, productName, detail = '', pid = null) {
     const ts = new Date().toISOString();
-    const role = activeRole();
+    const roles = activeRoleLabel();
     const entry = {
         action, productName, detail, timestamp: ts, module: activityModule(action),
         user: actingName() || 'System', org_id: activeOrgId(),
-        actor_role: role ? `${activeOrg()?.name || ''} · ${role.name}` : (currentUser?.is_super_admin ? 'Super Admin' : ''),
+        actor_role: roles ? `${activeOrg()?.name || ''} · ${roles}` : (currentUser?.is_super_admin ? 'Super Admin' : ''),
     };
     ACTIVITY_LOG.unshift(entry);
     // Retention is a Parameter Center setting in the real system; the
@@ -123,20 +123,36 @@ const PORTAL_PERMISSIONS = Object.freeze({
 });
 
 // ── Access context (docs/ORG_MANAGEMENT_PLAN.md) ──
-// Who is acting: the signed-in account plus the one role in effect. Grants are
-// never merged across roles — switching role is how the view changes.
+// Who is acting: the signed-in account plus the organization in effect. Every
+// role the person holds in that organization applies at once (their grants
+// are merged, D71); switching only moves between organizations.
 // The Super Admin holds no role and passes every check, but can view as any
-// member (bottom-right switch): that person's role grants and org then apply
+// member (bottom-right switch): that person's roles and org then apply
 // exactly, and person-level things like notifications are theirs.
-let activeBindingId = null;  // the regular account's role binding in effect
-let viewAsBindingId = null;  // Super Admin only: the member (user × role) being viewed as
+let activeBindingId = null;  // a binding in the organization in effect (its anchor)
+let viewAsBindingId = null;  // Super Admin only: a binding of the member being viewed as
 
 function activeBinding() {
     return ROLE_BINDINGS.find(b => b.id === (viewAsBindingId || activeBindingId)) || null;
 }
-function activeRole() {
-    const binding = activeBinding();
-    return binding ? ROLES.find(r => r.id === binding.role_id) || null : null;
+// Every usable binding the acting person holds in the organization in effect.
+function activeBindings() {
+    const anchor = activeBinding();
+    if (!anchor) return [];
+    const orgId = bindingParts(anchor).org?.id;
+    return usableBindings(anchor.user_id).filter(b => bindingParts(b).org?.id === orgId);
+}
+function activeRoles() { return activeBindings().map(b => ROLES.find(r => r.id === b.role_id)).filter(Boolean); }
+function activeRoleLabel() { return activeRoles().map(r => r.name).sort().join(', '); }
+// One entry per organization a person can act in, with every role held there.
+function usableOrgGroups(userId) {
+    const groups = new Map();
+    usableBindings(userId).forEach(b => {
+        const { role, org } = bindingParts(b);
+        if (!groups.has(org.id)) groups.set(org.id, { org, binding: b, roles: [] });
+        groups.get(org.id).roles.push(role);
+    });
+    return [...groups.values()].map(g => ({ ...g, roleNames: g.roles.map(r => r.name).sort().join(', ') }));
 }
 // The person acting: the viewed-as member, or the signed-in account. The
 // Super Admin in its own context belongs to no org, so it is nobody's colleague.
@@ -144,7 +160,7 @@ function actingUser() {
     if (viewAsBindingId) return USERS.find(u => u.id === activeBinding()?.user_id) || null;
     return currentUser?.is_super_admin ? null : currentUser;
 }
-function activeOrg() { const role = activeRole(); return role ? getOrgById(role.org_id) : null; }
+function activeOrg() { const b = activeBinding(); return b ? bindingParts(b).org : null; }
 function activeOrgId() { return activeOrg()?.id || null; }
 function isSuperAdminContext() { return !!currentUser?.is_super_admin && !viewAsBindingId; }
 function orgHasType(org, type) { return !!org?.types?.includes(type) && ENABLED_ORG_TYPES.includes(type); }
@@ -201,8 +217,7 @@ function effectivePermissions(role) {
 // Central permission boundary: every check in the app goes through here.
 function hasPermission(permission) {
     if (isSuperAdminContext()) return true;
-    const role = activeRole();
-    return !!role && effectivePermissions(role).includes(permission);
+    return activeRoles().some(role => effectivePermissions(role).includes(permission));
 }
 
 function canViewCompatibility() { return hasPermission(PORTAL_PERMISSIONS.COMPATIBILITY_READ); }
@@ -780,34 +795,34 @@ function login() {
         return;
     }
     if (user.is_super_admin) { enterApp(user); return; }
-    const bindings = usableBindings(user.id);
-    if (!bindings.length) {
+    const groups = usableOrgGroups(user.id);
+    if (!groups.length) {
         setLoginFormError('This account has no role yet. Ask your organization admin to assign one.');
         return;
     }
-    if (bindings.length === 1) { enterApp(user, bindings[0].id); return; }
-    showLoginRolePicker(user, bindings);
+    if (groups.length === 1) { enterApp(user, groups[0].binding.id); return; }
+    showLoginRolePicker(user, groups);
 }
 
-// More than one role: pick which one to sign in under. The sidebar account
-// menu switches later without signing in again.
-function showLoginRolePicker(user, bindings) {
+// Roles in more than one organization: pick which organization to work in.
+// The sidebar account menu switches later without signing in again.
+function showLoginRolePicker(user, groups) {
     const form = document.getElementById('login-form-panel');
     const picker = document.getElementById('login-role-picker');
     if (!form || !picker) return;
     form.style.display = 'none';
     picker.style.display = 'block';
     picker.innerHTML = `
-        <div style="font-size:1.05rem;font-weight:700;color:#1d1d1f">Choose a role</div>
-        <div style="font-size:13px;color:#86868b;margin:4px 0 16px">${esc(user.email)} holds ${bindings.length} roles. You can switch later from the account menu.</div>
+        <div style="font-size:1.05rem;font-weight:700;color:#1d1d1f">Choose an organization</div>
+        <div style="font-size:13px;color:#86868b;margin:4px 0 16px">${esc(user.email)} works in ${groups.length} organizations. You can switch later from the account menu.</div>
         <div style="display:flex;flex-direction:column;gap:8px">
-            ${bindings.map(b => {
-                const { role, org } = bindingParts(b);
-                return `<button type="button" onclick="pickLoginRole('${user.id}', '${b.id}')" class="login-role-option" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:#fff;cursor:pointer;text-align:left">
+            ${groups.map(g => {
+                const org = g.org;
+                return `<button type="button" onclick="pickLoginRole('${user.id}', '${g.binding.id}')" class="login-role-option" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:#fff;cursor:pointer;text-align:left">
                     <i class="ph ${orgHasType(org, 'OPERATOR') ? 'ph-shield' : 'ph-buildings'}" style="font-size:20px;color:#1432E6"></i>
                     <span style="flex:1;min-width:0">
                         <span style="display:block;font-size:13.5px;font-weight:600;color:#1d1d1f">${esc(org?.name || '')}</span>
-                        <span style="display:block;font-size:12px;color:#86868b">${esc(role?.name || '')}</span>
+                        <span style="display:block;font-size:12px;color:#86868b">${esc(g.roleNames)}</span>
                     </span>
                     <span class="badge ${orgHasType(org, 'OPERATOR') ? 'badge-blue' : 'badge-customer'}">${orgHasType(org, 'OPERATOR') ? 'Operator' : 'Customer'}</span>
                 </button>`;
@@ -870,20 +885,20 @@ function renderUserMenu() {
             ${row('ph-shield-check', 'Super Admin', 'Preview any role with View as, bottom right', true, '')}`;
         return;
     }
-    const bindings = usableBindings(currentUser.id);
-    dd.innerHTML = `<div style="font-size:10px;color:#c7c7cc;text-transform:uppercase;letter-spacing:0.06em;padding:6px 10px 4px">${bindings.length > 1 ? 'Switch role' : 'Role'}</div>
-        ${bindings.map(b => {
-            const { role, org } = bindingParts(b);
-            const active = b.id === activeBindingId;
-            return row(orgHasType(org, 'OPERATOR') ? 'ph-shield' : 'ph-buildings', org?.name || '', role?.name || '', active,
-                active || bindings.length < 2 ? '' : `switchRole('${b.id}')`);
+    const groups = usableOrgGroups(currentUser.id);
+    const here = activeOrgId();
+    dd.innerHTML = `<div style="font-size:10px;color:#c7c7cc;text-transform:uppercase;letter-spacing:0.06em;padding:6px 10px 4px">${groups.length > 1 ? 'Switch organization' : 'Organization'}</div>
+        ${groups.map(g => {
+            const active = g.org.id === here;
+            return row(orgHasType(g.org, 'OPERATOR') ? 'ph-shield' : 'ph-buildings', g.org.name, g.roleNames, active,
+                active || groups.length < 2 ? '' : `switchRole('${g.binding.id}')`);
         }).join('')}`;
 }
 
 function switchRole(bindingId) {
     if (!currentUser || !usableBindings(currentUser.id).some(b => b.id === bindingId)) return;
-    // Staged Parameter Center / Compatibility edits belong to the role that
-    // made them: switching asks first, the same way logging out does (SA V2 4.1.3).
+    // Staged Parameter Center / Compatibility edits belong to the organization
+    // that made them: switching asks first, the same way logging out does (SA 4.1.3).
     const dirty = getDirtyScope();
     if (dirty) {
         closeUserMenu();
@@ -899,8 +914,7 @@ function switchRole(bindingId) {
     buildNav();
     const allowed = visibleNavItems().map(n => n.key);
     navigate(allowed.includes(currentView) ? currentView : allowed[0]);
-    const { role, org } = bindingParts(ROLE_BINDINGS.find(b => b.id === bindingId));
-    showToast(`Switched to ${org?.name} · ${role?.name}`, 'info');
+    showToast(`Switched to ${activeOrg()?.name}`, 'info');
 }
 
 function visibleNavItems() {
@@ -919,9 +933,9 @@ function buildNav() {
 
 // The sidebar card shows whoever the desk is currently acting as.
 function renderSidebarUser() {
-    const role = activeRole();
+    const roles = activeRoleLabel();
     const name = actingName();
-    const label = role ? `${activeOrg()?.name || ''} · ${role.name}` : currentUser.label;
+    const label = roles ? `${activeOrg()?.name || ''} · ${roles}` : currentUser.label;
     document.getElementById('user-name').textContent = name;
     document.getElementById('user-role').textContent = viewAsBindingId ? `Viewing as · ${label}` : label;
     document.getElementById('user-avatar').textContent = getUserInitials(name);
@@ -4090,7 +4104,7 @@ function confirmLeavePending(scope, next) {
     const count = getPendingChanges(scope).length;
     const changes = `${count} unsaved change${count === 1 ? '' : 's'}`;
     const body = next?.logout ? `You have ${changes} in ${PENDING_SCOPE_LABEL[scope]}. Logging out discards them.`
-        : next?.switchTo ? `You have ${changes} in ${PENDING_SCOPE_LABEL[scope]}. Switching role discards them.`
+        : next?.switchTo ? `You have ${changes} in ${PENDING_SCOPE_LABEL[scope]}. Switching organization discards them.`
         : `You have ${changes} on this page. Leaving will discard ${count === 1 ? 'it' : 'them'}.`;
     const action = next?.logout ? "{ logout: true }" : next?.switchTo ? `{ switchTo: '${next.switchTo}' }` : `'${next}'`;
     showModal(`
@@ -4606,10 +4620,9 @@ function renderSettings() {
     const person = actingUser() || currentUser;
     document.getElementById('settings-name').value = person.name;
     document.getElementById('settings-email').value = person.email;
-    const role = activeRole();
     document.getElementById('settings-role').value = isSuperAdminContext()
         ? 'Super Admin (unrestricted cross-org access)'
-        : `${activeOrg()?.name || ''} · ${role?.name || ''}${viewAsBindingId ? ' (viewing as)' : ''}`;
+        : `${activeOrg()?.name || ''} · ${activeRoleLabel()}${viewAsBindingId ? ' (viewing as)' : ''}`;
 }
 
 function confirmResetDemoData() {
@@ -7746,7 +7759,7 @@ function toggleBindingStatus(orgId, bindingId) {
     if (!canSeeOrg(org) || !b || !canEditMembers()) return;
     const suspending = b.status !== 'suspended';
     if (suspending && wouldDropActiveBinding(b.user_id, [b.id])) {
-        showToast('You are signed in under this role. Switch to another role first.', 'error');
+        showToast(SELF_ROLE_MESSAGE, 'error');
         return;
     }
     if (suspending && leavesNoManager(org, { drop: [b.id] })) { showToast(LAST_MANAGER_MESSAGE, 'error'); return; }
@@ -7863,8 +7876,8 @@ function saveRole(orgId, roleId = null) {
     if (!permissions.length) errors.push(fieldErr('#role-perm-field', 'Please select Permissions.'));
     // Changing the role you are acting under would rewrite the floor beneath
     // this session; the Super Admin previewing it is unaffected.
-    const actingRole = !viewAsBindingId && activeRole();
-    if (role && actingRole && actingRole.id === role.id) errors.push(formErr('You are signed in under this role. Switch to another role first.'));
+    const holdsIt = !viewAsBindingId && role && activeRoles().some(r => r.id === role.id);
+    if (holdsIt) errors.push(formErr('You hold this role here. Ask another admin to change it.'));
     else if (role && permissions.length && leavesNoManager(org, { rolePerms: { roleId: role.id, permissions } })) errors.push(formErr(LAST_MANAGER_MESSAGE));
     if (showFormErrors(errors, 'role-error')) return;
     const now = new Date().toISOString();
@@ -8017,10 +8030,11 @@ function addMember(orgId) {
     showToast(`${existing ? existing.name : name} added to ${org.name}`);
 }
 
-// The signed-in account may not drop the role it is acting under: that
-// would pull the floor out from under the current session.
+// The signed-in account may not change a role it holds in the organization it
+// is working in: that would pull the floor out from under the current session.
+const SELF_ROLE_MESSAGE = 'You hold this role here. Ask another admin to change it.';
 function wouldDropActiveBinding(userId, bindingIds) {
-    return !viewAsBindingId && userId === currentUser?.id && bindingIds.includes(activeBindingId);
+    return !viewAsBindingId && userId === currentUser?.id && activeBindings().some(b => bindingIds.includes(b.id));
 }
 
 function showEditMemberModal(orgId, userId) {
@@ -8051,7 +8065,7 @@ function saveMemberRoles(orgId, userId) {
     const held = getOrgBindings(orgId).filter(b => b.user_id === userId);
     const dropped = held.filter(b => !wanted.includes(b.role_id));
     const addedRoleIds = wanted.filter(id => !held.some(b => b.role_id === id));
-    if (wouldDropActiveBinding(userId, dropped.map(b => b.id)) && showFormErrors([formErr('You are signed in under this role. Switch to another role first.')], 'member-error')) return;
+    if (wouldDropActiveBinding(userId, dropped.map(b => b.id)) && showFormErrors([formErr(SELF_ROLE_MESSAGE)], 'member-error')) return;
     if (!dropped.length && !addedRoleIds.length) { showOrgDetail(org.id, 'members'); return; }
     if (leavesNoManager(org, { drop: dropped.map(b => b.id) }) && showFormErrors([formErr(LAST_MANAGER_MESSAGE)], 'member-error')) return;
     const now = new Date().toISOString();
@@ -8073,7 +8087,7 @@ function confirmRemoveMember(orgId, userId) {
     if (!canSeeOrg(org) || !user || !canRemoveMembers()) return;
     const here = getOrgBindings(orgId).filter(b => b.user_id === userId);
     if (wouldDropActiveBinding(userId, here.map(b => b.id))) {
-        showToast('You are signed in under a role in this organization. Switch to another role first.', 'error');
+        showToast(SELF_ROLE_MESSAGE, 'error');
         return;
     }
     if (leavesNoManager(org, { drop: here.map(b => b.id) })) { showToast(LAST_MANAGER_MESSAGE, 'error'); return; }
@@ -8117,18 +8131,21 @@ function removeMember(orgId, userId) {
 let viewAsMenuOpen = false;
 
 // Members a demo can view as, grouped by org, for orgs whose type is enabled.
-// One entry per active role binding, so a person holding two roles appears
-// under each org they act in.
+// One entry per person per org, carrying every role they hold there (D71).
 function viewAsMemberGroups() {
     return ORGS
         .filter(org => org.status === 'active' && org.types.some(t => ENABLED_ORG_TYPES.includes(t)))
         .map(org => {
             const roleIds = new Set(ROLES.filter(r => r.org_id === org.id).map(r => r.id));
-            const members = ROLE_BINDINGS
-                .filter(b => b.status === 'active' && roleIds.has(b.role_id))
-                .map(b => ({ binding: b, user: USERS.find(u => u.id === b.user_id), role: ROLES.find(r => r.id === b.role_id) }))
-                .filter(m => m.user && m.user.status === 'active')
-                .sort((x, y) => x.user.name.localeCompare(y.user.name) || x.role.name.localeCompare(y.role.name));
+            const byUser = new Map();
+            ROLE_BINDINGS.filter(b => b.status === 'active' && roleIds.has(b.role_id)).forEach(b => {
+                const user = USERS.find(u => u.id === b.user_id);
+                if (!user || user.status !== 'active') return;
+                if (!byUser.has(user.id)) byUser.set(user.id, { binding: b, user, roles: [] });
+                byUser.get(user.id).roles.push(ROLES.find(r => r.id === b.role_id).name);
+            });
+            const members = [...byUser.values()].map(m => ({ ...m, roleNames: m.roles.sort().join(', ') }))
+                .sort((x, y) => x.user.name.localeCompare(y.user.name));
             return { org, members };
         })
         .filter(g => g.members.length);
@@ -8157,10 +8174,10 @@ document.addEventListener('click', e => {
 function enforceActiveSession() {
     if (!currentUser) return true;
     if (viewAsBindingId) {
-        const b = ROLE_BINDINGS.find(x => x.id === viewAsBindingId);
-        if (b && usableBindings(b.user_id).some(x => x.id === b.id) && USERS.find(u => u.id === b.user_id)?.status === 'active') return true;
+        const here = activeBindings();
+        if (here.length && USERS.find(u => u.id === here[0].user_id)?.status === 'active') { viewAsBindingId = here[0].id; return true; }
         setViewAs(null);
-        showToast('That member can no longer act under this role, so View as was reset.', 'info');
+        showToast('That member can no longer act in this organization, so View as was reset.', 'info');
         return false;
     }
     const user = USERS.find(u => u.id === currentUser.id);
@@ -8169,14 +8186,19 @@ function enforceActiveSession() {
         return false;
     }
     if (user.is_super_admin) return true;
-    const usable = usableBindings(user.id);
-    if (usable.some(b => b.id === activeBindingId)) return true;
-    endSession(usable.length ? '' : 'This account has no role yet. Ask your organization admin to assign one.', usable.length ? user : null, usable);
+    // Any usable role left in the organization keeps the session there.
+    const here = activeBindings();
+    if (here.length) {
+        if (!here.some(b => b.id === activeBindingId)) { activeBindingId = here[0].id; saveSession(); }
+        return true;
+    }
+    const groups = usableOrgGroups(user.id);
+    endSession(groups.length ? '' : 'This account has no role yet. Ask your organization admin to assign one.', groups.length ? user : null, groups);
     return false;
 }
-function endSession(message, user = null, bindings = []) {
+function endSession(message, user = null, groups = []) {
     logout();
-    if (user && bindings.length) showLoginRolePicker(user, bindings);
+    if (user && groups.length) showLoginRolePicker(user, groups);
     else setLoginFormError(message);
 }
 
@@ -8192,8 +8214,8 @@ function setViewAs(bindingId = null) {
     // on the first one the new perspective can see.
     const allowed = visibleNavItems().map(n => n.key);
     navigate(allowed.includes(currentView) ? currentView : allowed[0]);
-    const role = activeRole();
-    showToast(role ? `Viewing as ${actingName()} · ${activeOrg()?.name} ${role.name}` : 'Back to Super Admin view', 'info');
+    const roles = activeRoleLabel();
+    showToast(roles ? `Viewing as ${actingName()} · ${activeOrg()?.name} ${roles}` : 'Back to Super Admin view', 'info');
 }
 
 function renderViewAsSwitch() {
@@ -8201,7 +8223,9 @@ function renderViewAsSwitch() {
     if (!root) return;
     if (!currentUser?.is_super_admin) { root.innerHTML = ''; return; }
     const groups = viewAsMemberGroups();
-    const role = activeRole();
+    const roles = activeRoleLabel();
+    const viewed = activeBinding();
+    const viewing = m => !!viewAsBindingId && viewed?.user_id === m.user.id && activeOrgId() === bindingParts(m.binding).org?.id;
     const item = (id, icon, label, sub, active) => `
                 <button class="view-as-item ${active ? 'active' : ''}" onclick="setViewAs(${id ? `'${id}'` : 'null'})">
                     <i class="ph ${icon}" style="font-size:16px"></i>
@@ -8216,13 +8240,13 @@ function renderViewAsSwitch() {
                 ${item(null, 'ph-shield-check', 'Super Admin', '', !viewAsBindingId)}
                 ${groups.length ? groups.map(g => `
                 <div class="view-as-label">${esc(g.org.name)}</div>
-                ${g.members.map(m => item(m.binding.id, orgHasType(g.org, 'OPERATOR') ? 'ph-shield' : 'ph-user', m.user.name, m.role.name, viewAsBindingId === m.binding.id)).join('')}`).join('')
+                ${g.members.map(m => item(m.binding.id, orgHasType(g.org, 'OPERATOR') ? 'ph-shield' : 'ph-user', m.user.name, m.roleNames, viewing(m))).join('')}`).join('')
                 : '<div style="font-size:12px;color:#86868b;padding:6px 10px">No members yet. Add people under Organizations.</div>'}
-                <div style="font-size:11px;color:#86868b;padding:8px 10px 4px;border-top:1px solid var(--border-light);margin-top:4px">Acts as that person under that role: their permissions, organization and notifications. Roles with no members are not listed. No data is changed.</div>
+                <div style="font-size:11px;color:#86868b;padding:8px 10px 4px;border-top:1px solid var(--border-light);margin-top:4px">Acts as that person in that organization: all their roles there, their notifications. Roles with no members are not listed. No data is changed.</div>
             </div>` : ''}
             <button class="view-as-btn ${isCustomerView() ? 'customer' : ''}" onclick="toggleViewAsMenu(event)" title="Switch perspective">
                 <i class="ph ${viewAsBindingId ? 'ph-user' : 'ph-eye'}" style="font-size:15px"></i>
-                <span>${role ? `Viewing as ${esc(actingName())} · ${esc(activeOrg()?.name || '')} ${esc(role.name)}` : 'Viewing as Super Admin'}</span>
+                <span>${roles ? `Viewing as ${esc(actingName())} · ${esc(activeOrg()?.name || '')} ${esc(roles)}` : 'Viewing as Super Admin'}</span>
                 <i class="ph ${viewAsMenuOpen ? 'ph-caret-down' : 'ph-caret-up'}" style="font-size:12px;opacity:.7"></i>
             </button>
         </div>`;

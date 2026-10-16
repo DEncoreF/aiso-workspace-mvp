@@ -14,7 +14,8 @@ const Store = (function () {
     // v4.5: Organization Management — ORGS reshaped (types[], members moved
     //       out) and persisted, plus USERS / ROLES / ROLE_BINDINGS.
     // v4.6: account split out of organization (new grant in the type registry).
-    const VERSION = 9;
+    // v4.7: roles in one organization merge; seed gives Tom a second role.
+    const VERSION = 10;
     const IMG_MAX_WIDTH = 800;
     const IMG_JPEG_QUALITY = 0.8;
 
