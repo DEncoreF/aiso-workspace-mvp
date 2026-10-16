@@ -979,7 +979,18 @@
                         <tbody id="orgs-tbody"></tbody>
                     </table>
                 </div>
-                <div id="accounts-table-wrap" class="overflow-x-auto border-t border-gray-100" style="display:none">
+                <div id="org-types-wrap" style="display:none"></div>
+            </div>
+
+            <!-- ====== ACCOUNTS ====== -->
+            <div id="view-accounts" class="view hidden">
+                <div class="filter-bar">
+                    <div class="filter-search">
+                        <i class="ph ph-magnifying-glass"></i>
+                        <input id="account-search" type="text" placeholder="Search name or email..." oninput="renderAccounts()">
+                    </div>
+                </div>
+                <div id="accounts-table-wrap" class="overflow-x-auto border-t border-gray-100">
                     <table class="data-table w-full" style="table-layout:fixed">
                         <thead><tr>
                             <th style="width:28%">Account</th>
@@ -990,7 +1001,6 @@
                         <tbody id="accounts-tbody"></tbody>
                     </table>
                 </div>
-                <div id="org-types-wrap" style="display:none"></div>
             </div>
 
             <!-- ====== SERVICE DESK ====== -->

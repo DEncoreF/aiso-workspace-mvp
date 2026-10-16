@@ -29,6 +29,7 @@ const PERMISSION_MODULES = [
     { key: 'ticket',        label: 'Service Desk' },
     { key: 'asset',         label: 'Asset Registry' },
     { key: 'organization',  label: 'Organizations' },
+    { key: 'account',       label: 'Accounts' },
     { key: 'org_type',      label: 'Organization Types' },
     { key: 'activity_log',  label: 'Activity Log' },
 ];
@@ -42,7 +43,7 @@ const PERMISSION_ACTIONS = ['c', 'r', 'u', 'd'];
 const ORG_TYPE_CAPABILITIES = {
     OPERATOR: {
         sw_product: 'crud', hw_product: 'crud', compatibility: 'cru', parameter: 'crud',
-        order: 'crud', ticket: 'cru', asset: 'crud', organization: 'crud', org_type: 'ru', activity_log: 'r',
+        order: 'crud', ticket: 'cru', asset: 'crud', organization: 'crud', account: 'ru', org_type: 'ru', activity_log: 'r',
     },
     // CUSTOMER resolves through CUSTOMER_TYPE_CAPABILITIES below.
     VENDOR: {}, // deferred — see the plan's Deferred section
@@ -830,6 +831,9 @@ const NAV_ITEMS = [
     { key: 'orders', icon: 'ph-shopping-cart', label: 'Orders', permission: 'order.r' },
     { key: 'service-desk', icon: 'ph-headset', label: 'Service Desk', permission: 'ticket.r' },
     { key: 'organizations', icon: 'ph-buildings', label: 'Organizations', permission: 'organization.r' },
+    // Accounts span organizations, so they get their own grant and page; no
+    // customer type can hold account.* (SA V2 D66).
+    { key: 'accounts', icon: 'ph-user-circle', label: 'Accounts', permission: 'account.r' },
     // Asset Registry (product registration) is hidden for now: the MVP4 plan
     // builds Order Management first, then Organization Management. Restore by
     // uncommenting this entry — the view and its code are untouched.

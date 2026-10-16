@@ -189,8 +189,12 @@ function orgCapabilities(org) {
 }
 // A role's grants, clipped to its org's ceiling — so narrowing an org's type
 // can never leave a role holding more than the type allows.
+// An individual customer's Owner always holds the whole ceiling: there is no
+// screen to edit that role, so it follows the type in both directions (SA V2 2.3).
 function effectivePermissions(role) {
-    const ceiling = orgCapabilities(getOrgById(role?.org_id));
+    const org = getOrgById(role?.org_id);
+    const ceiling = orgCapabilities(org);
+    if (role?.name === 'Owner' && isIndividualOrg(org) && !org.customer_type_inferred) return [...ceiling];
     return (role?.permissions || []).filter(p => ceiling.has(p));
 }
 
@@ -978,6 +982,10 @@ function navigate(key) {
                 : 'Your organization, its members and roles.',
             action: canCreateOrgs() ? `<div style="white-space:nowrap"><button onclick="showOrgModal()" class="btn-primary"><i class="ph ph-plus"></i> New Organization</button></div>` : '',
         },
+        'accounts': {
+            title: 'Accounts',
+            subtitle: 'Every account and the organizations it holds roles in. Accounts span organizations, so this list is the desk\'s.',
+        },
         'compatibility': { title: 'Compatibility Mapping', subtitle: 'Manage which published hardware products can be paired with each published software product. Edits are staged until you save them.' },
         'param-center': { title: 'Parameter Center', subtitle: hasPermission(PORTAL_PERMISSIONS.PARAMETER_UPDATE) ? 'System-level parameters. Edits are staged until you save them.' : 'System-level parameters. Your role can view them but not save changes.' },
         // Clearing the shared log is Super Admin only; no role grant reaches it.
@@ -993,6 +1001,7 @@ function navigate(key) {
     else if (key === 'service-desk') renderServiceDesk();
     else if (key === 'assets') renderAssets();
     else if (key === 'organizations') renderOrganizations();
+    else if (key === 'accounts') renderAccounts();
     else if (key === 'compatibility') renderCompatibilityCenter();
     else if (key === 'param-center') renderParamCenter();
     else if (key === 'activity-log') renderActivityLog();
@@ -6982,8 +6991,6 @@ function cancelOrder(id) {
 // ═══════════════════════════════════════════════════════════════════
 
 let orgDetailTab = 'profile';
-// Accounts span organizations, so the tab is the desk's alone: a customer
-// admin manages people through its own org's Members tab.
 let orgPageTab = 'orgs';
 
 function isManagedOrg(org) { return (org?.types || []).some(t => ENABLED_ORG_TYPES.includes(t)); }
@@ -7059,54 +7066,42 @@ function getFilteredOrgs() {
     }).sort((a, b) => Number(orgHasType(b, 'OPERATOR')) - Number(orgHasType(a, 'OPERATOR')) || a.name.localeCompare(b.name));
 }
 
-function canSeeAccountsTab() { return isOperatorView() && hasPermission('organization.r'); }
 function canSeeTypesTab() { return isOperatorView() && hasPermission('org_type.r'); }
 function canEditTypes() { return isOperatorView() && hasPermission('org_type.u'); }
 function setOrgPageTab(tab) {
-    orgPageTab = tab === 'accounts' && canSeeAccountsTab() ? 'accounts'
-        : tab === 'types' && canSeeTypesTab() ? 'types' : 'orgs';
+    orgPageTab = tab === 'types' && canSeeTypesTab() ? 'types' : 'orgs';
     renderOrganizations();
 }
 
 function renderOrganizations() {
-    if (orgPageTab === 'accounts' && !canSeeAccountsTab()) orgPageTab = 'orgs';
     if (orgPageTab === 'types' && !canSeeTypesTab()) orgPageTab = 'orgs';
-    const onAccounts = orgPageTab === 'accounts';
     const onTypes = orgPageTab === 'types';
     const pageTabs = document.getElementById('org-page-tabs');
     if (pageTabs) {
-        const tabsShown = canSeeAccountsTab() || canSeeTypesTab();
+        const tabsShown = canSeeTypesTab();
         pageTabs.style.display = tabsShown ? '' : 'none';
         pageTabs.innerHTML = tabsShown ? `
             <button class="page-tab ${orgPageTab === 'orgs' ? 'active' : ''}" onclick="setOrgPageTab('orgs')">Organizations (${getScopedOrgs().length})</button>
-            ${canSeeAccountsTab() ? `<button class="page-tab ${onAccounts ? 'active' : ''}" onclick="setOrgPageTab('accounts')">Accounts (${USERS.length})</button>` : ''}
             ${canSeeTypesTab() ? `<button class="page-tab ${onTypes ? 'active' : ''}" onclick="setOrgPageTab('types')">Organization Types (${ORG_TYPE_REGISTRY.length})</button>` : ''}` : '';
     }
     const orgTable = document.getElementById('orgs-tbody')?.closest('.overflow-x-auto');
-    const accountsTable = document.getElementById('accounts-table-wrap');
     const typesWrap = document.getElementById('org-types-wrap');
     const filterBar = document.querySelector('#view-organizations .filter-bar');
     if (orgTable) orgTable.style.display = orgPageTab === 'orgs' ? '' : 'none';
-    if (accountsTable) accountsTable.style.display = onAccounts ? '' : 'none';
     if (typesWrap) typesWrap.style.display = onTypes ? '' : 'none';
     if (filterBar) filterBar.style.display = onTypes ? 'none' : '';
-    const search = document.getElementById('org-search');
-    if (search) search.placeholder = onAccounts ? 'Search name or email...' : 'Search name or contact email...';
     // The header and the New Organization button describe the open tab.
     if (currentView === 'organizations') {
         setPageHeader('Organizations',
             onTypes
                 ? 'What each organization type can be granted. Narrow a ceiling here; locked cells are never available to that type.'
-            : onAccounts
-                ? 'Every account and the organizations it holds roles in. Accounts span organizations, so this list is the desk\'s.'
-                : (isOperatorView()
+            : (isOperatorView()
                     ? 'AISO and customer organizations, their members and roles. Each type sets what its roles can be granted.'
                     : 'Your organization, its members and roles.'),
             orgPageTab === 'orgs' && canCreateOrgs() ? `<div style="white-space:nowrap"><button onclick="showOrgModal()" class="btn-primary"><i class="ph ph-plus"></i> New Organization</button></div>` : '');
     }
-    // The type filter belongs to the organization list, not to accounts.
     const tabs = document.getElementById('org-filter-tabs');
-    if (tabs) tabs.style.display = isOperatorView() && !onAccounts ? '' : 'none';
+    if (tabs) tabs.style.display = isOperatorView() ? '' : 'none';
     const inferredTab = document.getElementById('org-filter-inferred');
     const inferredCount = getScopedOrgs().filter(o => o.customer_type_inferred).length;
     if (inferredTab) {
@@ -7114,7 +7109,6 @@ function renderOrganizations() {
         inferredTab.textContent = `Type to confirm (${inferredCount})`;
         if (!inferredCount && document.getElementById('org-filter-type')?.value === 'INFERRED') { setOrgFilter(''); return; }
     }
-    if (onAccounts) { renderAccounts(); return; }
     if (onTypes) { renderOrgTypes(); return; }
     const list = getFilteredOrgs();
     const searching = !!(document.getElementById('org-search')?.value || '').trim();
@@ -7241,7 +7235,7 @@ function confirmSaveOrgTypes() {
     showModal(`
         <div style="padding:26px 28px">
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Save organization types?</h3>
-            <p style="font-size:13px;color:#86868b;margin:0 0 12px;line-height:1.6">A narrower ceiling applies at once to every role in those organizations; the roles themselves are not rewritten. A wider ceiling is not added to any role.</p>
+            <p style="font-size:13px;color:#86868b;margin:0 0 12px;line-height:1.6">A narrower ceiling applies at once to every role in those organizations; the roles themselves are not rewritten. A wider ceiling is not added to any role, except the Owner of an individual customer, which always holds the full ceiling.</p>
             ${changes.map(c => {
                 const u = orgTypeUsage(c.entry.key);
                 return `<div style="border-top:1px solid #f5f5f7;padding:9px 0;font-size:12.5px">
@@ -7278,9 +7272,12 @@ function saveOrgTypes() {
     showToast('Organization types saved');
 }
 
-// ── Accounts (desk only) ──
+// ── Accounts ──
 // One row per account, showing every organization and role it holds. This is
 // the only place the one-account-many-organizations shape is visible at once.
+// Its own page and grant (account.*): accounts span organizations, so no
+// customer type's ceiling offers it, and a customer admin manages people
+// through its own org's Members tab.
 
 function getUserBindings(userId) {
     return ROLE_BINDINGS.filter(b => b.user_id === userId).map(b => {
@@ -7306,17 +7303,17 @@ function accountOrgChips(held) {
 }
 
 function getFilteredAccounts() {
-    const q = (document.getElementById('org-search')?.value || '').trim().toLowerCase();
+    const q = (document.getElementById('account-search')?.value || '').trim().toLowerCase();
     return USERS
         .filter(u => !q || [u.name, u.email].some(v => (v || '').toLowerCase().includes(q)))
         .sort((a, b) => Number(b.is_super_admin) - Number(a.is_super_admin) || a.name.localeCompare(b.name));
 }
 
-function canManageAccounts() { return isOperatorView() && hasPermission('organization.u'); }
+function canManageAccounts() { return hasPermission('account.u'); }
 
 function renderAccounts() {
     const list = getFilteredAccounts();
-    const searching = !!(document.getElementById('org-search')?.value || '').trim();
+    const searching = !!(document.getElementById('account-search')?.value || '').trim();
     document.getElementById('accounts-tbody').innerHTML = list.length ? list.map(user => {
         const held = getUserBindings(user.id);
         const disabled = user.status !== 'active';
@@ -7372,7 +7369,7 @@ function toggleAccountStatus(userId) {
     });
     if (!ok) return;
     closeModal();
-    renderOrganizations();
+    renderAccounts();
     showToast(`${user.name} ${next === 'active' ? 're-enabled' : 'disabled'}`);
 }
 
@@ -7520,8 +7517,8 @@ function saveOrg(orgId = null) {
             // An individual customer arrives complete: the org, its one role
             // and the person's account are the same act.
             if (individual) {
-                // The Owner holds everything the ceiling allows at creation and
-                // keeps that set; a later ceiling change does not reach it (SA V2 D28).
+                // The Owner's grants follow the ceiling (effectivePermissions);
+                // the stored set is only a snapshot (SA V2 2.3).
                 const role = { id: `r-${Date.now()}`, org_id: record.id, name: 'Owner', description: 'The individual customer themselves.',
                     permissions: [...orgCapabilities(record)], created_at: now, updated_at: now };
                 ROLES.push(role);
@@ -7551,7 +7548,7 @@ function saveOrg(orgId = null) {
 
 // An inferred subtype stays open to correction until the desk confirms it
 // (SA V2 D17). Turning an org into an individual leaves it one Owner role,
-// held by its only member, with the ceiling fixed at this moment (D28).
+// held by its only member, whose grants follow the ceiling (SA V2 2.3).
 function confirmOrgType(orgId) {
     const org = getOrgById(orgId);
     if (!org?.customer_type_inferred || !canEditOrgProfile()) return;
@@ -7751,9 +7748,9 @@ function rolePermissionMatrix(org, checked = []) {
     return `<table class="data-table w-full" style="margin-top:6px"><thead><tr><th>Module</th>${head}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+// Individual customers have no Roles tab, so only these two ever show (SA V2 4.3.4).
 function orgTypeCeilingHint(org) {
-    if (orgHasType(org, 'OPERATOR')) return 'Not available to any role.';
-    return isIndividualOrg(org) ? 'An individual customer cannot be granted this.' : 'A customer organization cannot be granted this.';
+    return orgHasType(org, 'OPERATOR') ? 'Not available to any role.' : 'A customer organization cannot be granted this.';
 }
 
 // Being able to change something without being able to see it is not a state
