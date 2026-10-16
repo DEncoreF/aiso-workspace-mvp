@@ -7006,13 +7006,28 @@ function orgTypeBadge(org) {
 function orgTypeBadgeCustomer(org) {
     return `<span style="display:inline-flex;gap:4px;white-space:nowrap"><span class="badge badge-customer">Customer</span><span class="badge badge-zinc">${isIndividualOrg(org) ? 'Individual' : 'Enterprise'}</span></span>`;
 }
-// An enterprise customer nobody can sign in to yet — only orgs carried over
-// from old orders end up here, since creating one names its first admin (D67).
-function orgNeedsAdmin(org) {
-    return orgHasType(org, 'CUSTOMER') && !isIndividualOrg(org) && !org.customer_type_inferred && !getOrgMembers(org.id).length;
+// An enterprise customer must keep someone who can manage its members:
+// an active member, on an active account, whose role holds organization.u
+// (D68). `drop` leaves bindings out and `rolePerms` swaps one role's grants,
+// so a change can be checked before it is made.
+function guardsOrgManagers(org) { return orgHasType(org, 'CUSTOMER') && !isIndividualOrg(org) && !org.customer_type_inferred; }
+function orgManagerIds(org, { drop = [], rolePerms = null } = {}) {
+    return new Set(getOrgBindings(org.id).filter(b => b.status === 'active' && !drop.includes(b.id)).filter(b => {
+        if (USERS.find(u => u.id === b.user_id)?.status !== 'active') return false;
+        const role = ROLES.find(r => r.id === b.role_id);
+        const grants = rolePerms && rolePerms.roleId === role?.id ? effectivePermissions({ ...role, permissions: rolePerms.permissions }) : effectivePermissions(role);
+        return grants.includes('organization.u');
+    }).map(b => b.user_id));
 }
-function orgNoAdminBadge(org) {
-    return orgNeedsAdmin(org) ? '<span class="badge badge-amber" title="Nobody can sign in to this organization. Invite its first admin from Members.">No admin yet</span>' : '';
+// Blocks only a change that takes the last manager away; an org that already
+// has none (shown as No member yet) is not held up further.
+function leavesNoManager(org, change) {
+    return guardsOrgManagers(org) && orgManagerIds(org).size > 0 && orgManagerIds(org, change).size === 0;
+}
+const LAST_MANAGER_MESSAGE = 'This would leave nobody here who can manage members. Give another member that access first.';
+function orgNeedsManager(org) { return guardsOrgManagers(org) && orgManagerIds(org).size === 0; }
+function orgNoManagerBadge(org) {
+    return orgNeedsManager(org) ? '<span class="badge badge-amber" title="Nobody here can manage members. Invite an admin from Members.">No member yet</span>' : '';
 }
 function orgStatusBadge(org) {
     return org.status === 'active' ? '<span class="badge badge-green">Active</span>' : '<span class="badge badge-zinc">Inactive</span>';
@@ -7128,7 +7143,7 @@ function renderOrganizations() {
         <tr class="cursor-pointer" onclick="if(!event.target.closest('button'))showOrgDetail('${org.id}')">
             <td><span style="font-weight:600;font-size:13px;color:#1d1d1f">${esc(org.name)}</span>
                 ${org.contact_email ? `<div style="font-size:11.5px;color:#86868b;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(org.contact_email)}">${esc(org.contact_email)}</div>` : ''}</td>
-            <td>${orgTypeBadge(org)}${orgNeedsAdmin(org) ? `<div style="margin-top:4px">${orgNoAdminBadge(org)}</div>` : ''}</td>
+            <td>${orgTypeBadge(org)}${orgNeedsManager(org) ? `<div style="margin-top:4px">${orgNoManagerBadge(org)}</div>` : ''}</td>
             <td><span style="font-size:13px;color:#86868b">${members}</span></td>
             <td><span style="font-size:13px;color:#86868b">${roles}</span></td>
             <td><span style="font-size:13px;color:#86868b">${orders === null ? '—' : orders}</span></td>
@@ -7649,7 +7664,7 @@ function showOrgDetail(orgId, tab = null) {
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
                 <div>
                     <div style="font-size:18px;font-weight:700;color:#1d1d1f">${esc(org.name)}</div>
-                    <div style="display:flex;gap:6px;margin-top:6px">${orgTypeBadge(org)}${orgStatusBadge(org)}${orgNoAdminBadge(org)}</div>
+                    <div style="display:flex;gap:6px;margin-top:6px">${orgTypeBadge(org)}${orgStatusBadge(org)}${orgNoManagerBadge(org)}</div>
                 </div>
                 ${canEditOrgProfile() ? `<button onclick="showOrgModal('${org.id}')" class="btn-secondary text-xs"><i class="ph ph-pencil-simple"></i> Edit</button>` : ''}
             </div>
@@ -7734,6 +7749,7 @@ function toggleBindingStatus(orgId, bindingId) {
         showToast('You are signed in under this role. Switch to another role first.', 'error');
         return;
     }
+    if (suspending && leavesNoManager(org, { drop: [b.id] })) { showToast(LAST_MANAGER_MESSAGE, 'error'); return; }
     const user = USERS.find(u => u.id === b.user_id);
     const role = ROLES.find(r => r.id === b.role_id);
     const ok = commitPortalMutation(() => {
@@ -7849,6 +7865,7 @@ function saveRole(orgId, roleId = null) {
     // this session; the Super Admin previewing it is unaffected.
     const actingRole = !viewAsBindingId && activeRole();
     if (role && actingRole && actingRole.id === role.id) return fail('This is the role you are signed in under. Switch to another role before editing it.');
+    if (role && leavesNoManager(org, { rolePerms: { roleId: role.id, permissions } })) return fail(LAST_MANAGER_MESSAGE);
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
         if (role) Object.assign(role, { name, description, permissions, updated_at: now });
@@ -8035,6 +8052,7 @@ function saveMemberRoles(orgId, userId) {
     const addedRoleIds = wanted.filter(id => !held.some(b => b.role_id === id));
     if (wouldDropActiveBinding(userId, dropped.map(b => b.id))) return fail('You are signed in under a role you are removing. Switch to another role first.');
     if (!dropped.length && !addedRoleIds.length) { showOrgDetail(org.id, 'members'); return; }
+    if (leavesNoManager(org, { drop: dropped.map(b => b.id) })) return fail(LAST_MANAGER_MESSAGE);
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
         const droppedIds = new Set(dropped.map(b => b.id));
@@ -8057,6 +8075,7 @@ function confirmRemoveMember(orgId, userId) {
         showToast('You are signed in under a role in this organization. Switch to another role first.', 'error');
         return;
     }
+    if (leavesNoManager(org, { drop: here.map(b => b.id) })) { showToast(LAST_MANAGER_MESSAGE, 'error'); return; }
     const remaining = ROLE_BINDINGS.filter(b => b.user_id === userId).length - here.length;
     showModal(`
         <div style="padding:26px 28px">
@@ -8076,6 +8095,7 @@ function removeMember(orgId, userId) {
     if (!canSeeOrg(org) || !user || !canRemoveMembers()) return;
     const ids = new Set(getOrgBindings(orgId).filter(b => b.user_id === userId).map(b => b.id));
     if (wouldDropActiveBinding(userId, [...ids])) return;
+    if (leavesNoManager(org, { drop: [...ids] })) return;
     const ok = commitPortalMutation(() => {
         ROLE_BINDINGS = ROLE_BINDINGS.filter(b => !ids.has(b.id));
         logActivity('Member removed', org.name, user.email);
