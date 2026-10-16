@@ -7453,7 +7453,6 @@ function showOrgModal(orgId = null, { fromOrderDraft = false } = {}) {
     if (org ? !canEditOrgProfile() : !canCreateOrgs()) return;
     orgModalFromOrderDraft = !org && fromOrderDraft;
     const isOperator = orgHasType(org, 'OPERATOR');
-    const canChangeToIndividual = !!org && orgHasType(org, 'CUSTOMER') && !isIndividualOrg(org);
     showModal(`
         <div style="padding:26px 28px">
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 18px">${org ? `Edit ${esc(org.name)}` : 'New Organization'}</h3>
@@ -7465,17 +7464,13 @@ function showOrgModal(orgId = null, { fromOrderDraft = false } = {}) {
                 </div>
                 <div>
                     <label class="field-label" for="org-type">Type <span class="req">*</span></label>
-                    ${canChangeToIndividual ? `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:4px 0">${orgTypeBadge(org)}
-                        <button type="button" onclick="confirmChangeToIndividual('${org.id}')" class="btn-secondary text-xs" style="white-space:nowrap"><i class="ph ph-user"></i> Change to individual</button>
-                    </div>
-                    <div class="field-hint">Set up as an enterprise by mistake? Change it to an individual customer. An individual cannot be changed back.</div>`
-                    : org ? `<div style="padding:4px 0">${orgTypeBadge(org)}</div>
+                    ${org ? `<div style="padding:4px 0">${orgTypeBadge(org)}</div>
                     <div class="field-hint">Fixed after creation: the type sets what any role in this organization can be granted.</div>`
                     : `<select id="org-type" class="input-field" onchange="onOrgTypeChange()">
                         ${ORG_TYPE_REGISTRY.filter(e => !(fromOrderDraft && e.type === 'OPERATOR'))
                             .map(e => `<option value="${e.key}">${esc(e.label)}</option>`).join('')}
                     </select>
-                    <div class="field-hint">An individual customer is one person: no members, no roles to manage. Only an enterprise can be changed to individual later.</div>`}
+                    <div class="field-hint">Fixed after creation. An individual customer is one person: no members, no roles to manage.</div>`}
                 </div>
                 <div id="org-person-wrap" style="display:none;border-top:1px solid var(--border-light);padding-top:14px">
                     <div id="org-person-title" class="field-label" style="margin-bottom:8px">The person <span class="req">*</span></div>
@@ -7647,54 +7642,6 @@ function saveOrg(orgId = null) {
         showOrderModal(orderDraft.id || null, { resume: true });
     } else closeModal();
     showToast(`${name} ${org ? 'saved' : 'created'}`);
-}
-
-// An enterprise set up by mistake can become an individual customer, never
-// the reverse (D69). It must be down to one person; its roles collapse into
-// one Owner held by that person, whose grants follow the ceiling (SA 2.3).
-function changeToIndividualBlock(org) {
-    const members = getOrgMembers(org.id);
-    return members.length > 1 ? `An individual customer is one person. ${org.name} has ${members.length} members; remove all but one first.` : '';
-}
-function confirmChangeToIndividual(orgId) {
-    const org = getOrgById(orgId);
-    if (!org || !orgHasType(org, 'CUSTOMER') || isIndividualOrg(org) || !canEditOrgProfile()) return;
-    const blocked = changeToIndividualBlock(org);
-    if (blocked) { showToast(blocked, 'error'); return; }
-    const person = getOrgMembers(org.id)[0]?.user;
-    showModal(`
-        <div style="padding:26px 28px">
-            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Change ${esc(org.name)} to an individual customer?</h3>
-            <p style="font-size:13px;color:#86868b;margin:0 0 12px;line-height:1.6">${person
-                ? `Its roles are replaced by one Owner role held by ${esc(person.name)}. An individual cannot be changed back to an enterprise.`
-                : 'Its roles are replaced by one Owner role. An individual cannot be changed back to an enterprise.'}</p>
-            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
-                <button onclick="showOrgModal('${org.id}')" class="btn-secondary">Cancel</button>
-                <button onclick="changeToIndividual('${org.id}')" class="btn-primary"><i class="ph ph-user"></i> Change type</button>
-            </div>
-        </div>`);
-}
-function changeToIndividual(orgId) {
-    const org = getOrgById(orgId);
-    if (!org || !orgHasType(org, 'CUSTOMER') || isIndividualOrg(org) || !canEditOrgProfile() || changeToIndividualBlock(org)) return;
-    const now = new Date().toISOString();
-    const ok = commitPortalMutation(() => {
-        const roleIds = new Set(getOrgRoles(org.id).map(r => r.id));
-        const kept = ROLE_BINDINGS.find(b => roleIds.has(b.role_id));
-        ROLE_BINDINGS = ROLE_BINDINGS.filter(b => !roleIds.has(b.role_id));
-        ROLES = ROLES.filter(r => !roleIds.has(r.id));
-        org.customer_type = 'INDIVIDUAL';
-        const owner = { id: `r-${Date.now()}`, org_id: org.id, name: 'Owner', description: 'The individual customer themselves.',
-            permissions: [...orgCapabilities(org)], created_at: now, updated_at: now };
-        ROLES.push(owner);
-        if (kept) ROLE_BINDINGS.push({ ...kept, id: `rb-${Date.now()}`, role_id: owner.id, status: 'active', created_at: now });
-        org.updated_at = now;
-        logActivity('Organization type changed', org.name, 'Customer · Enterprise → Customer · Individual');
-    });
-    if (!ok) return;
-    closeModal();
-    renderOrganizations();
-    showToast(`${org.name} changed to an individual customer`);
 }
 
 // ── Detail ──
