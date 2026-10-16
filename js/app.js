@@ -7006,6 +7006,14 @@ function orgTypeBadge(org) {
 function orgTypeBadgeCustomer(org) {
     return `<span style="display:inline-flex;gap:4px;white-space:nowrap"><span class="badge badge-customer">Customer</span><span class="badge badge-zinc">${isIndividualOrg(org) ? 'Individual' : 'Enterprise'}</span></span>`;
 }
+// An enterprise customer nobody can sign in to yet — only orgs carried over
+// from old orders end up here, since creating one names its first admin (D67).
+function orgNeedsAdmin(org) {
+    return orgHasType(org, 'CUSTOMER') && !isIndividualOrg(org) && !org.customer_type_inferred && !getOrgMembers(org.id).length;
+}
+function orgNoAdminBadge(org) {
+    return orgNeedsAdmin(org) ? '<span class="badge badge-amber" title="Nobody can sign in to this organization. Invite its first admin from Members.">No admin yet</span>' : '';
+}
 function orgStatusBadge(org) {
     return org.status === 'active' ? '<span class="badge badge-green">Active</span>' : '<span class="badge badge-zinc">Inactive</span>';
 }
@@ -7120,7 +7128,7 @@ function renderOrganizations() {
         <tr class="cursor-pointer" onclick="if(!event.target.closest('button'))showOrgDetail('${org.id}')">
             <td><span style="font-weight:600;font-size:13px;color:#1d1d1f">${esc(org.name)}</span>
                 ${org.contact_email ? `<div style="font-size:11.5px;color:#86868b;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(org.contact_email)}">${esc(org.contact_email)}</div>` : ''}</td>
-            <td>${orgTypeBadge(org)}</td>
+            <td>${orgTypeBadge(org)}${orgNeedsAdmin(org) ? `<div style="margin-top:4px">${orgNoAdminBadge(org)}</div>` : ''}</td>
             <td><span style="font-size:13px;color:#86868b">${members}</span></td>
             <td><span style="font-size:13px;color:#86868b">${roles}</span></td>
             <td><span style="font-size:13px;color:#86868b">${orders === null ? '—' : orders}</span></td>
@@ -7410,7 +7418,8 @@ function showOrgModal(orgId = null, { fromOrderDraft = false } = {}) {
                     <div class="field-hint">Fixed after creation. An individual customer is one person: no members, no roles to manage.</div>`}
                 </div>
                 <div id="org-person-wrap" style="display:none;border-top:1px solid var(--border-light);padding-top:14px">
-                    <div class="field-label" style="margin-bottom:8px">The person <span class="req">*</span></div>
+                    <div id="org-person-title" class="field-label" style="margin-bottom:8px">The person <span class="req">*</span></div>
+                    <div id="org-person-note" class="field-hint" style="margin:-4px 0 10px"></div>
                     <label class="field-label" for="org-person-email">Email</label>
                     <input id="org-person-email" class="input-field" type="email" maxlength="100" autocomplete="off" placeholder="name@example.com" onblur="onOrgPersonEmailBlur()">
                     <div id="org-person-hint" class="field-hint"></div>
@@ -7443,6 +7452,7 @@ function showOrgModal(orgId = null, { fromOrderDraft = false } = {}) {
                 <button onclick="saveOrg(${org ? `'${org.id}'` : 'null'})" class="btn-primary"><i class="ph ph-check"></i> ${org ? 'Save' : 'Create'}</button>
             </div>
         </div>`, 'md');
+    if (!org) onOrgTypeChange();
     document.getElementById('org-name')?.focus();
 }
 
@@ -7464,9 +7474,21 @@ function onOrgPersonEmailBlur() {
         : 'No account uses this email. An invitation to set one up will be sent; the account stays Not activated until then.';
 }
 
+// A customer arrives with someone who can sign in: an individual is that
+// person; an enterprise names its first admin, who invites the rest of the
+// team (SA V2 4.3.2, D67).
 function onOrgTypeChange() {
+    const choice = document.getElementById('org-type')?.value;
     const wrap = document.getElementById('org-person-wrap');
-    if (wrap) wrap.style.display = document.getElementById('org-type')?.value === 'CUSTOMER_INDIVIDUAL' ? '' : 'none';
+    if (wrap) wrap.style.display = choice === 'CUSTOMER_INDIVIDUAL' || choice === 'CUSTOMER_ENTERPRISE' ? '' : 'none';
+    const enterprise = choice === 'CUSTOMER_ENTERPRISE';
+    const title = document.getElementById('org-person-title');
+    if (title) title.innerHTML = `${enterprise ? 'First admin' : 'The person'} <span class="req">*</span>`;
+    const note = document.getElementById('org-person-note');
+    if (note) {
+        note.textContent = enterprise ? 'Gets the Admin role and an invitation. They build further roles and invite the rest of their team.' : '';
+        note.style.display = enterprise ? '' : 'none';
+    }
 }
 
 function saveOrg(orgId = null) {
@@ -7483,13 +7505,19 @@ function saveOrg(orgId = null) {
     if (contact && validateLoginEmail(contact)) return fail('Enter a valid contact email.');
     const choice = document.getElementById('org-type')?.value || '';
     const individual = !org && choice === 'CUSTOMER_INDIVIDUAL';
+    const enterprise = !org && choice === 'CUSTOMER_ENTERPRISE';
     const personName = (document.getElementById('org-person-name')?.value || '').trim();
     const personEmail = (document.getElementById('org-person-email')?.value || '').trim();
-    if (individual) {
+    if (individual || enterprise) {
+        const who = enterprise ? 'the first admin' : 'the person';
+        if (!personEmail) return fail(`Please enter ${who}'s email.`);
         const personEmailError = validateLoginEmail(personEmail);
-        if (personEmailError) return fail(personEmailError);
+        if (personEmailError) return fail('Invalid email format.');
+        const existing = findUserByEmail(personEmail);
+        if (existing?.is_super_admin) return fail('This action is not available. Please contact AISO.');
+        if (existing && existing.status !== 'active') return fail('This account is disabled. Re-enable it first.');
         // An existing account keeps its own name; Name is asked only for a new one.
-        if (!findUserByEmail(personEmail) && !personName) return fail("Please enter the person's name.");
+        if (!existing && !personName) return fail(`Please enter ${who}'s name.`);
     }
     const now = new Date().toISOString();
     let renamed = 0;
@@ -7528,6 +7556,22 @@ function saveOrg(orgId = null) {
                     USERS.push(user);
                 }
                 ROLE_BINDINGS.push({ id: `rb-${Date.now()}`, user_id: user.id, role_id: role.id, status: 'active', created_at: now });
+            }
+            // An enterprise starts with one Admin role at the full enterprise
+            // ceiling and its first admin. It is an ordinary role: renamable,
+            // editable, and a later wider ceiling is not added to it (D67).
+            if (enterprise) {
+                const role = { id: `r-${Date.now()}`, org_id: record.id, name: 'Admin', description: 'Manages the organization: members, roles and access.',
+                    permissions: [...orgCapabilities(record)], created_at: now, updated_at: now };
+                ROLES.push(role);
+                let user = findUserByEmail(personEmail);
+                if (!user) {
+                    user = { id: `u-${Date.now()}`, name: personName, email: personEmail, status: 'active', is_super_admin: false, created_at: now, updated_at: now };
+                    USERS.push(user);
+                }
+                ROLE_BINDINGS.push({ id: `rb-${Date.now()}`, user_id: user.id, role_id: role.id, status: 'active', created_at: now });
+                logActivity('Role created', name, `Admin · ${role.permissions.length} permissions`);
+                logActivity('Member added', name, `${user.email} · Admin`);
             }
         }
         logActivity(org ? 'Organization updated' : 'Organization created', name,
@@ -7605,7 +7649,7 @@ function showOrgDetail(orgId, tab = null) {
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
                 <div>
                     <div style="font-size:18px;font-weight:700;color:#1d1d1f">${esc(org.name)}</div>
-                    <div style="display:flex;gap:6px;margin-top:6px">${orgTypeBadge(org)}${orgStatusBadge(org)}</div>
+                    <div style="display:flex;gap:6px;margin-top:6px">${orgTypeBadge(org)}${orgStatusBadge(org)}${orgNoAdminBadge(org)}</div>
                 </div>
                 ${canEditOrgProfile() ? `<button onclick="showOrgModal('${org.id}')" class="btn-secondary text-xs"><i class="ph ph-pencil-simple"></i> Edit</button>` : ''}
             </div>
