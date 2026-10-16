@@ -835,7 +835,7 @@
 <body>
 <div class="mk-banner">
     <i class="ph ph-info"></i>
-    <span><strong>Static preview</strong>：帳號開通與忘記密碼的畫面（SA V2 §4.1.4、§4.1.6、§4.2）。資料為示意，按鈕不會改任何東西；寄信以 Demo outbox 代替。截圖日期 2026-10-01。</span>
+    <span><strong>Static preview</strong>：帳號開通、登入與忘記密碼的畫面（SA 文件 §4.1、§4.2）。資料為示意，按鈕不會改任何東西；寄信以 Demo outbox 代替。截圖日期 2026-10-01。</span>
     <a href="../../index.html" class="mk-back"><i class="ph ph-arrow-left"></i> Back to Workspace</a>
 </div>
 <div class="mk-layout">
@@ -858,6 +858,7 @@
         <button data-screen="reset-invalid">Reset link invalid</button>
         <div class="mk-nav-group">Session</div>
         <button data-screen="signin-notice">Sign in · notice</button>
+        <button data-screen="signin-roles">Sign in · choose a role</button>
         <button data-screen="logout-dirty">Log out with unsaved changes</button>
     </nav>
 
@@ -1146,6 +1147,30 @@
                 <label class="field-label">Password</label><input class="input-field" type="password" placeholder="Enter your password">
                 <button class="btn-primary" style="width:100%;justify-content:center;background:#1432E6;padding:0.7rem;margin-top:1rem" disabled>Enter Workspace</button>
                 <div style="text-align:center;margin-top:1rem"><a href="#" data-screen-link="forgot" class="mk-link">Forgot password?</a></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="mk-screen" id="signin-roles">
+        <div class="mk-caption">After sign-in, an account with several roles picks one (SA 文件 §4.1.2) · live in the <a href="../../index.html" class="mk-link">prototype</a>: sign in as robert@govcloud.gov / aiso1234</div>
+        <div class="mk-login">
+            <div class="mk-lockup"><img src="../../images/logo-aiso.svg" alt="AISO" style="height:30px"><span>Workspace</span></div>
+            <div class="mk-card" style="max-width:480px;padding:2.5rem">
+                <div style="font-size:1.05rem;font-weight:700;color:#1d1d1f">Choose a role</div>
+                <div style="font-size:13px;color:#86868b;margin:4px 0 16px">robert@govcloud.gov holds 2 roles. You can switch later from the account menu.</div>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                    <div style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:#fff;text-align:left">
+                        <i class="ph ph-buildings" style="font-size:20px;color:#1432E6"></i>
+                        <span style="flex:1;min-width:0"><span style="display:block;font-size:13.5px;font-weight:600;color:#1d1d1f">GovCloud Agency</span><span style="display:block;font-size:12px;color:#86868b">Admin</span></span>
+                        <span class="badge badge-customer">Customer</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:#fff;text-align:left">
+                        <i class="ph ph-buildings" style="font-size:20px;color:#1432E6"></i>
+                        <span style="flex:1;min-width:0"><span style="display:block;font-size:13.5px;font-weight:600;color:#1d1d1f">MegaBank Corp</span><span style="display:block;font-size:12px;color:#86868b">Member</span></span>
+                        <span class="badge badge-customer">Customer</span>
+                    </div>
+                </div>
+                <div style="text-align:center;margin-top:16px"><a href="#" class="mk-link">Use another account</a></div>
             </div>
         </div>
     </section>

@@ -194,7 +194,7 @@ function orgCapabilities(org) {
 function effectivePermissions(role) {
     const org = getOrgById(role?.org_id);
     const ceiling = orgCapabilities(org);
-    if (role?.name === 'Owner' && isIndividualOrg(org) && !org.customer_type_inferred) return [...ceiling];
+    if (role?.name === 'Owner' && isIndividualOrg(org)) return [...ceiling];
     return (role?.permissions || []).filter(p => ceiling.has(p));
 }
 
@@ -595,6 +595,64 @@ function initPortal() {
 }
 
 // ── Login field validation ──
+// ── Field errors (SA §3, D70) ──
+// An error that belongs to one field sits right under that field with a red
+// border, and every such error shows at once; only errors about the form as a
+// whole go to the line above its buttons. `at` lists selectors to try in
+// order, so a row hidden behind "Show all" falls back to its group.
+function fieldErr(at, msg) { return { at: [].concat(at || []), msg }; }
+function formErr(msg) { return { at: [], msg }; }
+// Global copy for an email typed into a form (SA §3 Email 格式).
+function formEmailError(v, label = 'Email') {
+    if (!v) return `Please enter ${label}.`;
+    if (v.length > 100) return `${label} must be 100 characters or fewer.`;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? '' : `Invalid ${label} format.`;
+}
+function clearFieldErrors(scope = document) {
+    scope.querySelectorAll('.field-error-text[data-dyn]').forEach(el => el.remove());
+    scope.querySelectorAll('.field-error').forEach(el => el.classList.remove('field-error'));
+}
+function setFieldError(el, msg) {
+    const isInput = el.matches('input, select, textarea');
+    if (isInput) el.classList.add('field-error');
+    // A group (serials, keys, BOM, checkboxes) marks its empty required inputs.
+    else el.querySelectorAll('[data-req]').forEach(x => { if (!x.value.trim()) x.classList.add('field-error'); });
+    // Inside a row (label + input + select), the message goes under the row.
+    const host = isInput && el.parentElement && getComputedStyle(el.parentElement).display === 'flex'
+        && getComputedStyle(el.parentElement).flexDirection === 'row' ? el.parentElement : el;
+    let after = host;
+    while (after.nextElementSibling?.matches('.field-error-text[data-dyn]')) after = after.nextElementSibling;
+    const note = document.createElement('div');
+    note.className = 'field-error-text';
+    note.dataset.dyn = '1';
+    note.textContent = msg;
+    after.insertAdjacentElement('afterend', note);
+}
+// Shows a form's errors and reports whether there were any.
+function showFormErrors(errors, bottomId, scope = document) {
+    clearFieldErrors(scope);
+    const bottom = bottomId ? document.getElementById(bottomId) : null;
+    if (bottom) { bottom.textContent = ''; bottom.style.display = 'none'; }
+    errors.forEach(e => {
+        const el = e.at.map(sel => scope.querySelector(sel)).find(Boolean);
+        if (el) setFieldError(el, e.msg);
+        else if (bottom && !bottom.textContent) { bottom.textContent = e.msg; bottom.style.display = 'block'; }
+    });
+    const first = scope.querySelector('.field-error-text[data-dyn]') || (bottom?.textContent ? bottom : null);
+    first?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    return errors.length > 0;
+}
+// Typing into a flagged field clears its own flag and message.
+['input', 'change'].forEach(type => document.addEventListener(type, e => {
+    const el = e.target;
+    if (!el?.classList?.contains('field-error')) return;
+    el.classList.remove('field-error');
+    const host = el.parentElement && getComputedStyle(el.parentElement).display === 'flex'
+        && getComputedStyle(el.parentElement).flexDirection === 'row' ? el.parentElement : el;
+    let next = host.nextElementSibling;
+    while (next?.matches('.field-error-text[data-dyn]')) { const n = next.nextElementSibling; next.remove(); next = n; }
+}));
+
 function validateLoginEmail(v) {
     if (!v) return 'Email is required.';
     if (v.length > 100) return 'Email must be 100 characters or fewer.';
@@ -5698,17 +5756,17 @@ function ordLineCard(l, i) {
                 </div>`}
                 <div>
                     <label class="field-label">Product</label>
-                    <select class="input-field" onchange="ordSetProduct(${i}, this.value)">
+                    <select class="input-field" data-err="${i}-product" onchange="ordSetProduct(${i}, this.value)">
                         <option value="">— Select a published product —</option>
                         ${products.map(p => `<option value="${p.id}" ${l.product_id === p.id ? 'selected' : ''}>${esc(p.name)}${p.model ? ` (${esc(p.model)})` : ''}</option>`).join('')}
                         <option value="__custom" ${l.product_name && !knownProduct ? 'selected' : ''}>Other (type a name)</option>
                     </select>
-                    ${l.product_id ? '' : `<input type="text" class="input-field" style="margin-top:8px" placeholder="Product name"
+                    ${l.product_id ? '' : `<input type="text" class="input-field" data-err="${i}-product-name" style="margin-top:8px" placeholder="Product name"
                         value="${esc(l.product_name)}" oninput="orderDraft.lines[${i}].product_name=this.value.trim()">`}
                 </div>
                 <div>
                     <label class="field-label">SLA</label>
-                    <select class="input-field" onchange="orderDraft.lines[${i}].sla_plan=this.value">
+                    <select class="input-field" data-err="${i}-sla" onchange="orderDraft.lines[${i}].sla_plan=this.value">
                         <option value="">—</option>
                         ${ORDER_SLA_PLAN_OPTIONS.map(sp => `<option value="${esc(sp)}" ${l.sla_plan === sp ? 'selected' : ''}>${esc(sp)}</option>`).join('')}
                     </select>
@@ -5722,7 +5780,7 @@ function ordLineCard(l, i) {
             <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-top:12px">
                 <div>
                     <label class="field-label">Warranty (months)</label>
-                    <input type="number" class="input-field" min="1" step="1" value="${esc(l.warranty_months)}"
+                    <input type="number" class="input-field" data-err="${i}-warranty" min="1" step="1" value="${esc(l.warranty_months)}"
                            oninput="orderDraft.lines[${i}].warranty_months=this.value;unitDatesRefreshEnds('${i}')">
                 </div>
                 <div class="field-hint" style="align-self:end">The term is per line. Delivery and warranty start are recorded per unit below, as they actually happen.</div>
@@ -5733,12 +5791,12 @@ function ordLineCard(l, i) {
                     ${l._snPaste ? '' : `<button class="btn-link" style="font-size:12px" onclick="orderDraft.lines[${i}]._snPaste=true;renderOrderDraftLines()"><i class="ph ph-clipboard-text"></i> Paste serials</button>`}
                 </div>
                 ${ordSerialPastePanel(l, i)}
-                <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
+                <div data-err="${i}-serials" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
                     ${(() => { const collapsed = l.serial_nos.length > BULK_COLLAPSE_AT && !l._snShowAll;
                         return (collapsed ? l.serial_nos.slice(0, BULK_COLLAPSED_ROWS) : l.serial_nos).map((sn, si) => `
                     <div style="display:flex;align-items:center;gap:10px">
                         <span style="font-size:11.5px;font-weight:600;color:#86868b;width:56px;flex-shrink:0">Unit ${si + 1}</span>
-                        <input type="text" class="input-field" data-sn="${i}-${si}" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="Serial number"
+                        <input type="text" class="input-field" data-req data-sn="${i}-${si}" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="Serial number"
                                value="${esc(sn)}" oninput="orderDraft.lines[${i}].serial_nos[${si}]=this.value.trim()" onkeydown="ordSerialKeydown(event, ${i}, ${si})">
                     </div>`).join('') + (collapsed ? bulkMoreButton(l.serial_nos.length, BULK_COLLAPSED_ROWS, `orderDraft.lines[${i}]._snShowAll=true;renderOrderDraftLines()`) : ''); })()}
                 </div>
@@ -5751,7 +5809,7 @@ function ordLineCard(l, i) {
                     <span class="field-hint" style="margin:0">applies to every unit in this line</span>
                 </div>
                 ${l.bom.length ? `
-                <table style="width:100%;border-collapse:collapse">
+                <table data-err="${i}-bom" style="width:100%;border-collapse:collapse">
                     <thead><tr>
                         <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0;width:22%">Component</th>
                         <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0;width:22%">Brand</th>
@@ -5762,9 +5820,9 @@ function ordLineCard(l, i) {
                     <tbody>
                         ${l.bom.map((b, bi) => `
                         <tr>
-                            <td style="padding:3px 8px 3px 0"><input type="text" class="input-field" placeholder="CPU" value="${esc(b.component_type)}" oninput="orderDraft.lines[${i}].bom[${bi}].component_type=this.value.trim()"></td>
+                            <td style="padding:3px 8px 3px 0"><input type="text" class="input-field" data-req placeholder="CPU" value="${esc(b.component_type)}" oninput="orderDraft.lines[${i}].bom[${bi}].component_type=this.value.trim()"></td>
                             <td style="padding:3px 8px 3px 0"><input type="text" class="input-field" placeholder="—" value="${esc(b.brand)}" oninput="orderDraft.lines[${i}].bom[${bi}].brand=this.value.trim()"></td>
-                            <td style="padding:3px 8px 3px 0"><input type="text" class="input-field" placeholder="Model" value="${esc(b.model)}" oninput="orderDraft.lines[${i}].bom[${bi}].model=this.value.trim()"></td>
+                            <td style="padding:3px 8px 3px 0"><input type="text" class="input-field" data-req placeholder="Model" value="${esc(b.model)}" oninput="orderDraft.lines[${i}].bom[${bi}].model=this.value.trim()"></td>
                             <td style="padding:3px 0"><input type="number" class="input-field" min="1" step="1" value="${b.qty}" oninput="orderDraft.lines[${i}].bom[${bi}].qty=parseInt(this.value,10)||1"></td>
                             <td style="padding:3px 0 3px 4px;text-align:right"><button onclick="ordRemoveBom(${i},${bi})" class="btn-ghost" title="Remove component"><i class="ph ph-x"></i></button></td>
                         </tr>`).join('')}
@@ -5785,11 +5843,11 @@ function ordLineCard(l, i) {
                 </div>
                 <div>
                     <label class="field-label">License Start</label>
-                    <input type="date" class="input-field" value="${esc(l.license_start)}" oninput="orderDraft.lines[${i}].license_start=this.value">
+                    <input type="date" class="input-field" data-err="${i}-ls" value="${esc(l.license_start)}" oninput="orderDraft.lines[${i}].license_start=this.value">
                 </div>
                 <div>
                     <label class="field-label">License End</label>
-                    <input type="date" class="input-field" value="${esc(l.license_end)}" oninput="orderDraft.lines[${i}].license_end=this.value">
+                    <input type="date" class="input-field" data-err="${i}-le" value="${esc(l.license_end)}" oninput="orderDraft.lines[${i}].license_end=this.value">
                 </div>
             </div>
             <div style="margin-top:12px">
@@ -5798,14 +5856,14 @@ function ordLineCard(l, i) {
                     ${l._kp?.open ? '' : `<button class="btn-link" style="font-size:12px" onclick="openLicensePaste('${i}')"><i class="ph ph-clipboard-text"></i> Paste keys</button>`}
                 </div>
                 ${licensePastePanel(String(i))}
-                <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
+                <div data-err="${i}-keys" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
                     ${(() => { const collapsed = l.license_keys.length > BULK_COLLAPSE_AT && !l._keysShowAll;
                         return (collapsed ? l.license_keys.slice(0, BULK_COLLAPSED_ROWS) : l.license_keys).map((lk, ki) => `
                     <div style="display:flex;align-items:center;gap:10px">
                         <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0">Key ${ki + 1}</span>
-                        <input type="text" class="input-field" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="License key"
+                        <input type="text" class="input-field" data-req data-key="${i}-${ki}" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="License key"
                                value="${esc(lk.key)}" oninput="orderDraft.lines[${i}].license_keys[${ki}].key=this.value.trim()">
-                        ${parent ? `<select class="input-field" style="width:230px;flex-shrink:0" title="Which unit this key is for"
+                        ${parent ? `<select class="input-field" data-unit="${i}-${ki}" style="width:230px;flex-shrink:0" title="Which unit this key is for"
                                onchange="orderDraft.lines[${i}].license_keys[${ki}].unit=this.value===''?null:Number(this.value)">${ordUnitOptions(parent, lk.unit)}</select>` : ''}
                     </div>`).join('') + (collapsed ? bulkMoreButton(l.license_keys.length, BULK_COLLAPSED_ROWS, `orderDraft.lines[${i}]._keysShowAll=true;renderOrderDraftLines()`) : ''); })()}
                 </div>
@@ -6011,7 +6069,11 @@ function unitDatesApply(ns) {
     const delivered = document.getElementById(`ud-batch-del-${ns}`)?.value || '';
     const start = document.getElementById(`ud-batch-ws-${ns}`)?.value || '';
     if (!(l._picked || []).length) return;
-    if (!delivered && !start) { showToast('Pick a delivery date or a warranty start to apply.', 'error'); return; }
+    if (!delivered && !start) {
+        showFormErrors([fieldErr(`#ud-batch-ws-${ns}`, 'Pick a delivery date or a warranty start to apply.')]);
+        document.getElementById(`ud-batch-del-${ns}`)?.classList.add('field-error');
+        return;
+    }
     l._picked.forEach(u => {
         if (delivered) l.delivered_dates[u] = delivered;
         if (start) l.warranty_starts[u] = start;
@@ -6211,77 +6273,84 @@ function showOrderAttachmentPreview(orderId, index) {
 function validateOrderDraft(status) {
     const d = orderDraft;
     const errors = [];
-    if (!d.order_no) errors.push('Order No is required.');
-    if (!d.order_date) errors.push('Order Date is required.');
-    if (!d.customer_org_id) errors.push('Please select Customer.');
-    if (!d.lines.length) errors.push('At least one order line is required.');
-    if (untypedDocError(d.attachments || [])) errors.push(untypedDocError(d.attachments));
-    if (d.lines.some(l => l.scope === 'HW') && !d.hw_supplier_name) errors.push('HW Supplier is required because the order has HW lines.');
-    if (d.lines.some(l => l.scope === 'SW' && !l.supplier_name) && !d.sw_supplier_name) errors.push('SW Supplier is required because a SW line has no supplier of its own.');
+    const at = (i, f) => `[data-err="${i}-${f}"]`;
+    const sn = (i, si) => `[data-sn="${i}-${si}"]`;
+    if (!d.order_no) errors.push(fieldErr('#ord-no', 'Please enter Order No.'));
+    else if (ORDERS.some(o => o.id !== d.id && o.order_no.toLowerCase() === d.order_no.toLowerCase())) errors.push(fieldErr('#ord-no', `Order No ${d.order_no} already exists.`));
+    if (!d.order_date) errors.push(fieldErr('#ord-date', 'Please select Order Date.'));
+    if (!d.customer_org_id) errors.push(fieldErr('#ord-customer', 'Please select Customer.'));
+    if (d.lines.some(l => l.scope === 'HW') && !d.hw_supplier_name) errors.push(fieldErr('#ord-hw-sup', 'HW Supplier is required because the order has HW lines.'));
+    if (d.lines.some(l => l.scope === 'SW' && !l.supplier_name) && !d.sw_supplier_name) errors.push(fieldErr('#ord-sw-sup', 'SW Supplier is required because a SW line has no supplier of its own.'));
+    const docError = untypedDocError(d.attachments || []);
+    if (docError) errors.push(fieldErr('#ord-attachments-list', docError));
+    if (!d.lines.length) errors.push(fieldErr('#ord-lines', 'At least one order line is required.'));
     d.lines.forEach((l, i) => {
-        if (!l.product_name) errors.push(`Line ${i + 1}: product is required.`);
-        if (l.scope === 'HW' && l.bom.some(b => !b.component_type || !b.model)) errors.push(`Line ${i + 1}: every BOM row needs a component and a model.`);
-        if (l.scope === 'SW') errors.push(...licenseLineErrors(l, `Line ${i + 1}`, d.lines.find(x => x.id === l.parent_line_id)));
+        if (!l.product_name) errors.push(fieldErr([at(i, 'product-name'), at(i, 'product')], 'Please select Product.'));
+        if (l.scope === 'HW' && l.bom.some(b => !b.component_type || !b.model)) errors.push(fieldErr(at(i, 'bom'), 'Every BOM row needs a component and a model.'));
+        if (l.scope === 'SW') errors.push(...licenseLineErrors(l, String(i), d.lines.find(x => x.id === l.parent_line_id)));
     });
     if (status === 'CONFIRMED') {
         const seenSerials = new Set();
-        errors.push(...licenseKeyDuplicateErrors(d.lines));
+        errors.push(...licenseKeyDuplicateErrors(d.lines, (l, i) => String(i)));
         d.lines.forEach((l, i) => {
-            if (!l.sla_plan) errors.push(`Line ${i + 1}: an SLA plan is required to confirm.`);
+            if (!l.sla_plan) errors.push(fieldErr(at(i, 'sla'), 'Please select SLA.'));
             if (l.scope === 'HW') {
-                if (!(parseInt(l.warranty_months, 10) >= 1)) errors.push(`Line ${i + 1}: the warranty term is required to confirm.`);
-                if (l.serial_nos.some(sn => !sn.trim())) errors.push(`Line ${i + 1}: all ${l.qty} serial numbers are required to confirm.`);
-                l.serial_nos.forEach(sn => {
-                    const key = sn.trim().toUpperCase();
+                if (!(parseInt(l.warranty_months, 10) >= 1)) errors.push(fieldErr(at(i, 'warranty'), 'Please enter Warranty (months).'));
+                if (l.serial_nos.some(x => !x.trim())) errors.push(fieldErr(at(i, 'serials'), `All ${l.qty} serial numbers are required to confirm.`));
+                l.serial_nos.forEach((x, si) => {
+                    const key = x.trim().toUpperCase();
                     if (!key) return;
-                    if (seenSerials.has(key)) errors.push(`Line ${i + 1}: serial ${sn} appears twice in this order.`);
+                    if (seenSerials.has(key)) errors.push(fieldErr([sn(i, si), at(i, 'serials')], `Serial ${x} appears twice in this order.`));
                     seenSerials.add(key);
                 });
             } else {
-                if (!l.license_start || !l.license_end) errors.push(`Line ${i + 1}: the license period is required to confirm.`);
-                if (l.license_keys.some(lk => !lk.key.trim())) errors.push(`Line ${i + 1}: all ${l.qty} license keys are required to confirm.`);
+                if (!l.license_start) errors.push(fieldErr(at(i, 'ls'), 'Please select License Start.'));
+                if (!l.license_end) errors.push(fieldErr(at(i, 'le'), 'Please select License End.'));
+                if (l.license_keys.some(lk => !lk.key.trim())) errors.push(fieldErr(at(i, 'keys'), `All ${l.qty} license keys are required to confirm.`));
             }
         });
     }
-    // A serial belongs to one order (SA V2 D40); a cancelled order releases its serials.
+    // A serial belongs to one order (SA D40); a cancelled order releases its serials.
     const taken = new Map();
     ORDER_LINES.forEach(l => {
         const o = getOrderById(l.order_id);
         if (!o || o.id === d.id || o.status === 'CANCELLED' || l.scope !== 'HW') return;
-        (l.serial_nos || []).forEach(sn => { const k = sn.trim().toUpperCase(); if (k) taken.set(k, o.order_no); });
+        (l.serial_nos || []).forEach(x => { const k = x.trim().toUpperCase(); if (k) taken.set(k, o.order_no); });
     });
     d.lines.forEach((l, i) => {
         if (l.scope !== 'HW') return;
-        l.serial_nos.forEach(sn => { const k = sn.trim().toUpperCase(); if (k && taken.has(k)) errors.push(`Line ${i + 1}: serial ${sn} is already on ${taken.get(k)}.`); });
+        l.serial_nos.forEach((x, si) => { const k = x.trim().toUpperCase(); if (k && taken.has(k)) errors.push(fieldErr([sn(i, si), at(i, 'serials')], `Serial ${x} is already on ${taken.get(k)}.`)); });
     });
-    const duplicate = ORDERS.find(o => o.id !== d.id && o.order_no.toLowerCase() === d.order_no.toLowerCase());
-    if (duplicate) errors.push(`Order No ${d.order_no} already exists.`);
     return errors;
 }
 
-// Checks one SW line on its own; shared by the order editor and the
-// post-confirmation license adjustment.
-function licenseLineErrors(l, label, parent) {
+// Checks one SW line on its own; shared by the order editor (anchors "<line
+// index>-…") and the post-confirmation license adjustment ("la-…").
+function licenseLineErrors(l, ns, parent) {
     const errors = [];
-    if (l.license_start && l.license_end && l.license_start > l.license_end) errors.push(`${label}: license start is after license end.`);
+    if (l.license_start && l.license_end && l.license_start > l.license_end) errors.push(fieldErr(`[data-err="${ns}-le"]`, 'License start is after license end.'));
     if (parent) l.license_keys.forEach((lk, ki) => {
-        if (lk.unit !== null && lk.unit >= parent.qty) errors.push(`${label}: key ${ki + 1} is bound to Unit ${lk.unit + 1}, which the hardware line no longer has. Rebind it.`);
+        if (lk.unit !== null && lk.unit >= parent.qty) errors.push(fieldErr([`[data-unit="${ns}-${ki}"]`, `[data-err="${ns}-keys"]`], `Key ${ki + 1} is bound to Unit ${lk.unit + 1}, which the hardware line no longer has. Rebind it.`));
     });
     return errors;
 }
 
 // A key may repeat inside one bundled line to cover several units, never
 // across lines and never twice on the same unit (or next to "All units").
-function licenseKeyDuplicateErrors(lines) {
+// `nsOf` names a line's anchors on screen, or null when it is not shown.
+function licenseKeyDuplicateErrors(lines, nsOf = () => null) {
     const errors = [];
-    const seen = new Map(); // KEY → { lineIndex, units }
-    lines.forEach((l, i) => (l.license_keys || []).forEach(lk => {
+    const seen = new Map(); // KEY → { lineIndex, units, at }
+    const keyAt = (ns, ki) => ns === null ? [] : [`[data-key="${ns}-${ki}"]`, `[data-err="${ns}-keys"]`];
+    lines.forEach((l, i) => (l.license_keys || []).forEach((lk, ki) => {
         const key = lk.key.trim().toUpperCase();
         if (!key) return;
+        const here = keyAt(nsOf(l, i), ki);
         const prior = seen.get(key);
-        if (!prior) { seen.set(key, { lineIndex: i, units: new Set([lk.unit]) }); return; }
-        if (prior.lineIndex !== i) errors.push(`License key ${lk.key} is on both line ${prior.lineIndex + 1} and line ${i + 1}.`);
-        else if (lk.unit === null || prior.units.has(null) || prior.units.has(lk.unit)) errors.push(`Line ${i + 1}: license key ${lk.key} repeats without a different unit.`);
+        if (!prior) { seen.set(key, { lineIndex: i, units: new Set([lk.unit]), at: here }); return; }
+        const at = here.length ? here : prior.at;
+        if (prior.lineIndex !== i) errors.push(fieldErr(at, `License key ${lk.key} is on both line ${prior.lineIndex + 1} and line ${i + 1}.`));
+        else if (lk.unit === null || prior.units.has(null) || prior.units.has(lk.unit)) errors.push(fieldErr(at, `License key ${lk.key} repeats without a different unit.`));
         prior.units.add(lk.unit);
     }));
     return errors;
@@ -6528,10 +6597,10 @@ function renderLicenseAdjustModal() {
     const line = ORDER_LINES.find(l => l.id === d.lineId);
     const order = getOrderById(line.order_id);
     const parent = line.parent_line_id ? ORDER_LINES.find(x => x.id === line.parent_line_id) : null;
-    const input = (label, key, type = 'text', placeholder = '') => `
+    const input = (label, key, type = 'text', placeholder = '', anchor = key) => `
         <div>
             <label class="field-label">${label}</label>
-            <input type="${type}" class="input-field" value="${esc(d[key])}" ${placeholder ? `placeholder="${esc(placeholder)}"` : ''} oninput="licenseDraft.${key}=this.value">
+            <input type="${type}" class="input-field" data-err="la-${anchor}" value="${esc(d[key])}" ${placeholder ? `placeholder="${esc(placeholder)}"` : ''} oninput="licenseDraft.${key}=this.value">
         </div>`;
     showModal(`
         <div style="padding:26px 28px;max-height:82vh;overflow-y:auto">
@@ -6540,21 +6609,21 @@ function renderLicenseAdjustModal() {
             <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px">
                 ${input('Supplier', 'supplier_name', 'text', order.sw_supplier_name || 'Order SW supplier')}
                 ${input('Version', 'version', 'text', 'e.g. 4.1.0')}
-                ${input('License Start', 'license_start', 'date')}
-                ${input('License End', 'license_end', 'date')}
+                ${input('License Start', 'license_start', 'date', '', 'ls')}
+                ${input('License End', 'license_end', 'date', '', 'le')}
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:14px">
                 <label class="field-label" style="margin:0">License Keys (${d.license_keys.length})</label>
                 ${d._kp?.open ? '' : `<button class="btn-link" style="font-size:12px" onclick="openLicensePaste('adjust')"><i class="ph ph-clipboard-text"></i> Paste keys</button>`}
             </div>
             ${licensePastePanel('adjust')}
-            <div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
+            <div data-err="la-keys" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
                 ${(d.license_keys.length > BULK_COLLAPSE_AT && !d._keysShowAll ? d.license_keys.slice(0, BULK_COLLAPSED_ROWS) : d.license_keys).map((lk, ki) => `
                 <div style="display:flex;align-items:center;gap:10px">
                     <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0">Key ${ki + 1}</span>
-                    <input type="text" class="input-field" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="License key"
+                    <input type="text" class="input-field" data-req data-key="la-${ki}" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="License key"
                            value="${esc(lk.key)}" oninput="licenseDraft.license_keys[${ki}].key=this.value">
-                    ${parent ? `<select class="input-field" style="width:230px;flex-shrink:0"
+                    ${parent ? `<select class="input-field" data-unit="la-${ki}" style="width:230px;flex-shrink:0"
                            onchange="licenseDraft.license_keys[${ki}].unit=this.value===''?null:Number(this.value)">${ordUnitOptions(parent, lk.unit)}</select>` : ''}
                     ${d.license_keys.length > 1 ? `<button onclick="licenseDraft.license_keys.splice(${ki},1);renderLicenseAdjustModal()" class="btn-ghost" title="Remove key"><i class="ph ph-x"></i></button>` : ''}
                 </div>`).join('')}
@@ -6580,17 +6649,13 @@ function saveLicenseAdjustment() {
         license_keys: d.license_keys.map(lk => ({ key: lk.key.trim(), unit: parent ? lk.unit : null })),
     };
     const errors = [];
-    if (!next.license_start || !next.license_end) errors.push('The license period is required.');
-    if (next.license_keys.some(lk => !lk.key)) errors.push('Every key row needs a key.');
-    if (!next.supplier_name && !order.sw_supplier_name) errors.push('Supplier is required because the order has no SW supplier.');
-    errors.push(...licenseLineErrors(next, `Line ${line.line_no}`, parent));
-    errors.push(...licenseKeyDuplicateErrors(getOrderLines(order.id).map(l => l.id === line.id ? next : l)));
-    if (errors.length) {
-        const el = document.getElementById('la-error');
-        el.textContent = errors[0];
-        el.style.display = 'block';
-        return;
-    }
+    if (!next.supplier_name && !order.sw_supplier_name) errors.push(fieldErr('[data-err="la-supplier_name"]', 'Supplier is required because the order has no SW supplier.'));
+    if (!next.license_start) errors.push(fieldErr('[data-err="la-ls"]', 'Please select License Start.'));
+    if (!next.license_end) errors.push(fieldErr('[data-err="la-le"]', 'Please select License End.'));
+    if (next.license_keys.some(lk => !lk.key)) errors.push(fieldErr('[data-err="la-keys"]', 'Every key row needs a key.'));
+    errors.push(...licenseLineErrors(next, 'la', parent));
+    errors.push(...licenseKeyDuplicateErrors(getOrderLines(order.id).map(l => l.id === line.id ? next : l), l => (l === next ? 'la' : null)));
+    if (showFormErrors(errors, 'la-error')) return;
 
     const keyList = keys => keys.map(lk => `${lk.key}${parent ? ` (${licenseUnitLabel(parent, lk.unit)})` : ''}`).join(', ') || '—';
     const changes = [
@@ -6617,13 +6682,7 @@ function saveLicenseAdjustment() {
 }
 
 function saveOrder(status) {
-    const err = document.getElementById('ord-error');
-    const errors = validateOrderDraft(status);
-    if (errors.length) {
-        err.textContent = errors[0];
-        err.style.display = 'block';
-        return;
-    }
+    if (showFormErrors(validateOrderDraft(status), 'ord-error')) return;
 
     const d = orderDraft;
     const isNew = !d.id;
@@ -7000,7 +7059,6 @@ function isIndividualOrg(org) { return orgHasType(org, 'CUSTOMER') && org?.custo
 function orgAllowsMembers(org) { return !isIndividualOrg(org); }
 function orgTypeBadge(org) {
     if (orgHasType(org, 'OPERATOR')) return '<span class="badge badge-blue">Operator</span>';
-    if (org?.customer_type_inferred) return `${orgTypeBadgeCustomer(org)} <span class="badge badge-amber" title="Type inferred; confirm it from Edit">Inferred</span>`;
     return orgTypeBadgeCustomer(org);
 }
 function orgTypeBadgeCustomer(org) {
@@ -7010,7 +7068,7 @@ function orgTypeBadgeCustomer(org) {
 // an active member, on an active account, whose role holds organization.u
 // (D68). `drop` leaves bindings out and `rolePerms` swaps one role's grants,
 // so a change can be checked before it is made.
-function guardsOrgManagers(org) { return orgHasType(org, 'CUSTOMER') && !isIndividualOrg(org) && !org.customer_type_inferred; }
+function guardsOrgManagers(org) { return orgHasType(org, 'CUSTOMER') && !isIndividualOrg(org); }
 function orgManagerIds(org, { drop = [], rolePerms = null } = {}) {
     return new Set(getOrgBindings(org.id).filter(b => b.status === 'active' && !drop.includes(b.id)).filter(b => {
         if (USERS.find(u => u.id === b.user_id)?.status !== 'active') return false;
@@ -7079,9 +7137,7 @@ function getFilteredOrgs() {
     const type = document.getElementById('org-filter-type')?.value || '';
     const q = (document.getElementById('org-search')?.value || '').trim().toLowerCase();
     return getScopedOrgs().filter(org => {
-        if (type === 'INFERRED') {
-            if (!org.customer_type_inferred) return false;
-        } else if (type === 'INDIVIDUAL' || type === 'ENTERPRISE') {
+        if (type === 'INDIVIDUAL' || type === 'ENTERPRISE') {
             if (!orgHasType(org, 'CUSTOMER') || (org.customer_type || 'ENTERPRISE') !== type) return false;
         } else if (type && !orgHasType(org, type)) return false;
         if (q && ![org.name, org.contact_email].some(v => (v || '').toLowerCase().includes(q))) return false;
@@ -7125,13 +7181,6 @@ function renderOrganizations() {
     }
     const tabs = document.getElementById('org-filter-tabs');
     if (tabs) tabs.style.display = isOperatorView() ? '' : 'none';
-    const inferredTab = document.getElementById('org-filter-inferred');
-    const inferredCount = getScopedOrgs().filter(o => o.customer_type_inferred).length;
-    if (inferredTab) {
-        inferredTab.style.display = inferredCount ? '' : 'none';
-        inferredTab.textContent = `Type to confirm (${inferredCount})`;
-        if (!inferredCount && document.getElementById('org-filter-type')?.value === 'INFERRED') { setOrgFilter(''); return; }
-    }
     if (onTypes) { renderOrgTypes(); return; }
     const list = getFilteredOrgs();
     const searching = !!(document.getElementById('org-search')?.value || '').trim();
@@ -7404,7 +7453,7 @@ function showOrgModal(orgId = null, { fromOrderDraft = false } = {}) {
     if (org ? !canEditOrgProfile() : !canCreateOrgs()) return;
     orgModalFromOrderDraft = !org && fromOrderDraft;
     const isOperator = orgHasType(org, 'OPERATOR');
-    const inferred = !!org?.customer_type_inferred;
+    const canChangeToIndividual = !!org && orgHasType(org, 'CUSTOMER') && !isIndividualOrg(org);
     showModal(`
         <div style="padding:26px 28px">
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 18px">${org ? `Edit ${esc(org.name)}` : 'New Organization'}</h3>
@@ -7416,21 +7465,17 @@ function showOrgModal(orgId = null, { fromOrderDraft = false } = {}) {
                 </div>
                 <div>
                     <label class="field-label" for="org-type">Type <span class="req">*</span></label>
-                    ${org && inferred ? `<div style="display:flex;gap:8px;align-items:center">
-                        <select id="org-confirm-type" class="input-field" style="flex:1">
-                            <option value="ENTERPRISE" ${org.customer_type === 'ENTERPRISE' ? 'selected' : ''}>Customer · Enterprise</option>
-                            <option value="INDIVIDUAL" ${org.customer_type === 'INDIVIDUAL' ? 'selected' : ''}>Customer · Individual</option>
-                        </select>
-                        <button type="button" onclick="confirmOrgType('${org.id}')" class="btn-secondary text-xs" style="white-space:nowrap"><i class="ph ph-check-circle"></i> Confirm type</button>
+                    ${canChangeToIndividual ? `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:4px 0">${orgTypeBadge(org)}
+                        <button type="button" onclick="confirmChangeToIndividual('${org.id}')" class="btn-secondary text-xs" style="white-space:nowrap"><i class="ph ph-user"></i> Change to individual</button>
                     </div>
-                    <div class="field-hint">Inferred from its members and roles because the type was missing. Correct it if needed, then confirm; it is fixed after that.</div>`
+                    <div class="field-hint">Set up as an enterprise by mistake? Change it to an individual customer. An individual cannot be changed back.</div>`
                     : org ? `<div style="padding:4px 0">${orgTypeBadge(org)}</div>
                     <div class="field-hint">Fixed after creation: the type sets what any role in this organization can be granted.</div>`
                     : `<select id="org-type" class="input-field" onchange="onOrgTypeChange()">
                         ${ORG_TYPE_REGISTRY.filter(e => !(fromOrderDraft && e.type === 'OPERATOR'))
                             .map(e => `<option value="${e.key}">${esc(e.label)}</option>`).join('')}
                     </select>
-                    <div class="field-hint">Fixed after creation. An individual customer is one person: no members, no roles to manage.</div>`}
+                    <div class="field-hint">An individual customer is one person: no members, no roles to manage. Only an enterprise can be changed to individual later.</div>`}
                 </div>
                 <div id="org-person-wrap" style="display:none;border-top:1px solid var(--border-light);padding-top:14px">
                     <div id="org-person-title" class="field-label" style="margin-bottom:8px">The person <span class="req">*</span></div>
@@ -7511,13 +7556,11 @@ function saveOrg(orgId = null) {
     const name = (document.getElementById('org-name')?.value || '').trim();
     const contact = (document.getElementById('org-contact')?.value || '').trim();
     const note = (document.getElementById('org-note')?.value || '').trim();
-    const err = document.getElementById('org-error');
-    const fail = msg => { err.textContent = msg; err.style.display = 'block'; };
-    if (!name) return fail('Name is required.');
+    const errors = [];
     const choiceScopes = org ? orgNameScopes(org) : [document.getElementById('org-type')?.value === 'OPERATOR' ? 'OPERATOR' : 'CUSTOMER'];
-    const clash = findOrgNameClash(name, choiceScopes, orgId);
-    if (clash) return fail(orgNameClashMessage(name, clash));
-    if (contact && validateLoginEmail(contact)) return fail('Enter a valid contact email.');
+    const clash = name ? findOrgNameClash(name, choiceScopes, orgId) : null;
+    if (!name) errors.push(fieldErr('#org-name', 'Please enter Name.'));
+    else if (clash) errors.push(fieldErr('#org-name', orgNameClashMessage(name, clash)));
     const choice = document.getElementById('org-type')?.value || '';
     const individual = !org && choice === 'CUSTOMER_INDIVIDUAL';
     const enterprise = !org && choice === 'CUSTOMER_ENTERPRISE';
@@ -7525,15 +7568,16 @@ function saveOrg(orgId = null) {
     const personEmail = (document.getElementById('org-person-email')?.value || '').trim();
     if (individual || enterprise) {
         const who = enterprise ? 'the first admin' : 'the person';
-        if (!personEmail) return fail(`Please enter ${who}'s email.`);
-        const personEmailError = validateLoginEmail(personEmail);
-        if (personEmailError) return fail('Invalid email format.');
         const existing = findUserByEmail(personEmail);
-        if (existing?.is_super_admin) return fail('This action is not available. Please contact AISO.');
-        if (existing && existing.status !== 'active') return fail('This account is disabled. Re-enable it first.');
+        if (!personEmail) errors.push(fieldErr('#org-person-email', `Please enter ${who}'s email.`));
+        else if (formEmailError(personEmail)) errors.push(fieldErr('#org-person-email', 'Invalid email format.'));
+        else if (existing?.is_super_admin) errors.push(fieldErr('#org-person-email', 'This action is not available. Please contact AISO.'));
+        else if (existing && existing.status !== 'active') errors.push(fieldErr('#org-person-email', 'This account is disabled. Re-enable it first.'));
         // An existing account keeps its own name; Name is asked only for a new one.
-        if (!existing && !personName) return fail(`Please enter ${who}'s name.`);
+        if (!existing && !personName) errors.push(fieldErr('#org-person-name', `Please enter ${who}'s name.`));
     }
+    if (contact && formEmailError(contact, 'Contact email')) errors.push(fieldErr('#org-contact', formEmailError(contact, 'Contact email')));
+    if (showFormErrors(errors, 'org-error')) return;
     const now = new Date().toISOString();
     let renamed = 0;
     let createdId = null;
@@ -7605,43 +7649,52 @@ function saveOrg(orgId = null) {
     showToast(`${name} ${org ? 'saved' : 'created'}`);
 }
 
-// An inferred subtype stays open to correction until the desk confirms it
-// (SA V2 D17). Turning an org into an individual leaves it one Owner role,
-// held by its only member, whose grants follow the ceiling (SA V2 2.3).
-function confirmOrgType(orgId) {
-    const org = getOrgById(orgId);
-    if (!org?.customer_type_inferred || !canEditOrgProfile()) return;
-    const type = document.getElementById('org-confirm-type')?.value;
-    const err = document.getElementById('org-error');
+// An enterprise set up by mistake can become an individual customer, never
+// the reverse (D69). It must be down to one person; its roles collapse into
+// one Owner held by that person, whose grants follow the ceiling (SA 2.3).
+function changeToIndividualBlock(org) {
     const members = getOrgMembers(org.id);
-    if (type === 'INDIVIDUAL' && members.length > 1) {
-        err.textContent = `An individual customer is one person. ${org.name} has ${members.length} members; remove all but one first.`;
-        err.style.display = 'block';
-        return;
-    }
+    return members.length > 1 ? `An individual customer is one person. ${org.name} has ${members.length} members; remove all but one first.` : '';
+}
+function confirmChangeToIndividual(orgId) {
+    const org = getOrgById(orgId);
+    if (!org || !orgHasType(org, 'CUSTOMER') || isIndividualOrg(org) || !canEditOrgProfile()) return;
+    const blocked = changeToIndividualBlock(org);
+    if (blocked) { showToast(blocked, 'error'); return; }
+    const person = getOrgMembers(org.id)[0]?.user;
+    showModal(`
+        <div style="padding:26px 28px">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Change ${esc(org.name)} to an individual customer?</h3>
+            <p style="font-size:13px;color:#86868b;margin:0 0 12px;line-height:1.6">${person
+                ? `Its roles are replaced by one Owner role held by ${esc(person.name)}. An individual cannot be changed back to an enterprise.`
+                : 'Its roles are replaced by one Owner role. An individual cannot be changed back to an enterprise.'}</p>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+                <button onclick="showOrgModal('${org.id}')" class="btn-secondary">Cancel</button>
+                <button onclick="changeToIndividual('${org.id}')" class="btn-primary"><i class="ph ph-user"></i> Change type</button>
+            </div>
+        </div>`);
+}
+function changeToIndividual(orgId) {
+    const org = getOrgById(orgId);
+    if (!org || !orgHasType(org, 'CUSTOMER') || isIndividualOrg(org) || !canEditOrgProfile() || changeToIndividualBlock(org)) return;
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
-        if (type === 'INDIVIDUAL') {
-            const roleIds = new Set(getOrgRoles(org.id).map(r => r.id));
-            const kept = ROLE_BINDINGS.find(b => roleIds.has(b.role_id));
-            ROLE_BINDINGS = ROLE_BINDINGS.filter(b => !roleIds.has(b.role_id));
-            ROLES = ROLES.filter(r => !roleIds.has(r.id));
-            org.customer_type = 'INDIVIDUAL';
-            const owner = { id: `r-${Date.now()}`, org_id: org.id, name: 'Owner', description: 'The individual customer themselves.',
-                permissions: [...orgCapabilities(org)], created_at: now, updated_at: now };
-            ROLES.push(owner);
-            if (kept) ROLE_BINDINGS.push({ ...kept, id: `rb-${Date.now()}`, role_id: owner.id, created_at: now });
-        } else {
-            org.customer_type = 'ENTERPRISE';
-        }
-        delete org.customer_type_inferred;
+        const roleIds = new Set(getOrgRoles(org.id).map(r => r.id));
+        const kept = ROLE_BINDINGS.find(b => roleIds.has(b.role_id));
+        ROLE_BINDINGS = ROLE_BINDINGS.filter(b => !roleIds.has(b.role_id));
+        ROLES = ROLES.filter(r => !roleIds.has(r.id));
+        org.customer_type = 'INDIVIDUAL';
+        const owner = { id: `r-${Date.now()}`, org_id: org.id, name: 'Owner', description: 'The individual customer themselves.',
+            permissions: [...orgCapabilities(org)], created_at: now, updated_at: now };
+        ROLES.push(owner);
+        if (kept) ROLE_BINDINGS.push({ ...kept, id: `rb-${Date.now()}`, role_id: owner.id, status: 'active', created_at: now });
         org.updated_at = now;
-        logActivity('Organization type confirmed', org.name, type === 'INDIVIDUAL' ? 'Customer · Individual' : 'Customer · Enterprise');
+        logActivity('Organization type changed', org.name, 'Customer · Enterprise → Customer · Individual');
     });
     if (!ok) return;
-    showOrgModal(org.id);
+    closeModal();
     renderOrganizations();
-    showToast(`${org.name} confirmed as ${type === 'INDIVIDUAL' ? 'an individual' : 'an enterprise'} customer`);
+    showToast(`${org.name} changed to an individual customer`);
 }
 
 // ── Detail ──
@@ -7838,7 +7891,7 @@ function showRoleModal(orgId, roleId = null) {
             <input id="role-desc" class="input-field" maxlength="140" autocomplete="off" value="${esc(role?.description || '')}" placeholder="Optional — what this role is for">
             <div class="field-label" style="margin-top:16px">Permissions</div>
             <div class="field-hint">C create · R read · U update · D delete. A dash means this organization's type does not allow it.</div>
-            ${rolePermissionMatrix(org, role ? [...role.permissions] : [])}
+            <div id="role-perm-field">${rolePermissionMatrix(org, role ? [...role.permissions] : [])}</div>
             <p id="role-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin:14px 0 0"></p>
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
                 <button onclick="showOrgDetail('${org.id}', 'roles')" class="btn-secondary">Cancel</button>
@@ -7854,18 +7907,19 @@ function saveRole(orgId, roleId = null) {
     if (!canSeeOrg(org) || !orgAllowsMembers(org) || !canEditMembers()) return;
     const name = (document.getElementById('role-name')?.value || '').trim();
     const description = (document.getElementById('role-desc')?.value || '').trim();
-    const err = document.getElementById('role-error');
-    const fail = msg => { err.textContent = msg; err.style.display = 'block'; };
-    if (!name) return fail('Name is required.');
-    if (getOrgRoles(orgId).some(r => r.id !== roleId && r.name.toLowerCase() === name.toLowerCase())) return fail(`This organization already has a role named ${name}.`);
     const ceiling = orgCapabilities(org);
     const permissions = [...document.querySelectorAll('.role-perm:checked')].map(el => el.value).filter(p => ceiling.has(p));
-    if (!permissions.length) return fail('Pick at least one permission.');
+    const errors = [];
+    if (!name) errors.push(fieldErr('#role-name', 'Please enter Name.'));
+    else if (getOrgRoles(orgId).some(r => r.id !== roleId && r.name.toLowerCase() === name.toLowerCase())) errors.push(fieldErr('#role-name', `This organization already has a role named ${name}.`));
+    else if (name.toLowerCase() === 'owner') errors.push(fieldErr('#role-name', 'Owner is reserved for individual customers. Pick another name.'));
+    if (!permissions.length) errors.push(fieldErr('#role-perm-field', 'Please select Permissions.'));
     // Changing the role you are acting under would rewrite the floor beneath
     // this session; the Super Admin previewing it is unaffected.
     const actingRole = !viewAsBindingId && activeRole();
-    if (role && actingRole && actingRole.id === role.id) return fail('This is the role you are signed in under. Switch to another role before editing it.');
-    if (role && leavesNoManager(org, { rolePerms: { roleId: role.id, permissions } })) return fail(LAST_MANAGER_MESSAGE);
+    if (role && actingRole && actingRole.id === role.id) errors.push(formErr('You are signed in under this role. Switch to another role first.'));
+    else if (role && permissions.length && leavesNoManager(org, { rolePerms: { roleId: role.id, permissions } })) errors.push(formErr(LAST_MANAGER_MESSAGE));
+    if (showFormErrors(errors, 'role-error')) return;
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
         if (role) Object.assign(role, { name, description, permissions, updated_at: now });
@@ -7956,7 +8010,7 @@ function showAddMemberModal(orgId) {
                 <input id="member-name" class="input-field" maxlength="100" autocomplete="off" placeholder="Full name">
             </div>
             <div class="field-label" style="margin-top:14px">Roles <span class="req">*</span></div>
-            <div style="display:grid;gap:8px">${roleCheckboxes(org)}</div>
+            <div id="member-roles-field" style="display:grid;gap:8px">${roleCheckboxes(org)}</div>
             <p id="member-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin:14px 0 0"></p>
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
                 <button onclick="showOrgDetail('${org.id}', 'members')" class="btn-secondary">Cancel</button>
@@ -7990,14 +8044,16 @@ function addMember(orgId) {
     const email = (document.getElementById('member-email')?.value || '').trim();
     const name = (document.getElementById('member-name')?.value || '').trim();
     const roleIds = checkedRoleIds();
-    const err = document.getElementById('member-error');
-    const fail = msg => { err.textContent = msg; err.style.display = 'block'; };
-    const emailError = validateLoginEmail(email);
-    if (emailError) return fail(emailError);
     const existing = findUserByEmail(email);
-    if (existing && getOrgBindings(orgId).some(b => b.user_id === existing.id)) return fail('This account is already a member here. Change its roles from the member list instead.');
-    if (!existing && !name) return fail('Name is required for a new account.');
-    if (!roleIds.length) return fail('Pick at least one role.');
+    const errors = [];
+    const emailError = formEmailError(email);
+    if (emailError) errors.push(fieldErr('#member-email', emailError));
+    else if (existing?.is_super_admin) errors.push(fieldErr('#member-email', 'This action is not available. Please contact AISO.'));
+    else if (existing && existing.status !== 'active') errors.push(fieldErr('#member-email', isOperatorView() ? 'This account is disabled. Re-enable it first.' : 'This action is not available. Please contact AISO.'));
+    else if (existing && getOrgBindings(orgId).some(b => b.user_id === existing.id)) errors.push(fieldErr('#member-email', 'This account is already a member here. Change its roles from the member list instead.'));
+    if (!emailError && !existing && !name) errors.push(fieldErr('#member-name', 'Please enter Name.'));
+    if (!roleIds.length) errors.push(fieldErr('#member-roles-field', 'Please select Roles.'));
+    if (showFormErrors(errors, 'member-error')) return;
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
         let user = existing;
@@ -8029,7 +8085,7 @@ function showEditMemberModal(orgId, userId) {
         <div style="padding:26px 28px">
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 4px">Roles for ${esc(user.name)}</h3>
             <div style="font-size:13px;color:#86868b;margin-bottom:16px">${esc(user.email)} · ${esc(org.name)}</div>
-            <div style="display:grid;gap:8px">${roleCheckboxes(org, current)}</div>
+            <div id="member-roles-field" style="display:grid;gap:8px">${roleCheckboxes(org, current)}</div>
             <div class="field-hint" style="margin-top:8px">Keep at least one role. To take the account out of this organization, remove the member instead.</div>
             <p id="member-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin:14px 0 0"></p>
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
@@ -8043,16 +8099,14 @@ function saveMemberRoles(orgId, userId) {
     const org = getOrgById(orgId);
     const user = USERS.find(u => u.id === userId);
     if (!canSeeOrg(org) || !user || !canEditMembers()) return;
-    const err = document.getElementById('member-error');
-    const fail = msg => { err.textContent = msg; err.style.display = 'block'; };
     const wanted = checkedRoleIds();
-    if (!wanted.length) return fail('Keep at least one role, or remove the member instead.');
+    if (showFormErrors(wanted.length ? [] : [fieldErr('#member-roles-field', 'Keep at least one role, or remove the member instead.')], 'member-error')) return;
     const held = getOrgBindings(orgId).filter(b => b.user_id === userId);
     const dropped = held.filter(b => !wanted.includes(b.role_id));
     const addedRoleIds = wanted.filter(id => !held.some(b => b.role_id === id));
-    if (wouldDropActiveBinding(userId, dropped.map(b => b.id))) return fail('You are signed in under a role you are removing. Switch to another role first.');
+    if (wouldDropActiveBinding(userId, dropped.map(b => b.id)) && showFormErrors([formErr('You are signed in under this role. Switch to another role first.')], 'member-error')) return;
     if (!dropped.length && !addedRoleIds.length) { showOrgDetail(org.id, 'members'); return; }
-    if (leavesNoManager(org, { drop: dropped.map(b => b.id) })) return fail(LAST_MANAGER_MESSAGE);
+    if (leavesNoManager(org, { drop: dropped.map(b => b.id) }) && showFormErrors([formErr(LAST_MANAGER_MESSAGE)], 'member-error')) return;
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
         const droppedIds = new Set(dropped.map(b => b.id));
@@ -9048,14 +9102,11 @@ function renderTicketCreateModal() {
 function saveTicket() {
     const d = ticketDraft;
     const errors = [];
-    if (!ticketDraftReady()) errors.push('Pick an order line (and serial or license key) first.');
-    if (!d.subject.trim()) errors.push('Subject is required.');
-    if (!d.description.trim()) errors.push('Description is required.');
+    if (!ticketDraftReady()) errors.push(fieldErr('#tk-find-results', 'Pick an order line (and serial or license key) first.'));
+    if (!d.subject.trim()) errors.push(fieldErr('#tk-subject', 'Please enter Subject.'));
+    if (!d.description.trim()) errors.push(fieldErr('#tk-description', 'Please enter Description.'));
+    if (showFormErrors(errors, 'tk-error')) return;
     const errEl = document.getElementById('tk-error');
-    if (errors.length) {
-        if (errEl) { errEl.textContent = errors[0]; errEl.style.display = 'block'; }
-        return;
-    }
     const line = ORDER_LINES.find(l => l.id === d.order_line_id);
     const order = getOrderById(line.order_id);
     // A draft has unfilled serials and a cancelled order is no longer serviced.
@@ -9242,7 +9293,8 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
     const t = getTicketById(ticketId);
     const body = (document.getElementById('tk-reply')?.value || '').trim();
     const attachments = ticketReplyDraft.ticketId === ticketId ? ticketReplyDraft.attachments.map(a => ({ ...a })) : [];
-    if (!t || (!body && !attachments.length)) { showToast('Write a message or attach a file first.', 'error'); return; }
+    if (!t) return;
+    if (!body && !attachments.length) { showFormErrors([fieldErr('#tk-reply', 'Write a message or attach a file first.')]); return; }
     const manage = canManageTickets();
     const isNote = manage && ticketReplyMode === 'note';
     const notify = isNote && ticketReplyDraft.ticketId === ticketId ? [...(ticketReplyDraft.notify || [])] : [];

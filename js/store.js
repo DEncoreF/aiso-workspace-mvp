@@ -155,16 +155,6 @@ const Store = (function () {
             org.vendor_type = null;
             orgsMigrated = true;
         });
-        // A customer org saved without a subtype gets one inferred from its
-        // shape, flagged until the desk confirms it (SA V2 D17).
-        ORGS.forEach(org => {
-            if (!(org.types || []).includes('CUSTOMER') || org.customer_type) return;
-            const roles = ROLES.filter(r => r.org_id === org.id);
-            const members = new Set(ROLE_BINDINGS.filter(b => roles.some(r => r.id === b.role_id)).map(b => b.user_id));
-            org.customer_type = members.size >= 2 || roles.some(r => r.name !== 'Owner') ? 'ENTERPRISE' : 'INDIVIDUAL';
-            org.customer_type_inferred = true;
-            orgsMigrated = true;
-        });
         // Saves from before the AISO desk colleagues were seeded get them once.
         // The flag stops a later removal in the UI from being undone on reload.
         let aisoDeskAdded = false;
