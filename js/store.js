@@ -4,7 +4,8 @@
 // Persisted state: PRODUCTS, ASSETS, ORDERS, ORDER_LINES, TICKETS,
 //                  TICKET_MESSAGES, NOTIFICATIONS, ORGS, USERS, ROLES, ROLE_BINDINGS,
 //                  ACTIVITY_LOG, HARDWARE_PRODUCT_TYPES,
-//                  SOFTWARE_CATEGORY_OPTIONS, SOFTWARE_INDUSTRY_OPTIONS
+//                  SOFTWARE_CATEGORY_OPTIONS, SOFTWARE_INDUSTRY_OPTIONS,
+//                  SYSTEM_PARAMETERS
 // ═══════════════════════════════════════════════════════════════════
 
 const Store = (function () {
@@ -40,6 +41,7 @@ const Store = (function () {
             HARDWARE_PRODUCT_TYPES,
             SOFTWARE_CATEGORY_OPTIONS,
             SOFTWARE_INDUSTRY_OPTIONS,
+            SYSTEM_PARAMETERS,
             aisoDeskSeeded: true,
         });
     }
@@ -186,6 +188,10 @@ const Store = (function () {
         if (Array.isArray(data.HARDWARE_PRODUCT_TYPES)) HARDWARE_PRODUCT_TYPES = data.HARDWARE_PRODUCT_TYPES;
         if (Array.isArray(data.SOFTWARE_CATEGORY_OPTIONS)) SOFTWARE_CATEGORY_OPTIONS = data.SOFTWARE_CATEGORY_OPTIONS;
         if (Array.isArray(data.SOFTWARE_INDUSTRY_OPTIONS)) SOFTWARE_INDUSTRY_OPTIONS = data.SOFTWARE_INDUSTRY_OPTIONS;
+        // Saved values win; a parameter the save predates keeps its default.
+        if (data.SYSTEM_PARAMETERS && typeof data.SYSTEM_PARAMETERS === 'object') {
+            SYSTEM_PARAMETERS = { ...SYSTEM_PARAMETERS, ...data.SYSTEM_PARAMETERS };
+        }
         if (mockDataMigrated || industriesNormalized || licenseKeysNormalized || channelsRenamed || aisoDeskAdded || orgsMigrated || orderUnitsNormalized || creatorsAdded || !data.aisoDeskSeeded) {
             try { localStorage.setItem(KEY, serialize()); } catch (e) { /* retry on the next normal save */ }
         }

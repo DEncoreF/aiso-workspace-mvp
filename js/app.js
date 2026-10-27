@@ -1118,21 +1118,23 @@ function renderProductPagination(type, totalItems, currentPage, totalPages) {
     const prefix = type === 'software' ? 'sw' : 'hw';
     const target = document.getElementById(`${prefix}-products-pagination`);
     if (!target) return;
-    if (totalItems <= PRODUCT_PAGE_SIZE) {
-        target.innerHTML = '';
-        return;
-    }
+    target.innerHTML = listPagerHtml(totalItems, currentPage, totalPages, page => `setProductPage('${type}',${page})`);
+}
 
+// The V1 list pager (V1 §3): hidden at one page or less. `go` turns a page
+// number, or a JS expression for one, into the onclick call that opens it.
+function listPagerHtml(totalItems, currentPage, totalPages, go) {
+    if (totalItems <= PRODUCT_PAGE_SIZE) return '';
     const firstItem = (currentPage - 1) * PRODUCT_PAGE_SIZE + 1;
     const lastItem = Math.min(currentPage * PRODUCT_PAGE_SIZE, totalItems);
     const pageStart = Math.max(1, Math.min(currentPage - 2, totalPages - 4));
     const pageEnd = Math.min(totalPages, pageStart + 4);
     const pageButtons = Array.from({ length: pageEnd - pageStart + 1 }, (_, i) => pageStart + i).map(page =>
-        `<button type="button" onclick="setProductPage('${type}',${page})" class="${page === currentPage ? 'btn-primary' : 'btn-ghost'}" style="min-width:32px;height:32px;padding:0 9px;justify-content:center">${page}</button>`
+        `<button type="button" onclick="${go(page)}" class="${page === currentPage ? 'btn-primary' : 'btn-ghost'}" style="min-width:32px;height:32px;padding:0 9px;justify-content:center">${page}</button>`
     ).join('');
-    const navButton = (label, page, disabled = false) => `<button type="button" ${disabled ? 'disabled' : `onclick="setProductPage('${type}',${page})"`} class="btn-ghost" style="font-size:12px">${label}</button>`;
+    const navButton = (label, page, disabled = false) => `<button type="button" ${disabled ? 'disabled' : `onclick="${go(page)}"`} class="btn-ghost" style="font-size:12px">${label}</button>`;
 
-    target.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 4px;border-top:1px solid var(--border-light);flex-wrap:wrap">
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 4px;border-top:1px solid var(--border-light);flex-wrap:wrap">
         <span style="font-size:12px;color:#86868b;font-weight:500">${firstItem}-${lastItem} of ${totalItems} items</span>
         <div style="display:flex;align-items:center;gap:4px">
             ${navButton('« First', 1, currentPage === 1)}
@@ -1142,7 +1144,7 @@ function renderProductPagination(type, totalItems, currentPage, totalPages) {
             ${navButton('Last »', totalPages, currentPage === totalPages)}
         </div>
         <label style="display:flex;align-items:center;gap:7px;font-size:12px;color:#86868b;font-weight:500">Go to Page
-            <input type="number" min="1" max="${totalPages}" value="${currentPage}" aria-label="Go to page" onchange="setProductPage('${type}',Math.min(Math.max(this.value,1),${totalPages}))" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}" class="input-field" style="width:58px;padding:6px 8px;margin:0;text-align:center">
+            <input type="number" min="1" max="${totalPages}" value="${currentPage}" aria-label="Go to page" onchange="${go(`Math.min(Math.max(this.value,1),${totalPages})`)}" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}" class="input-field" style="width:58px;padding:6px 8px;margin:0;text-align:center">
             <span>/ ${totalPages}</span>
         </label>
     </div>`;
@@ -3897,6 +3899,9 @@ function startParamDraft() {
         'sw-ind': SOFTWARE_INDUSTRY_OPTIONS.map(o => ({ ...o })),
         'hw-type': HARDWARE_PRODUCT_TYPES.map(o => ({ ...o })),
         order: { software: publishedOrderIds('software'), hardware: publishedOrderIds('hardware') },
+        // Kept as typed, so a half-entered value counts as a change and is
+        // caught when the user saves.
+        system: Object.fromEntries(SYSTEM_PARAM_FIELDS.map(f => [f.key, String(SYSTEM_PARAMETERS[f.key] ?? '')])),
     };
 }
 
@@ -3916,6 +3921,24 @@ const PARAM_LIST_LABELS = {
     'sw-ind': 'Applicable industry',
     'hw-type': 'Hardware product type',
 };
+
+// Editable parameters added this phase (SA V2 4.2.8). Fields with a unit are
+// whole numbers; `sla` ties a first-response target to the line's SLA plan.
+const SYSTEM_PARAM_FIELDS = [
+    { key: 'invitation_link_days', label: 'Invitation link validity', unit: 'days', min: 1, max: 30,
+      hint: 'Sets the expiry of invitations sent or resent from now on.' },
+    { key: 'service_desk_mailbox', label: 'Service desk mailbox', email: true,
+      hint: 'Desk emails go here. Leave empty to stop sending them.' },
+    { key: 'first_response_7x24', label: 'First response target (7x24)', unit: 'hours', min: 1, max: 999, sla: '7x24' },
+    { key: 'first_response_onsite', label: 'First response target (On-site)', unit: 'hours', min: 1, max: 999, sla: 'On-site' },
+    { key: 'first_response_5x8', label: 'First response target (5x8)', unit: 'hours', min: 1, max: 999, sla: '5x8' },
+    { key: 'first_response_no_sla', label: 'First response target (No SLA)', unit: 'hours', min: 1, max: 999, sla: '' },
+];
+
+function firstResponseTargetHours(slaPlan) {
+    const field = SYSTEM_PARAM_FIELDS.find(f => f.sla === slaPlan) || SYSTEM_PARAM_FIELDS.find(f => f.key === 'first_response_no_sla');
+    return SYSTEM_PARAMETERS[field.key];
+}
 
 function paramLiveArr(prefix) {
     if (prefix === 'sw-cat') return SOFTWARE_CATEGORY_OPTIONS;
@@ -3950,6 +3973,13 @@ function getParamPendingChanges() {
         if (before.length !== after.length || before.some((id, i) => id !== after[i])) {
             changes.push({ label: `${type === 'software' ? 'Software' : 'Hardware'} display order reordered` });
         }
+    });
+    SYSTEM_PARAM_FIELDS.forEach(f => {
+        const before = String(SYSTEM_PARAMETERS[f.key] ?? '');
+        const after = paramDraft.system[f.key].trim();
+        if (after === before) return;
+        const show = v => v ? `${v}${f.unit ? ` ${f.unit}` : ''}` : '(empty)';
+        changes.push({ label: `${f.label}: ${show(before)} → ${show(after)}` });
     });
     return changes;
 }
@@ -4023,6 +4053,12 @@ function discardPendingChanges(scope) {
 function confirmPendingChanges(scope) {
     const changes = getPendingChanges(scope);
     if (!changes.length) return;
+    if (scope === 'param-center') {
+        const panel = document.getElementById('param-tab-system');
+        const errors = systemParamErrors();
+        if (errors.length) switchParamTab('system');
+        if (showFormErrors(errors, null, panel || document)) return;
+    }
     showModal(`
         <div>
             <div style="width:52px;height:52px;border-radius:16px;background:#eef1ff;display:grid;place-items:center;margin-bottom:16px"><i class="ph ph-floppy-disk" style="font-size:26px;color:#1432E6"></i></div>
@@ -4072,6 +4108,10 @@ function applyParamDraft(changes) {
                 .filter(p => p.product_type === type && p.status !== 'published')
                 .sort((a, b) => (a.display_order || 999) - (b.display_order || 999));
             [...ordered, ...others].forEach((p, i) => { p.display_order = i + 1; });
+        });
+        SYSTEM_PARAM_FIELDS.forEach(f => {
+            const v = draft.system[f.key].trim();
+            SYSTEM_PARAMETERS[f.key] = f.unit ? parseInt(v, 10) : v;
         });
         changes.forEach(change => logActivity('Parameter updated', 'Parameter Center', change.label));
     });
@@ -4146,7 +4186,88 @@ function renderParamCenter() {
     renderParamTagList('param-hw-types', getParamDataArr('hw-type'), 'hw-type');
     renderDisplayOrder('software');
     renderDisplayOrder('hardware');
+    renderSystemParams();
     renderPendingBar('param-center');
+}
+
+function renderSystemParams() {
+    const host = document.getElementById('param-system-fields');
+    if (!host) return;
+    const input = f => {
+        const v = paramDraft.system[f.key];
+        const onInput = `paramDraft.system['${f.key}']=this.value;renderPendingBar('param-center')`;
+        if (f.email) return `
+            <div class="relative" style="max-width:360px">
+                <input id="param-${f.key}" type="email" maxlength="100" autocomplete="off" class="input-field" style="margin:0;padding-right:56px" value="${esc(v)}" placeholder="name@example.com"
+                    oninput="${onInput};updateCharCounter('param-${f.key}')">
+                <span id="param-${f.key}-count" class="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#86868b] pointer-events-none">${v.length}/100</span>
+            </div>`;
+        return `
+            <div style="display:flex;align-items:center;gap:8px">
+                <input id="param-${f.key}" type="number" min="${f.min}" max="${f.max}" step="1" class="input-field" style="margin:0;width:110px" value="${esc(v)}" oninput="${onInput}">
+                <span style="font-size:12.5px;color:#86868b">${f.unit} (${f.min}–${f.max})</span>
+            </div>`;
+    };
+    const row = f => `
+        <div style="padding:14px 18px;border-bottom:1px solid #f1f3f5">
+            <label class="field-label" for="param-${f.key}">${esc(f.label)}</label>
+            ${input(f)}
+            ${f.hint ? `<div class="field-hint">${esc(f.hint)}</div>` : ''}
+            ${f.email && !SYSTEM_PARAMETERS.service_desk_mailbox ? '<div class="field-hint" style="color:#b45309"><i class="ph ph-warning"></i> Service desk mailbox is not set. Desk emails are not being sent.</div>' : ''}
+        </div>`;
+    // The development team sets these two; they are listed so the page shows
+    // every parameter this phase adds.
+    const devRow = (label, note) => `
+        <div style="padding:14px 18px;border-bottom:1px solid #f1f3f5">
+            <div class="field-label">${label}</div>
+            <div style="font-size:12.5px;color:#86868b">${note}</div>
+        </div>`;
+    const fields = key => SYSTEM_PARAM_FIELDS.filter(f => key(f)).map(row).join('');
+    host.innerHTML = `
+        <section>
+            <div class="mb-3">
+                <h3 class="text-sm font-semibold flex items-center gap-2"><i class="ph ph-envelope-simple text-aiso"></i> Accounts</h3>
+                <p class="text-xs text-[#86868b] mt-0.5">How long invitation and password reset links stay valid.</p>
+            </div>
+            <div class="border border-[#f1f3f5] rounded-lg overflow-hidden">
+                ${fields(f => f.key === 'invitation_link_days')}
+                ${devRow('Password reset link validity', 'Unit and default set by the development team.')}
+            </div>
+        </section>
+        <section>
+            <div class="mb-3">
+                <h3 class="text-sm font-semibold flex items-center gap-2"><i class="ph ph-headset text-aiso"></i> Service Desk</h3>
+                <p class="text-xs text-[#86868b] mt-0.5">Where desk emails go, and how soon AISO must first reply. A ticket keeps the target in force when it was opened.</p>
+            </div>
+            <div class="border border-[#f1f3f5] rounded-lg overflow-hidden">
+                ${fields(f => f.email || f.key.startsWith('first_response_'))}
+            </div>
+        </section>
+        <section>
+            <div class="mb-3">
+                <h3 class="text-sm font-semibold flex items-center gap-2"><i class="ph ph-clock-counter-clockwise text-aiso"></i> Activity Log</h3>
+            </div>
+            <div class="border border-[#f1f3f5] rounded-lg overflow-hidden">
+                ${devRow('Activity Log retention', 'Period set by the development team. Older records are cleared automatically.')}
+            </div>
+        </section>`;
+}
+
+function systemParamErrors() {
+    if (!paramDraft) return [];
+    const errors = [];
+    SYSTEM_PARAM_FIELDS.forEach(f => {
+        const v = paramDraft.system[f.key].trim();
+        const at = `#param-${f.key}`;
+        if (f.email) {
+            if (v) { const e = formEmailError(v, f.label); if (e) errors.push(fieldErr(at, e)); }
+            return;
+        }
+        const n = Number(v);
+        if (!v) errors.push(fieldErr(at, `Please enter ${f.label}.`));
+        else if (!Number.isInteger(n) || n < f.min || n > f.max) errors.push(fieldErr(at, `Invalid ${f.label} format.`));
+    });
+    return errors;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -5677,7 +5798,7 @@ function showOrderModal(orderId = null, { resume = false } = {}) {
     // Coming back from "+ New customer" keeps everything typed so far.
     if (!(resume && orderDraft)) orderDraft = existing ? {
         ...JSON.parse(JSON.stringify(existing)),
-        lines: JSON.parse(JSON.stringify(getOrderLines(orderId))),
+        lines: markCustomProductLines(JSON.parse(JSON.stringify(getOrderLines(orderId)))),
         attachments: JSON.parse(JSON.stringify(existing.attachments || [])),
     } : {
         id: null, order_no: '', contract_no: '', customer_name: '', customer_org_id: null,
@@ -5748,7 +5869,6 @@ function ordLineCard(l, i) {
     const lines = orderDraft.lines;
     const parent = l.parent_line_id ? lines.find(x => x.id === l.parent_line_id) : null;
     const products = getVisibleProducts(l.scope === 'HW' ? 'hardware' : 'software').filter(p => p.status === 'published');
-    const knownProduct = l.product_id && products.some(p => p.id === l.product_id);
     const removable = parent || lines.filter(x => !x.parent_line_id).length > 1;
     return `
         <div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;${parent ? 'margin-top:10px;background:#fff' : 'margin-bottom:12px'}">
@@ -5772,10 +5892,10 @@ function ordLineCard(l, i) {
                     <select class="input-field" data-err="${i}-product" onchange="ordSetProduct(${i}, this.value)">
                         <option value="">— Select a published product —</option>
                         ${products.map(p => `<option value="${p.id}" ${l.product_id === p.id ? 'selected' : ''}>${esc(p.name)}${p.model ? ` (${esc(p.model)})` : ''}</option>`).join('')}
-                        <option value="__custom" ${l.product_name && !knownProduct ? 'selected' : ''}>Other (type a name)</option>
+                        <option value="__custom" ${l.custom_product ? 'selected' : ''}>Other (type a name)</option>
                     </select>
-                    ${l.product_id ? '' : `<input type="text" class="input-field" data-err="${i}-product-name" style="margin-top:8px" placeholder="Product name"
-                        value="${esc(l.product_name)}" oninput="orderDraft.lines[${i}].product_name=this.value.trim()">`}
+                    ${l.custom_product ? `<input type="text" class="input-field" data-err="${i}-product-name" style="margin-top:8px" maxlength="100" placeholder="Product name"
+                        value="${esc(l.product_name)}" oninput="orderDraft.lines[${i}].product_name=this.value.trim()">` : ''}
                 </div>
                 <div>
                     <label class="field-label">SLA</label>
@@ -5957,6 +6077,7 @@ function ordSetScope(i, scope) {
     l.scope = scope;
     l.product_id = '';
     l.product_name = '';
+    l.custom_product = false;
     if (scope === 'SW') {
         l.serial_nos = []; l.bom = [];
         l.warranty_months = ''; l.delivered_dates = []; l.warranty_starts = [];
@@ -5971,17 +6092,27 @@ function ordSetScope(i, scope) {
     renderOrderDraftLines();
 }
 
+// The name box belongs to "Other" alone, and switching to Other starts it
+// empty rather than carrying over the product picked before (SA V2 4.5.3).
 function ordSetProduct(i, value) {
     const l = orderDraft.lines[i];
-    if (value && value !== '__custom') {
-        const p = PRODUCTS.find(x => x.id === value);
-        l.product_id = value;
-        l.product_name = p ? p.name : '';
-    } else {
-        l.product_id = '';
-        if (value !== '__custom') l.product_name = '';
-    }
+    const p = value && value !== '__custom' ? PRODUCTS.find(x => x.id === value) : null;
+    l.product_id = p ? value : '';
+    l.product_name = p ? p.name : '';
+    l.custom_product = value === '__custom';
     renderOrderDraftLines();
+}
+
+// A draft line reopens on "Other" when it was typed by hand, or when the
+// product it picked is no longer published; the old name stays editable.
+function markCustomProductLines(lines) {
+    lines.forEach(l => {
+        const published = l.product_id && getVisibleProducts(l.scope === 'HW' ? 'hardware' : 'software')
+            .some(p => p.id === l.product_id && p.status === 'published');
+        l.custom_product = !published && !!l.product_name;
+        if (l.custom_product) l.product_id = '';
+    });
+    return lines;
 }
 
 function ordSetQty(i, value) {
@@ -6298,7 +6429,8 @@ function validateOrderDraft(status) {
     if (docError) errors.push(fieldErr('#ord-attachments-list', docError));
     if (!d.lines.length) errors.push(fieldErr('#ord-lines', 'At least one order line is required.'));
     d.lines.forEach((l, i) => {
-        if (!l.product_name) errors.push(fieldErr([at(i, 'product-name'), at(i, 'product')], 'Please select Product.'));
+        if (l.custom_product && !l.product_name) errors.push(fieldErr(at(i, 'product-name'), 'Please enter Product name.'));
+        else if (!l.product_name) errors.push(fieldErr(at(i, 'product'), 'Please select Product.'));
         if (l.scope === 'HW' && l.bom.some(b => !b.component_type || !b.model)) errors.push(fieldErr(at(i, 'bom'), 'Every BOM row needs a component and a model.'));
         if (l.scope === 'SW') errors.push(...licenseLineErrors(l, String(i), d.lines.find(x => x.id === l.parent_line_id)));
     });
@@ -8414,7 +8546,9 @@ function setTicketInternalState(ticketId, state, { assigneeId = null, note = '' 
 }
 
 function ticketFirstResponse(t) {
-    const targetHours = TICKET_FIRST_RESPONSE_HOURS[t.snapshot?.sla_plan] || TICKET_FIRST_RESPONSE_DEFAULT_HOURS;
+    // Tickets opened before the target was copied into the snapshot follow
+    // the current parameter.
+    const targetHours = t.snapshot?.first_response_hours || firstResponseTargetHours(t.snapshot?.sla_plan || '');
     const end = t.first_response_at ? new Date(t.first_response_at) : new Date();
     const elapsedHours = Math.max(0, (end - new Date(t.created_at)) / 3600000);
     const answered = !!t.first_response_at;
@@ -8683,6 +8817,14 @@ function renderTicketStats() {
         + (isOperatorView() ? stat(overdue, 'First response overdue', overdue ? '#dc2626' : '#1d1d1f') : '') + stat(resolved, 'Resolved this month');
 }
 
+// The ticket list pages like every list (SA V2 4.6.2: 10 per page).
+let ticketPage = 1;
+let ticketFilterKey = '';
+function setTicketPage(page) {
+    ticketPage = Math.max(1, parseInt(page, 10) || 1);
+    renderServiceDesk();
+}
+
 function renderServiceDesk() {
     // Needs me is a person's list: shown only while someone at AISO is acting.
     const needsTab = document.getElementById('ticket-needs-me-tab');
@@ -8698,7 +8840,16 @@ function renderServiceDesk() {
     const searching = !!(document.getElementById('ticket-search')?.value || '').trim();
     const tbody = document.getElementById('tickets-tbody');
     if (!tbody) return;
-    tbody.innerHTML = list.length ? list.map(t => {
+    // Any change to the tabs, filters or search starts again from page 1.
+    const filterKey = ['ticket-filter-status', 'ticket-search', 'ticket-customer', 'ticket-handling', 'ticket-acceptance']
+        .map(id => document.getElementById(id)?.value || '').join('|');
+    if (filterKey !== ticketFilterKey) { ticketFilterKey = filterKey; ticketPage = 1; }
+    const totalPages = Math.max(1, Math.ceil(list.length / PRODUCT_PAGE_SIZE));
+    ticketPage = Math.min(Math.max(ticketPage, 1), totalPages);
+    const pageItems = list.slice((ticketPage - 1) * PRODUCT_PAGE_SIZE, ticketPage * PRODUCT_PAGE_SIZE);
+    const pager = document.getElementById('tickets-pagination');
+    if (pager) pager.innerHTML = listPagerHtml(list.length, ticketPage, totalPages, page => `setTicketPage(${page})`);
+    tbody.innerHTML = list.length ? pageItems.map(t => {
         const fr = ticketFirstResponse(t);
         return `
         <tr class="cursor-pointer" onclick="if(!event.target.closest('button'))showTicketDetail('${t.id}')">
@@ -8800,6 +8951,7 @@ function buildTicketSnapshot(order, line, serialNo = '', licenseKey = '') {
         line_no: line.line_no,
         product_name: line.product_name + (isSw && line.version ? ` v${line.version}` : ''),
         sla_plan: line.sla_plan || '',
+        first_response_hours: firstResponseTargetHours(line.sla_plan || ''),
         coverage_kind: isSw ? 'license' : 'warranty',
         coverage_end: isSw ? (line.license_end || '') : unitWarrantyEnd(line, (line.serial_nos || []).indexOf(serialNo)),
         supplier_name: isSw ? (line.supplier_name || order.sw_supplier_name || '') : (order.hw_supplier_name || ''),

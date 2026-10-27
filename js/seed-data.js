@@ -730,9 +730,17 @@ const TICKET_INTERNAL_STATE_LABEL = {
     SI: 'With system integrator',
     AISO_INTERNAL: 'AISO internal work',
 };
-// Hours AISO has to post its first reply, by the line's SLA plan.
-const TICKET_FIRST_RESPONSE_HOURS = { '7x24': 4, 'On-site': 8, '5x8': 24 };
-const TICKET_FIRST_RESPONSE_DEFAULT_HOURS = 24;
+// Parameter Center settings added this phase (SA V2 4.2.8). The first-response
+// targets are the hours AISO has to post its first reply, by the line's SLA
+// plan; a ticket copies its target when it is opened.
+let SYSTEM_PARAMETERS = {
+    invitation_link_days: 7,
+    service_desk_mailbox: 'service.desk@aiso.com',
+    first_response_7x24: 4,
+    first_response_onsite: 8,
+    first_response_5x8: 24,
+    first_response_no_sla: 24,
+};
 
 let TICKETS = [
     {

@@ -1035,6 +1035,7 @@
                         <tbody id="tickets-tbody"></tbody>
                     </table>
                 </div>
+                <div id="tickets-pagination"></div>
             </div>
 
             <!-- ====== ASSET REGISTRY ====== -->
@@ -1086,6 +1087,7 @@
                 <div class="flex gap-2 mb-5">
                     <button class="tab-btn active" data-param-tab="sw" onclick="switchParamTab('sw')"><i class="ph ph-app-window"></i> Software Parameters</button>
                     <button class="tab-btn" data-param-tab="hw" onclick="switchParamTab('hw')"><i class="ph ph-hard-drives"></i> Hardware Parameters</button>
+                    <button class="tab-btn" data-param-tab="system" onclick="switchParamTab('system')"><i class="ph ph-gear-six"></i> System Parameters</button>
                 </div>
 
                 <!-- ─── Software Parameters Tab ─── -->
@@ -1148,6 +1150,11 @@
                         </div>
                         <div class="border border-[#f1f3f5] rounded-lg px-5 py-4" id="param-hw-types"></div>
                     </section>
+                </div>
+
+                <!-- ─── System Parameters Tab (SA V2 4.2.8) ─── -->
+                <div id="param-tab-system" class="param-tab-panel hidden">
+                    <div id="param-system-fields" class="space-y-8"></div>
                 </div>
 
                 <div id="param-pending-bar" class="pending-bar" hidden></div>
