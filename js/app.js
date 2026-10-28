@@ -5859,32 +5859,32 @@ function showOrderModal(orderId = null, { resume = false } = {}) {
 function renderOrderDraftLines() {
     const host = document.getElementById('ord-lines');
     if (!host) return;
-    // Bundled SW lines render inside their HW line's card, not on their own.
-    host.innerHTML = orderDraft.lines.map((l, i) => l.parent_line_id ? '' : ordLineCard(l, i)).join('');
+    // Every line is its own card in form order; a SW line names the HW line
+    // it is licensed for in its own "Hardware line" field (SA V2 4.5.3).
+    host.innerHTML = orderDraft.lines.map((l, i) => ordLineCard(l, i)).join('');
 }
 
 function ordLineCard(l, i) {
     const lines = orderDraft.lines;
     const parent = l.parent_line_id ? lines.find(x => x.id === l.parent_line_id) : null;
     const products = getVisibleProducts(l.scope === 'HW' ? 'hardware' : 'software').filter(p => p.status === 'published');
-    const removable = parent || lines.filter(x => !x.parent_line_id).length > 1;
+    const removable = lines.length > 1;
     return `
-        <div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;${parent ? 'margin-top:10px;background:#fff' : 'margin-bottom:12px'}">
+        <div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
                 <span style="font-size:12.5px;font-weight:700;color:#86868b">Line ${i + 1}</span>
                 <span class="badge ${l.scope === 'HW' ? 'badge-hw' : 'badge-sw'}">${l.scope}</span>
                 ${parent ? `<span class="field-hint" style="margin:0">bundled with Line ${lines.indexOf(parent) + 1}</span>` : ''}
                 ${removable ? `<button onclick="ordRemoveLine(${i})" class="btn-ghost" style="margin-left:auto" title="Remove line"><i class="ph ph-trash"></i></button>` : ''}
             </div>
-            <div style="display:grid;grid-template-columns:${parent ? '' : '100px '}1fr 120px 80px;gap:12px">
-                ${parent ? '' : `
+            <div style="display:grid;grid-template-columns:100px 1fr 120px 80px;gap:12px">
                 <div>
                     <label class="field-label">Scope</label>
                     <select class="input-field" onchange="ordSetScope(${i}, this.value)">
                         <option value="HW" ${l.scope === 'HW' ? 'selected' : ''}>HW</option>
                         <option value="SW" ${l.scope === 'SW' ? 'selected' : ''}>SW</option>
                     </select>
-                </div>`}
+                </div>
                 <div>
                     <label class="field-label">Product</label>
                     <select class="input-field" data-err="${i}-product" onchange="ordSetProduct(${i}, this.value)">
@@ -5960,8 +5960,14 @@ function ordLineCard(l, i) {
                     </tbody>
                 </table>` : ''}
                 <button onclick="ordAddBom(${i})" class="btn-secondary text-xs" style="margin-top:${l.bom.length ? '10px' : '0'}"><i class="ph ph-plus"></i> Add Component</button>
+            </div>` : `
+            <div style="margin-top:12px;max-width:420px">
+                <label class="field-label">Hardware line</label>
+                <select class="input-field" data-err="${i}-hw-line" onchange="ordSetParent(${i}, this.value)">
+                    <option value="" ${parent ? '' : 'selected'}>—</option>
+                    ${lines.map((x, xi) => x.scope === 'HW' ? `<option value="${x.id}" ${parent === x ? 'selected' : ''}>Line ${xi + 1} · ${esc(x.product_name || 'No product yet')}</option>` : '').join('')}
+                </select>
             </div>
-            ${ordBundleSection(l, i)}` : `
             <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px;margin-top:12px">
                 <div>
                     <label class="field-label">Supplier</label>
@@ -6006,22 +6012,16 @@ function ordLineCard(l, i) {
 }
 
 // ── Bundled software (docs/ORDER_MANAGEMENT_PLAN.md, License ↔ SN) ──
-// A bundled SW line is an ordinary SW line with parent_line_id set. It sits
-// right after its HW line in the array, so line numbers stay in order.
+// A bundled SW line is an ordinary SW line with parent_line_id set, chosen in
+// its own Hardware line field. It can sit anywhere in the form.
 
-function ordBundleSection(l, i) {
-    const children = orderDraft.lines.filter(x => l.id && x.parent_line_id === l.id);
-    return `
-            <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-light)">
-                <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer">
-                    <input type="checkbox" ${children.length ? 'checked' : ''} onchange="ordToggleBundle(${i}, this.checked)"> Includes software licenses
-                </label>
-                ${children.length ? `
-                <div style="margin-left:18px">
-                    ${children.map(c => ordLineCard(c, orderDraft.lines.indexOf(c))).join('')}
-                    <button onclick="ordAddBundled(${i})" class="btn-secondary text-xs" style="margin-top:10px"><i class="ph ph-plus"></i> Add Software</button>
-                </div>` : ''}
-            </div>`;
+// Losing the HW line (removed, turned into SW, or unpicked) keeps the SW line
+// and its keys; only the units they were bound to go (SA V2 4.5.3).
+function ordDetachFrom(hwLineId) {
+    orderDraft.lines.filter(x => x.parent_line_id === hwLineId).forEach(x => {
+        x.parent_line_id = null;
+        x.license_keys.forEach(k => { k.unit = null; });
+    });
 }
 
 // The binding is by unit index, so a unit whose serial is still blank can
@@ -6033,28 +6033,28 @@ function ordUnitOptions(parent, unit) {
     return `<option value="" ${unit === null ? 'selected' : ''}>All units</option>${units.join('')}${gone}`;
 }
 
-function ordAddBundled(i) {
-    const parent = orderDraft.lines[i];
-    const child = {
-        ...newOrderLineDraft(0), scope: 'SW', parent_line_id: parent.id, serial_nos: [], qty: parent.qty,
-        // Default to one key per unit, in order — the common case.
-        license_keys: Array.from({ length: parent.qty }, (_, u) => ({ key: '', unit: u })),
-    };
-    let at = i + 1;
-    while (at < orderDraft.lines.length && orderDraft.lines[at].parent_line_id === parent.id) at++;
-    orderDraft.lines.splice(at, 0, child);
-    renderOrderDraftLines();
-}
-
-function ordToggleBundle(i, on) {
-    if (on) { ordAddBundled(i); return; }
-    const parentId = orderDraft.lines[i].id;
-    const children = orderDraft.lines.filter(x => x.parent_line_id === parentId);
-    if (children.some(c => c.license_keys.some(k => k.key)) && !window.confirm('Remove the bundled software and the license keys entered for it?')) {
+function ordSetParent(i, value) {
+    const l = orderDraft.lines[i];
+    const next = value || null;
+    if (l.parent_line_id === next) return;
+    const bound = l.parent_line_id && l.license_keys.some(k => k.key && k.unit !== null);
+    if (bound && !window.confirm('Clear the units bound to these license keys? The keys stay on this line.')) {
         renderOrderDraftLines();
         return;
     }
-    orderDraft.lines = orderDraft.lines.filter(x => x.parent_line_id !== parentId);
+    l.license_keys.forEach(k => { k.unit = null; });
+    l.parent_line_id = next;
+    const hw = next ? orderDraft.lines.find(x => x.id === next) : null;
+    if (hw) {
+        // Nothing typed yet: one key per unit of that line. Otherwise the keys
+        // stay and take its units in order; keys past its last unit cover all.
+        if (!l.license_keys.some(k => k.key)) {
+            l.qty = hw.qty;
+            l.license_keys = Array.from({ length: hw.qty }, (_, u) => ({ key: '', unit: u }));
+        } else {
+            l.license_keys.forEach((k, ki) => { k.unit = ki < hw.qty ? ki : null; });
+        }
+    }
     renderOrderDraftLines();
 }
 
@@ -6065,7 +6065,8 @@ function ordAddLine() {
 
 function ordRemoveLine(i) {
     const id = orderDraft.lines[i].id;
-    orderDraft.lines = orderDraft.lines.filter((x, xi) => xi !== i && !(id && x.parent_line_id === id));
+    if (id) ordDetachFrom(id);
+    orderDraft.lines = orderDraft.lines.filter((x, xi) => xi !== i);
     renderOrderDraftLines();
 }
 
@@ -6080,9 +6081,10 @@ function ordSetScope(i, scope) {
         l.serial_nos = []; l.bom = [];
         l.warranty_months = ''; l.delivered_dates = []; l.warranty_starts = [];
         l.license_keys = Array.from({ length: l.qty }, () => ({ key: '', unit: null }));
-        // A SW line cannot carry bundled software.
-        orderDraft.lines = orderDraft.lines.filter(x => x.parent_line_id !== l.id);
+        // A SW line cannot carry bundled software: lines that picked it let go.
+        ordDetachFrom(l.id);
     } else {
+        l.parent_line_id = null;
         l.serial_nos = Array.from({ length: l.qty }, () => '');
         fitUnitArrays(l);
         l.license_keys = []; l.version = ''; l.license_start = ''; l.license_end = '';
@@ -6418,7 +6420,6 @@ function validateOrderDraft(status) {
     const at = (i, f) => `[data-err="${i}-${f}"]`;
     const sn = (i, si) => `[data-sn="${i}-${si}"]`;
     if (!d.order_no) errors.push(fieldErr('#ord-no', 'Please enter Order No.'));
-    else if (ORDERS.some(o => o.id !== d.id && o.order_no.toLowerCase() === d.order_no.toLowerCase())) errors.push(fieldErr('#ord-no', `Order No ${d.order_no} already exists.`));
     if (!d.order_date) errors.push(fieldErr('#ord-date', 'Please select Order Date.'));
     if (!d.customer_org_id) errors.push(fieldErr('#ord-customer', 'Please select Customer.'));
     if (d.lines.some(l => l.scope === 'HW') && !d.hw_supplier_name) errors.push(fieldErr('#ord-hw-sup', 'HW Supplier is required because the order has HW lines.'));
@@ -7002,7 +7003,7 @@ function showOrderDetail(id) {
             ${lines.map(l => {
                 const parent = l.parent_line_id ? lines.find(x => x.id === l.parent_line_id) : null;
                 return `
-            <div style="border:1px solid var(--border-light);border-radius:10px;padding:12px 14px;margin-bottom:10px${parent ? ';margin-left:24px' : ''}">
+            <div style="border:1px solid var(--border-light);border-radius:10px;padding:12px 14px;margin-bottom:10px">
                 ${parent ? `<div style="font-size:11.5px;color:#86868b;margin-bottom:6px"><i class="ph ph-arrow-elbow-down-right"></i> Bundled with line ${parent.line_no} · ${esc(parent.product_name)}</div>` : ''}
                 <div style="display:flex;align-items:center;gap:10px">
                     <span class="badge ${l.scope === 'HW' ? 'badge-hw' : 'badge-sw'}">${l.scope}</span>
