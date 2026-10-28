@@ -4855,7 +4855,7 @@ function renderActivityLogRows() {
         return true;
     });
     if (!visibleLog.length) {
-        host.innerHTML = `<div style="padding:32px 0">${emptyState('ph-clock-counter-clockwise', module || q ? EMPTY_STATE_NO_RESULTS : EMPTY_STATE_NO_DATA, '')}</div>`;
+        host.innerHTML = `<div style="padding:32px 0">${emptyState('ph-clock-counter-clockwise', q ? EMPTY_STATE_NO_RESULTS : EMPTY_STATE_NO_DATA, '')}</div>`;
         return;
     }
     const actionIcons = {
@@ -5112,7 +5112,6 @@ function renderAssets() {
                 : '<span class="badge badge-zinc">Unclaimed</span>'}</td>
             <td class="text-right" onclick="event.stopPropagation()">
                 <div class="flex items-center gap-0.5 justify-end">
-                    <button onclick="showAssetDetail('${a.id}')" class="btn-ghost" title="Details"><i class="ph ph-info"></i></button>
                     ${a.service_org_id && isOperatorView() && canManageAssets() ? `<button onclick="confirmReleaseAsset('${a.id}')" class="btn-ghost" title="Release claim"><i class="ph ph-link-simple-break"></i></button>` : ''}
                 </div>
             </td>
@@ -5755,7 +5754,6 @@ function renderOrders() {
             <td>${orderStatusBadge(o.status)}</td>
             <td class="text-right" onclick="event.stopPropagation()">
                 <div class="flex items-center gap-0.5 justify-end">
-                    <button onclick="showOrderDetail('${o.id}')" class="btn-ghost" title="Details"><i class="ph ph-info"></i></button>
                     ${o.status === 'DRAFT' && canUpdateOrders() ? `<button onclick="showOrderModal('${o.id}')" class="btn-ghost" title="Edit"><i class="ph ph-pencil-simple"></i></button>` : ''}
                 </div>
             </td>
@@ -5825,11 +5823,11 @@ function showOrderModal(orderId = null, { resume = false } = {}) {
 
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px 18px">
                 ${field('ord-no', 'Order No', 'order_no', { required: true, placeholder: 'PO-2026-0001' })}
-                ${field('ord-contract', 'Contract No', 'contract_no', { placeholder: 'Optional' })}
+                ${field('ord-contract', 'Contract No', 'contract_no', { placeholder: 'e.g. CT-2026-0001' })}
                 ${field('ord-date', 'Order Date', 'order_date', { required: true, type: 'date' })}
-                ${field('ord-sales', 'Sales Contact', 'sales_contact', { placeholder: 'Optional' })}
+                ${field('ord-sales', 'Sales Contact', 'sales_contact', { placeholder: 'e.g. Name of the sales owner' })}
                 ${orderCustomerField(d)}
-                ${field('ord-si', 'System Integrator', 'si_name', { placeholder: 'Optional', hint: 'Free text. The SI that delivers and installs, if any.' })}
+                ${field('ord-si', 'System Integrator', 'si_name', { placeholder: 'e.g. Name of the integrator', hint: 'Free text. The SI that delivers and installs, if any.' })}
                 ${field('ord-hw-sup', 'HW Supplier', 'hw_supplier_name', { placeholder: 'Required when the order has HW lines', hint: 'Free text. Required if any line is HW.' })}
                 ${field('ord-sw-sup', 'SW Supplier', 'sw_supplier_name', { placeholder: 'Required when the order has SW lines', hint: 'Free text. Required if any line is SW.' })}
             </div>
@@ -6435,7 +6433,12 @@ function validateOrderDraft(status) {
         if (l.scope === 'SW') errors.push(...licenseLineErrors(l, String(i), d.lines.find(x => x.id === l.parent_line_id)));
     });
     if (status === 'CONFIRMED') {
-        const seenSerials = new Set();
+        // Every cell holding a repeated serial is flagged, not just the later ones.
+        const serialCounts = new Map();
+        d.lines.filter(l => l.scope === 'HW').flatMap(l => l.serial_nos).forEach(x => {
+            const key = x.trim().toUpperCase();
+            if (key) serialCounts.set(key, (serialCounts.get(key) || 0) + 1);
+        });
         errors.push(...licenseKeyDuplicateErrors(d.lines, (l, i) => String(i)));
         d.lines.forEach((l, i) => {
             if (!l.sla_plan) errors.push(fieldErr(at(i, 'sla'), 'Please select SLA.'));
@@ -6444,9 +6447,7 @@ function validateOrderDraft(status) {
                 if (l.serial_nos.some(x => !x.trim())) errors.push(fieldErr(at(i, 'serials'), `All ${l.qty} serial numbers are required to confirm.`));
                 l.serial_nos.forEach((x, si) => {
                     const key = x.trim().toUpperCase();
-                    if (!key) return;
-                    if (seenSerials.has(key)) errors.push(fieldErr([sn(i, si), at(i, 'serials')], `Serial ${x} appears twice in this order.`));
-                    seenSerials.add(key);
+                    if (serialCounts.get(key) > 1) errors.push(fieldErr([sn(i, si), at(i, 'serials')], `Serial ${x.trim()} appears more than once in this order.`));
                 });
             } else {
                 if (!l.license_start) errors.push(fieldErr(at(i, 'ls'), 'Please select License Start.'));
@@ -7209,29 +7210,30 @@ function orgTypeBadge(org) {
 function orgTypeBadgeCustomer(org) {
     return `<span style="display:inline-flex;gap:4px;white-space:nowrap"><span class="badge badge-customer">Customer</span><span class="badge badge-zinc">${isIndividualOrg(org) ? 'Individual' : 'Enterprise'}</span></span>`;
 }
-// An enterprise customer must keep someone who can manage its members:
-// an active member, on an active account, whose role holds organization.u
-// (D68). `drop` leaves bindings out and `rolePerms` swaps one role's grants,
-// so a change can be checked before it is made.
+// An enterprise customer must keep someone who can manage its members: an
+// active member, on an active account, whose roles here together hold
+// organization C, R, U and D (SA V2 2.3). `drop` leaves bindings out and
+// `rolePerms` swaps one role's grants, so a change can be checked before it
+// is made.
+const ORG_MANAGER_GRANTS = ['organization.c', 'organization.r', 'organization.u', 'organization.d'];
 function guardsOrgManagers(org) { return orgHasType(org, 'CUSTOMER') && !isIndividualOrg(org); }
 function orgManagerIds(org, { drop = [], rolePerms = null } = {}) {
-    return new Set(getOrgBindings(org.id).filter(b => b.status === 'active' && !drop.includes(b.id)).filter(b => {
-        if (USERS.find(u => u.id === b.user_id)?.status !== 'active') return false;
+    const grantsByUser = new Map();
+    getOrgBindings(org.id).filter(b => b.status === 'active' && !drop.includes(b.id)).forEach(b => {
+        if (USERS.find(u => u.id === b.user_id)?.status !== 'active') return;
         const role = ROLES.find(r => r.id === b.role_id);
         const grants = rolePerms && rolePerms.roleId === role?.id ? effectivePermissions({ ...role, permissions: rolePerms.permissions }) : effectivePermissions(role);
-        return grants.includes('organization.u');
-    }).map(b => b.user_id));
+        grantsByUser.set(b.user_id, new Set([...(grantsByUser.get(b.user_id) || []), ...grants]));
+    });
+    return new Set([...grantsByUser].filter(([, grants]) => ORG_MANAGER_GRANTS.every(g => grants.has(g))).map(([userId]) => userId));
 }
 // Blocks only a change that takes the last manager away; an org that already
-// has none (shown as No member yet) is not held up further.
+// has none (its Members tab says so) is not held up further.
 function leavesNoManager(org, change) {
     return guardsOrgManagers(org) && orgManagerIds(org).size > 0 && orgManagerIds(org, change).size === 0;
 }
 const LAST_MANAGER_MESSAGE = 'This would leave nobody here who can manage members. Give another member that access first.';
 function orgNeedsManager(org) { return guardsOrgManagers(org) && orgManagerIds(org).size === 0; }
-function orgNoManagerBadge(org) {
-    return orgNeedsManager(org) ? '<span class="badge badge-amber" title="Nobody here can manage members. Invite an admin from Members.">No member yet</span>' : '';
-}
 function orgStatusBadge(org) {
     return org.status === 'active' ? '<span class="badge badge-green">Active</span>' : '<span class="badge badge-zinc">Inactive</span>';
 }
@@ -7337,14 +7339,13 @@ function renderOrganizations() {
         <tr class="cursor-pointer" onclick="if(!event.target.closest('button'))showOrgDetail('${org.id}')">
             <td><span style="font-weight:600;font-size:13px;color:#1d1d1f">${esc(org.name)}</span>
                 ${org.contact_email ? `<div style="font-size:11.5px;color:#86868b;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(org.contact_email)}">${esc(org.contact_email)}</div>` : ''}</td>
-            <td>${orgTypeBadge(org)}${orgNeedsManager(org) ? `<div style="margin-top:4px">${orgNoManagerBadge(org)}</div>` : ''}</td>
+            <td>${orgTypeBadge(org)}</td>
             <td><span style="font-size:13px;color:#86868b">${members}</span></td>
             <td><span style="font-size:13px;color:#86868b">${roles}</span></td>
             <td><span style="font-size:13px;color:#86868b">${orders === null ? '—' : orders}</span></td>
             <td>${orgStatusBadge(org)}</td>
             <td class="text-right" onclick="event.stopPropagation()">
                 <div class="flex items-center gap-0.5 justify-end">
-                    <button onclick="showOrgDetail('${org.id}')" class="btn-ghost" title="Details"><i class="ph ph-info"></i></button>
                     ${canEditOrgProfile() ? `<button onclick="showOrgModal('${org.id}')" class="btn-ghost" title="Edit"><i class="ph ph-pencil-simple"></i></button>` : ''}
                 </div>
             </td>
@@ -7605,7 +7606,7 @@ function showOrgModal(orgId = null, { fromOrderDraft = false } = {}) {
                 <div>
                     <label class="field-label" for="org-name">Name <span class="req">*</span></label>
                     <input id="org-name" class="input-field" maxlength="100" autocomplete="off" value="${esc(org?.name || '')}" placeholder="Organization name">
-                    <div class="field-hint">Unique within its type. Orders pick their customer from these organizations.</div>
+                    <div class="field-hint">Unique among active organizations of its type; individual customers can share a name. Orders pick their customer from these organizations.</div>
                 </div>
                 <div>
                     <label class="field-label" for="org-type">Type <span class="req">*</span></label>
@@ -7631,11 +7632,11 @@ function showOrgModal(orgId = null, { fromOrderDraft = false } = {}) {
                 </div>
                 <div>
                     <label class="field-label" for="org-contact">Contact email</label>
-                    <input id="org-contact" class="input-field" type="email" maxlength="100" autocomplete="off" value="${esc(org?.contact_email || '')}" placeholder="Optional">
+                    <input id="org-contact" class="input-field" type="email" maxlength="100" autocomplete="off" value="${esc(org?.contact_email || '')}" placeholder="e.g. contact@company.com">
                 </div>
                 <div>
                     <label class="field-label" for="org-note">Note</label>
-                    <textarea id="org-note" class="input-field" rows="2" maxlength="500" placeholder="Optional">${esc(org?.note || '')}</textarea>
+                    <textarea id="org-note" class="input-field" rows="2" maxlength="500" placeholder="e.g. Billing contact, contract terms">${esc(org?.note || '')}</textarea>
                 </div>
                 ${org && !isOperator ? `<div>
                     <label class="field-label" for="org-status">Status</label>
@@ -7809,7 +7810,7 @@ function showOrgDetail(orgId, tab = null) {
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
                 <div>
                     <div style="font-size:18px;font-weight:700;color:#1d1d1f">${esc(org.name)}</div>
-                    <div style="display:flex;gap:6px;margin-top:6px">${orgTypeBadge(org)}${orgStatusBadge(org)}${orgNoManagerBadge(org)}</div>
+                    <div style="display:flex;gap:6px;margin-top:6px">${orgTypeBadge(org)}${orgStatusBadge(org)}</div>
                 </div>
                 ${canEditOrgProfile() ? `<button onclick="showOrgModal('${org.id}')" class="btn-secondary text-xs"><i class="ph ph-pencil-simple"></i> Edit</button>` : ''}
             </div>
@@ -7838,7 +7839,7 @@ function orgProfileTab(org) {
         ${row('Contact email', esc(org.contact_email || '—'))}
         ${row('Created', esc((org.created_at || '').slice(0, 10) || '—'))}
         ${org.note ? row('Note', esc(org.note)) : ''}
-        ${(org.former_names || []).length ? row('Former names', esc(org.former_names.join(', '))) : ''}
+        ${(org.former_names || []).length ? row('Former names', esc([...org.former_names].reverse().join(', '))) : ''}
         ${orgHasType(org, 'OPERATOR') ? `
         <div class="field-hint" style="margin-top:12px">AISO is the single service window. The Super Admin is a system account: it belongs to no organization, holds no role here, and is never counted as a member.</div>` : `
         ${showTickets ? row('Tickets', String(tickets)) : ''}
@@ -7851,15 +7852,25 @@ function orgProfileTab(org) {
         </div>`).join('') : '<div style="font-size:12.5px;color:#86868b">No matching data found.</div>'}` : ''}`}`;
 }
 
+// Notices above the member list. Inviting is off while the org is inactive or
+// has no roles; an inactive org shows only that notice (SA V2 4.4.5).
+const ORG_NOTICE_STYLE = 'font-size:12.5px;color:#9a3412;background:#fff7ed;border-radius:10px;padding:10px 12px;margin-bottom:10px';
+function inviteBlockedReason(org, roles) {
+    if (org.status !== 'active') return { tip: 'Reactivate the organization first.', notice: 'Reactivate the organization first.' };
+    if (!roles.length) return { tip: 'Create a role first', notice: 'This organization has no roles yet. Create one under the Roles tab before inviting members.' };
+    return null;
+}
+
 function orgMembersTab(org, members, roles) {
-    const noRoles = !roles.length;
+    const blocked = inviteBlockedReason(org, roles);
     return `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
             <div style="font-size:12.5px;color:#86868b">Each member holds one or more of this organization's roles.
                 <a href="docs/mockups/account-flows-mockup.html#members" target="_blank" rel="noopener" style="color:#1432E6;font-weight:600;text-decoration:none;white-space:nowrap">Invitation screens (preview) <i class="ph ph-arrow-square-out"></i></a></div>
-            ${canAddMembers() ? `<button onclick="showAddMemberModal('${org.id}')" class="btn-primary text-xs" style="white-space:nowrap" ${noRoles ? 'disabled title="Create a role first"' : ''}><i class="ph ph-user-plus"></i> Add member</button>` : ''}
+            ${canAddMembers() ? `<button onclick="showAddMemberModal('${org.id}')" class="btn-primary text-xs" style="white-space:nowrap" ${blocked ? `disabled title="${esc(blocked.tip)}"` : ''}><i class="ph ph-user-plus"></i> Invite member</button>` : ''}
         </div>
-        ${noRoles ? `<div style="font-size:12.5px;color:#9a3412;background:#fff7ed;border-radius:10px;padding:10px 12px;margin-bottom:10px">This organization has no roles yet. Create one under the Roles tab before adding members.</div>` : ''}
+        ${blocked ? `<div style="${ORG_NOTICE_STYLE}">${esc(blocked.notice)}</div>` : ''}
+        ${orgNeedsManager(org) ? `<div style="${ORG_NOTICE_STYLE}">Nobody here can manage members. Invite an admin from Members.</div>` : ''}
         ${members.length ? `<div style="border:1px solid var(--border-light);border-radius:12px;overflow:hidden">${members.map(({ user, bindings }, i) => `
         <div style="display:flex;align-items:center;gap:12px;padding:11px 14px;${i < members.length - 1 ? 'border-bottom:1px solid var(--border-light)' : ''}">
             <span style="width:30px;height:30px;border-radius:50%;background:#eef1ff;color:#1432E6;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0">${esc(getUserInitials(user.name))}</span>
@@ -7871,7 +7882,7 @@ function orgMembersTab(org, members, roles) {
             ${canEditMembers() ? `<button onclick="showEditMemberModal('${org.id}', '${user.id}')" class="btn-ghost" title="Change roles"><i class="ph ph-pencil-simple"></i></button>` : ''}
             ${canRemoveMembers() ? `<button onclick="confirmRemoveMember('${org.id}', '${user.id}')" class="btn-ghost" title="Remove from organization"><i class="ph ph-user-minus"></i></button>` : ''}
         </div>`).join('')}</div>`
-        : `<div style="padding:20px 0">${emptyState('ph-users', 'No members yet.', '')}</div>`}`;
+        : `<div style="padding:20px 0">${emptyState('ph-users', EMPTY_STATE_NO_DATA, '')}</div>`}`;
 }
 
 // A role held by a member can be suspended without touching the account or
@@ -7959,11 +7970,18 @@ function orgTypeCeilingHint(org) {
 }
 
 // Being able to change something without being able to see it is not a state
-// worth allowing, so a write grant pulls read along with it.
+// worth allowing: a write grant pulls read along with it, and dropping read
+// drops the writes too (SA V2 2.4).
 function onRolePermissionToggle(mod, action) {
-    if (action === 'r') return;
-    const box = document.getElementById(permissionCellId(mod, action));
     const read = document.getElementById(permissionCellId(mod, 'r'));
+    if (action === 'r') {
+        if (read && !read.checked) ['c', 'u', 'd'].forEach(a => {
+            const box = document.getElementById(permissionCellId(mod, a));
+            if (box) box.checked = false;
+        });
+        return;
+    }
+    const box = document.getElementById(permissionCellId(mod, action));
     if (box?.checked && read && !read.checked) read.checked = true;
 }
 
@@ -7980,7 +7998,7 @@ function showRoleModal(orgId, roleId = null) {
             <input id="role-name" class="input-field" maxlength="60" autocomplete="off" value="${esc(role?.name || '')}" placeholder="Service Agent">
             <div style="height:10px"></div>
             <label class="field-label" for="role-desc">Description</label>
-            <input id="role-desc" class="input-field" maxlength="140" autocomplete="off" value="${esc(role?.description || '')}" placeholder="Optional — what this role is for">
+            <input id="role-desc" class="input-field" maxlength="140" autocomplete="off" value="${esc(role?.description || '')}" placeholder="e.g. Handles tickets for this organization">
             <div class="field-label" style="margin-top:16px">Permissions</div>
             <div class="field-hint">C create · R read · U update · D delete. A dash means this organization's type does not allow it.</div>
             <div id="role-perm-field">${rolePermissionMatrix(org, role ? [...role.permissions] : [])}</div>
@@ -8059,10 +8077,19 @@ function deleteRole(orgId, roleId) {
 }
 
 // An individual customer has one account and one Owner role, both created
-// with the organization. It is shown, not managed.
+// with the organization. It is shown, not managed; the desk can invite the
+// person again when no one holds the Owner role (SA V2 4.4.6).
+const INDIVIDUAL_ACCOUNT_NOTE = 'An individual customer is one person, so there are no members or roles to manage. To end their access here, set the organization to Inactive; disabling the account on the Accounts page blocks it in every organization.';
 function orgAccountTab(org, members) {
     const holder = members[0];
-    if (!holder) return `<div style="padding:20px 0">${emptyState('ph-user', 'No account is attached to this individual customer.', '')}</div>`;
+    if (!holder) {
+        const blocked = inviteBlockedReason(org, getOrgRoles(org.id));
+        const invite = isOperatorView() && canAddMembers()
+            ? `<div class="flex items-center gap-2 justify-center mt-1"><button onclick="showAddMemberModal('${org.id}')" class="btn-primary text-xs" ${blocked ? `disabled title="${esc(blocked.tip)}"` : ''}><i class="ph ph-user-plus"></i> Invite</button></div>`
+            : '';
+        return `<div style="padding:20px 0">${emptyState('ph-user', EMPTY_STATE_NO_DATA, invite)}</div>
+        <div class="field-hint" style="margin-top:10px">${INDIVIDUAL_ACCOUNT_NOTE}</div>`;
+    }
     return `
         <div style="display:flex;align-items:center;gap:12px;border:1px solid var(--border-light);border-radius:12px;padding:12px 14px">
             <span style="width:34px;height:34px;border-radius:50%;background:#eef1ff;color:#1432E6;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">${esc(getUserInitials(holder.user.name))}</span>
@@ -8072,27 +8099,40 @@ function orgAccountTab(org, members) {
             </span>
             <span class="badge badge-zinc">${esc(ROLES.find(r => r.id === holder.bindings[0]?.role_id)?.name || '')}</span>
         </div>
-        <div class="field-hint" style="margin-top:10px">An individual customer is one person, so there are no members or roles to manage. Disable the account from the Accounts page if they should lose access.</div>`;
+        <div class="field-hint" style="margin-top:10px">${INDIVIDUAL_ACCOUNT_NOTE}</div>`;
 }
 
 // ── Members ──
 
-function roleCheckboxes(org, checkedIds = []) {
+// `locked` shows the checked roles as fixed: an individual's invite is
+// always for its Owner role.
+function roleCheckboxes(org, checkedIds = [], { locked = false } = {}) {
     return getOrgRoles(org.id).map(r => `
-        <label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--border-light);border-radius:10px;cursor:pointer">
-            <input type="checkbox" class="member-role-check" value="${r.id}" ${checkedIds.includes(r.id) ? 'checked' : ''} style="margin-top:3px">
+        <label style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border:1px solid var(--border-light);border-radius:10px;cursor:${locked ? 'default' : 'pointer'}">
+            <input type="checkbox" class="member-role-check" value="${r.id}" ${checkedIds.includes(r.id) ? 'checked' : ''} ${locked ? 'disabled' : ''} style="margin-top:3px">
             <span><span style="display:block;font-size:13px;font-weight:600;color:#1d1d1f">${esc(r.name)}</span>
             ${r.description ? `<span style="display:block;font-size:12px;color:#86868b">${esc(r.description)}</span>` : ''}</span>
         </label>`).join('');
 }
 function checkedRoleIds() { return [...document.querySelectorAll('.member-role-check:checked')].map(el => el.value); }
 
+// An individual customer takes an invite only from the desk, only while no
+// one holds its Owner role, and only for that role (SA V2 4.4.6).
+function canInviteTo(org) {
+    if (!canSeeOrg(org) || !canAddMembers() || inviteBlockedReason(org, getOrgRoles(org.id))) return false;
+    return orgAllowsMembers(org) || (isOperatorView() && !getOrgMembers(org.id).length);
+}
+function memberTabFor(org) { return orgAllowsMembers(org) ? 'members' : 'account'; }
+
+// The prototype adds the member straight away; the invitation itself lives in
+// the static account-flow screens (SA V2 附錄 A).
 function showAddMemberModal(orgId) {
     const org = getOrgById(orgId);
-    if (!canSeeOrg(org) || !canAddMembers() || !orgAllowsMembers(org) || !getOrgRoles(orgId).length) return;
+    if (!canInviteTo(org)) return;
+    const individual = !orgAllowsMembers(org);
     showModal(`
         <div style="padding:26px 28px">
-            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 4px">Add member</h3>
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 4px">Invite member</h3>
             <div style="font-size:13px;color:#86868b;margin-bottom:18px">${esc(org.name)}</div>
             <label class="field-label" for="member-email">Email <span class="req">*</span></label>
             <input id="member-email" class="input-field" type="email" maxlength="100" autocomplete="off" placeholder="name@company.com" oninput="onMemberEmailInput('${org.id}')">
@@ -8102,11 +8142,11 @@ function showAddMemberModal(orgId) {
                 <input id="member-name" class="input-field" maxlength="100" autocomplete="off" placeholder="Full name">
             </div>
             <div class="field-label" style="margin-top:14px">Roles <span class="req">*</span></div>
-            <div id="member-roles-field" style="display:grid;gap:8px">${roleCheckboxes(org)}</div>
+            <div id="member-roles-field" style="display:grid;gap:8px">${individual ? roleCheckboxes(org, getOrgRoles(org.id).map(r => r.id), { locked: true }) : roleCheckboxes(org)}</div>
             <p id="member-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin:14px 0 0"></p>
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
-                <button onclick="showOrgDetail('${org.id}', 'members')" class="btn-secondary">Cancel</button>
-                <button onclick="addMember('${org.id}')" class="btn-primary"><i class="ph ph-user-plus"></i> Add</button>
+                <button onclick="showOrgDetail('${org.id}', '${memberTabFor(org)}')" class="btn-secondary">Cancel</button>
+                <button onclick="addMember('${org.id}')" class="btn-primary"><i class="ph ph-paper-plane-tilt"></i> Send invitation</button>
             </div>
         </div>`, 'md');
     document.getElementById('member-email')?.focus();
@@ -8132,7 +8172,9 @@ function onMemberEmailInput(orgId) {
 
 function addMember(orgId) {
     const org = getOrgById(orgId);
-    if (!canSeeOrg(org) || !canAddMembers() || !orgAllowsMembers(org)) return;
+    // Set to Inactive while the dialog was open.
+    if (org && org.status !== 'active') { showFormErrors([formErr('Reactivate the organization first.')], 'member-error'); return; }
+    if (!canInviteTo(org)) return;
     const email = (document.getElementById('member-email')?.value || '').trim();
     const name = (document.getElementById('member-name')?.value || '').trim();
     const roleIds = checkedRoleIds();
@@ -8157,7 +8199,7 @@ function addMember(orgId) {
         logActivity('Member added', org.name, `${user.email} · ${roleIds.map(id => ROLES.find(r => r.id === id)?.name).join(', ')}${existing ? ' · existing account' : ' · new account'}`);
     });
     if (!ok) return;
-    showOrgDetail(org.id, 'members');
+    showOrgDetail(org.id, memberTabFor(org));
     renderOrganizations();
     showToast(`${existing ? existing.name : name} added to ${org.name}`);
 }
@@ -8703,7 +8745,8 @@ function showReferInternalModal(ticketId) {
                 ${staff.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}
             </select>
             <label class="field-label" for="refer-note" style="margin-top:12px">What to confirm</label>
-            <textarea id="refer-note" class="input-field" style="min-height:72px" placeholder="Optional. Goes into the internal note."></textarea>
+            <textarea id="refer-note" class="input-field" style="min-height:72px" placeholder="e.g. Check the replacement part before shipping"></textarea>
+            <div class="field-hint">Goes into the internal note.</div>
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
                 <button onclick="showTicketDetail('${t.id}')" class="btn-secondary text-xs">Cancel</button>
                 <button onclick="setTicketInternalState('${t.id}', 'AISO_INTERNAL', { assigneeId: document.getElementById('refer-assignee').value, note: document.getElementById('refer-note').value.trim() })" class="btn-primary text-xs"><i class="ph ph-arrow-bend-up-right"></i> Refer</button>
@@ -8864,9 +8907,7 @@ function renderServiceDesk() {
             <td style="white-space:nowrap">${ticketStatusBadge(t.status)}${isOperatorView() && fr.overdue ? ' <span class="badge badge-red" style="margin-left:4px" title="No AISO reply within the first-response target">Overdue</span>' : ''}
                 ${isOperatorView() && isTicketReferred(t) ? `<div style="margin-top:4px">${ticketInternalChip(t, { compact: true })}</div>` : ''}
                 ${isOperatorView() && ticketAcceptance(t) !== 'PENDING' ? `<div style="margin-top:4px">${ticketAcceptanceBadge(t)}</div>` : ''}</td>
-            <td class="text-right" onclick="event.stopPropagation()">
-                <button onclick="showTicketDetail('${t.id}')" class="btn-ghost" title="Details"><i class="ph ph-info"></i></button>
-            </td>
+            <td></td>
         </tr>`;
     }).join('') : `<tr><td colspan="7" class="text-center py-16">${emptyState(
         'ph-headset',
@@ -8978,7 +9019,9 @@ function showTicketCreateModal({ lineId = null } = {}) {
         channel: isCustomerView() ? 'Workspace' : 'Email',
         priority: 'MEDIUM', category: TICKET_CATEGORIES[0],
         subject: '', description: '',
+        // A customer reports as themself; the desk types in the customer's contact.
         reported_by: isCustomerView() ? actingName() : '',
+        reported_by_email: isCustomerView() ? (actingUser()?.email || currentUser?.email || '') : '',
         attachments: [],
     };
     if (lineId) {
@@ -9110,9 +9153,10 @@ function renderTicketCreateModal() {
 
     // Keep typed text across re-renders triggered by picker clicks.
     const keep = id => document.getElementById(id)?.value;
-    ['tk-subject', 'tk-description', 'tk-reported'].forEach(id => {
+    const keepKeys = { 'tk-subject': 'subject', 'tk-description': 'description', 'tk-reported': 'reported_by', 'tk-reported-email': 'reported_by_email' };
+    Object.keys(keepKeys).forEach(id => {
         const v = keep(id);
-        if (v !== undefined) d[{ 'tk-subject': 'subject', 'tk-description': 'description', 'tk-reported': 'reported_by' }[id]] = v;
+        if (v !== undefined) d[keepKeys[id]] = v;
     });
 
     showModal(`
@@ -9199,8 +9243,12 @@ function renderTicketCreateModal() {
                     <input id="tk-subject" class="input-field" maxlength="120" placeholder="One line the customer would recognise" value="${esc(d.subject)}" oninput="tkSetText('subject', this.value)"></div>
                 <div style="margin-top:12px"><label class="field-label" for="tk-description">Description <span class="req">*</span></label>
                     <textarea id="tk-description" class="input-field" style="min-height:96px" placeholder="What happened, when, what was tried" oninput="tkSetText('description', this.value)">${esc(d.description)}</textarea></div>
-                <div style="margin-top:12px"><label class="field-label" for="tk-reported">Reported by</label>
-                    <input id="tk-reported" class="input-field" placeholder="Customer contact name / email" value="${esc(d.reported_by)}" oninput="tkSetText('reported_by', this.value)"></div>
+                <div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                    <div><label class="field-label" for="tk-reported">Reported by: Name</label>
+                        <input id="tk-reported" class="input-field" maxlength="100" placeholder="Customer contact name" value="${esc(d.reported_by)}" ${isCustomerView() ? 'readonly' : `oninput="tkSetText('reported_by', this.value)"`}></div>
+                    <div><label class="field-label" for="tk-reported-email">Reported by: Email</label>
+                        <input id="tk-reported-email" class="input-field" type="email" maxlength="100" placeholder="name@company.com" value="${esc(d.reported_by_email)}" ${isCustomerView() ? 'readonly' : `oninput="tkSetText('reported_by_email', this.value)"`}></div>
+                </div>
                 <div style="margin-top:12px"><label class="field-label">Attachments</label>
                     ${ticketAttachmentDropZone('tk-draft-files', "onTicketDraftFiles(this.files)")}
                     ${d.attachments.length ? `<div class="tk-att-list" style="margin-top:8px">${ticketAttachmentChips(d.attachments, 'removeTicketDraftAttachment')}</div>` : ''}
@@ -9228,6 +9276,9 @@ function saveTicket() {
     if (!ticketDraftReady()) errors.push(fieldErr('#tk-find-results', 'Pick an order line (and serial or license key) first.'));
     if (!d.subject.trim()) errors.push(fieldErr('#tk-subject', 'Please enter Subject.'));
     if (!d.description.trim()) errors.push(fieldErr('#tk-description', 'Please enter Description.'));
+    // Ticket emails go to this address, so a typed one must be well formed.
+    const reporterEmail = (d.reported_by_email || '').trim();
+    if (reporterEmail && formEmailError(reporterEmail)) errors.push(fieldErr('#tk-reported-email', 'Invalid Email format.'));
     if (showFormErrors(errors, 'tk-error')) return;
     const errEl = document.getElementById('tk-error');
     const line = ORDER_LINES.find(l => l.id === d.order_line_id);
@@ -9245,7 +9296,7 @@ function saveTicket() {
         order_id: order.id, order_line_id: line.id, serial_no: d.serial_no, scope: line.scope,
         subject: d.subject.trim(), description: d.description.trim(),
         category: d.category, priority: d.priority, status: 'OPEN',
-        channel: d.channel, reported_by: d.reported_by.trim(),
+        channel: d.channel, reported_by: d.reported_by.trim(), reported_by_email: reporterEmail,
         snapshot: buildTicketSnapshot(order, line, d.serial_no, d.license_key),
         internal_state: 'NONE', internal_party: '', internal_since: null,
         acceptance: 'PENDING',
