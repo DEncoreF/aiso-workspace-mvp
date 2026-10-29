@@ -3,6 +3,7 @@
 // Load order: seed-data.js → store.js → app.js
 // Persisted state: PRODUCTS, ASSETS, ORDERS, ORDER_LINES, TICKETS,
 //                  TICKET_MESSAGES, NOTIFICATIONS, ORGS, USERS, ROLES, ROLE_BINDINGS,
+//                  INVITATIONS,
 //                  ACTIVITY_LOG, HARDWARE_PRODUCT_TYPES,
 //                  SOFTWARE_CATEGORY_OPTIONS, SOFTWARE_INDUSTRY_OPTIONS,
 //                  SYSTEM_PARAMETERS
@@ -16,7 +17,8 @@ const Store = (function () {
     //       out) and persisted, plus USERS / ROLES / ROLE_BINDINGS.
     // v4.6: account split out of organization (new grant in the type registry).
     // v4.7: roles in one organization merge; seed gives Tom a second role.
-    const VERSION = 13;
+    // v14: invitations (Pending / Accepted / Revoked) and Not activated accounts.
+    const VERSION = 14;
     const IMG_MAX_WIDTH = 800;
     const IMG_JPEG_QUALITY = 0.8;
 
@@ -36,6 +38,7 @@ const Store = (function () {
             USERS,
             ROLES,
             ROLE_BINDINGS,
+            INVITATIONS,
             ORG_TYPE_REGISTRY,
             ACTIVITY_LOG,
             HARDWARE_PRODUCT_TYPES,
@@ -146,6 +149,7 @@ const Store = (function () {
         if (Array.isArray(data.USERS)) USERS = data.USERS;
         if (Array.isArray(data.ROLES)) ROLES = data.ROLES;
         if (Array.isArray(data.ROLE_BINDINGS)) ROLE_BINDINGS = data.ROLE_BINDINGS;
+        if (Array.isArray(data.INVITATIONS)) INVITATIONS = data.INVITATIONS;
         // Saved registry entries win; any entry a save predates keeps its default.
         if (Array.isArray(data.ORG_TYPE_REGISTRY)) {
             ORG_TYPE_REGISTRY = ORG_TYPE_REGISTRY.map(seed => data.ORG_TYPE_REGISTRY.find(e => e.key === seed.key) || seed);

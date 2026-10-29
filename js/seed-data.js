@@ -116,6 +116,23 @@ let USERS = [
       created_at: '2026-09-29T00:00:00.000Z', updated_at: '2026-09-29T00:00:00.000Z' },
     { id: 'u-aiso-ivy', name: 'Ivy Chen', email: 'ivy.chen@aiso.com', status: 'active', is_super_admin: false,
       created_at: '2026-09-29T00:00:00.000Z', updated_at: '2026-09-29T00:00:00.000Z' },
+    // Invited to MegaBank and not yet set up: Not activated, no role (SA V2 4.2.1).
+    { id: 'u-lisa', name: 'Lisa Wong', email: 'lisa.wong@megabank.com', status: 'active', activated: false, is_super_admin: false,
+      created_at: '2026-10-27T01:00:00.000Z', updated_at: '2026-10-27T01:00:00.000Z' },
+    { id: 'u-kai', name: 'Kai Chen', email: 'kai.chen@megabank.com', status: 'active', activated: false, is_super_admin: false,
+      created_at: '2026-10-12T01:00:00.000Z', updated_at: '2026-10-12T01:00:00.000Z' },
+];
+
+// Invitations (SA V2 4.2.5). status is PENDING, ACCEPTED or REVOKED; Expired
+// is not stored but read off expires_at. The seed is dated from today so
+// Lisa's stays Pending and Kai's has already expired.
+const SEED_DAY_MS = 86400000;
+const seedDaysAgo = days => new Date(Date.now() - days * SEED_DAY_MS).toISOString();
+let INVITATIONS = [
+    { id: 'inv-0001', org_id: 'c-megabank', email: 'lisa.wong@megabank.com', user_id: 'u-lisa', role_ids: ['r-mb-member'],
+      status: 'PENDING', invited_by: 'Tom Baker', sent_at: seedDaysAgo(2), expires_at: seedDaysAgo(-5) },
+    { id: 'inv-0002', org_id: 'c-megabank', email: 'kai.chen@megabank.com', user_id: 'u-kai', role_ids: ['r-mb-member'],
+      status: 'PENDING', invited_by: 'Tom Baker', sent_at: seedDaysAgo(17), expires_at: seedDaysAgo(10) },
 ];
 
 // AISO seeds one desk role for the two demo colleagues; any other operator

@@ -18,10 +18,16 @@ function activityModule(action) {
     if (/^(Added|Imported|Released|Warranty adjusted)$/.test(action)) return 'Asset Registry';
     return 'Products';
 }
-function logActivity(action, productName, detail = '', pid = null) {
+// `actor` overrides who did it, for steps the signed-in person did not take:
+// an invitee accepting, an account holder resetting their password.
+// { name, org_id, role } — org_id null keeps the entry to the OPERATOR view.
+function logActivity(action, productName, detail = '', pid = null, actor = null) {
     const ts = new Date().toISOString();
     const roles = activeRoleLabel();
-    const entry = {
+    const entry = actor ? {
+        action, productName, detail, timestamp: ts, module: activityModule(action),
+        user: actor.name || 'System', org_id: actor.org_id || null, actor_role: actor.role || '',
+    } : {
         action, productName, detail, timestamp: ts, module: activityModule(action),
         user: actingName() || 'System', org_id: activeOrgId(),
         actor_role: roles ? `${activeOrg()?.name || ''} · ${roles}` : (currentUser?.is_super_admin ? 'Super Admin' : ''),
@@ -51,6 +57,7 @@ function capturePortalState() {
         USERS,
         ROLES,
         ROLE_BINDINGS,
+        INVITATIONS,
         ACTIVITY_LOG,
         HARDWARE_PRODUCT_TYPES,
         SOFTWARE_CATEGORY_OPTIONS,
@@ -69,6 +76,7 @@ function restorePortalState(snapshot) {
     USERS = snapshot.USERS;
     ROLES = snapshot.ROLES;
     ROLE_BINDINGS = snapshot.ROLE_BINDINGS;
+    INVITATIONS = snapshot.INVITATIONS;
     ACTIVITY_LOG = snapshot.ACTIVITY_LOG;
     HARDWARE_PRODUCT_TYPES = snapshot.HARDWARE_PRODUCT_TYPES;
     SOFTWARE_CATEGORY_OPTIONS = snapshot.SOFTWARE_CATEGORY_OPTIONS;
@@ -778,7 +786,8 @@ function login() {
     const pwErr = document.getElementById('login-password-error');
     const user = findUserByEmail(email);
     setLoginFormError('');
-    if (!user || password !== DEMO_LOGIN.password) {
+    // A Not activated account has no password yet, so it fails like a wrong one.
+    if (!user || user.activated === false || password !== DEMO_LOGIN.password) {
         const incorrect = 'The Email or Password you entered is incorrect.';
         if (emailEl) emailEl.classList.add('field-error');
         if (pwEl) pwEl.classList.add('field-error');
@@ -7317,7 +7326,7 @@ function leavesNoManager(org, change) {
     return guardsOrgManagers(org) && orgManagerIds(org).size > 0 && orgManagerIds(org, change).size === 0;
 }
 const LAST_MANAGER_MESSAGE = 'This would leave nobody here who can manage members. Give another member that access first.';
-function orgNeedsManager(org) { return guardsOrgManagers(org) && orgManagerIds(org).size === 0; }
+function orgNeedsManager(org) { return guardsOrgManagers(org) && orgManagerIds(org).size === 0 && !hasPendingManagerInvite(org); }
 function orgStatusBadge(org) {
     return org.status === 'active' ? '<span class="badge badge-green">Active</span>' : '<span class="badge badge-zinc">Inactive</span>';
 }
@@ -7619,6 +7628,7 @@ function renderAccounts() {
     document.getElementById('accounts-tbody').innerHTML = list.length ? list.map(user => {
         const held = getUserBindings(user.id);
         const disabled = user.status !== 'active';
+        const invitedTo = [...new Set(INVITATIONS.filter(inv => inv.user_id === user.id && isOpenInvitation(inv)).map(inv => getOrgById(inv.org_id)?.name).filter(Boolean))];
         return `
         <tr>
             <td><div style="display:flex;align-items:center;gap:10px">
@@ -7630,9 +7640,13 @@ function renderAccounts() {
                 ? '<span class="badge badge-super">Super Admin</span> <span style="font-size:12px;color:#86868b">System account · belongs to no organization</span>'
                 : (held.length
                     ? `<span style="display:flex;gap:4px;flex-wrap:wrap">${accountOrgChips(held)}</span>`
-                    : '<span class="badge badge-amber" title="This account cannot sign in until it holds a role">No role</span>')}</td>
-            <td>${disabled ? '<span class="badge badge-zinc">Disabled</span>' : '<span class="badge badge-green">Active</span>'}</td>
-            <td class="text-right">
+                    : invitedTo.length
+                        ? `<span style="font-size:12px;color:#86868b">Invited to ${esc(invitedTo.join(', '))}</span>`
+                        : '<span class="badge badge-amber" title="This account cannot sign in until it holds a role">No role</span>')}</td>
+            <td>${accountStatusBadge(user)}</td>
+            <td class="text-right" style="white-space:nowrap">
+                ${user.is_super_admin || disabled || isNotActivated(user) ? ''
+                    : `<button onclick="demoResetPassword('${user.id}')" style="${DEMO_BTN_STYLE}" title="Prototype only: acts as the account holder finishing Forgot password">Demo: reset password</button>`}
                 ${user.is_super_admin || !canManageAccounts() ? ''
                     : `<button onclick="confirmToggleAccount('${user.id}')" class="btn-ghost" title="${disabled ? 'Re-enable account' : 'Disable account'}"><i class="ph ${disabled ? 'ph-lock-open' : 'ph-prohibit'}"></i></button>`}
             </td>
@@ -7826,6 +7840,7 @@ function saveOrg(orgId = null) {
                 contact_email: contact, note, created_at: now, updated_at: now };
             ORGS.push(record);
             createdId = record.id;
+            logActivity('Organization created', name, individual ? 'Customer · Individual' : choice === 'OPERATOR' ? 'Operator' : 'Customer · Enterprise');
             // An individual customer arrives complete: the org, its one role
             // and the person's account are the same act.
             if (individual) {
@@ -7834,12 +7849,7 @@ function saveOrg(orgId = null) {
                 const role = { id: `r-${Date.now()}`, org_id: record.id, name: 'Owner', description: 'The individual customer themselves.',
                     permissions: [...orgCapabilities(record)], created_at: now, updated_at: now };
                 ROLES.push(role);
-                let user = findUserByEmail(personEmail);
-                if (!user) {
-                    user = { id: `u-${Date.now()}`, name: personName, email: personEmail, status: 'active', is_super_admin: false, created_at: now, updated_at: now };
-                    USERS.push(user);
-                }
-                ROLE_BINDINGS.push({ id: `rb-${Date.now()}`, user_id: user.id, role_id: role.id, status: 'active', created_at: now });
+                createInvitation(record, findUserByEmail(personEmail) || newInvitee(personName, personEmail, now), [role.id], now);
             }
             // An enterprise starts with one Admin role at the full enterprise
             // ceiling and its first admin. It is an ordinary role: renamable,
@@ -7848,18 +7858,11 @@ function saveOrg(orgId = null) {
                 const role = { id: `r-${Date.now()}`, org_id: record.id, name: 'Admin', description: 'Manages the organization: members, roles and access.',
                     permissions: [...orgCapabilities(record)], created_at: now, updated_at: now };
                 ROLES.push(role);
-                let user = findUserByEmail(personEmail);
-                if (!user) {
-                    user = { id: `u-${Date.now()}`, name: personName, email: personEmail, status: 'active', is_super_admin: false, created_at: now, updated_at: now };
-                    USERS.push(user);
-                }
-                ROLE_BINDINGS.push({ id: `rb-${Date.now()}`, user_id: user.id, role_id: role.id, status: 'active', created_at: now });
                 logActivity('Role created', name, `Admin · ${role.permissions.length} permissions`);
-                logActivity('Member added', name, `${user.email} · Admin`);
+                createInvitation(record, findUserByEmail(personEmail) || newInvitee(personName, personEmail, now), [role.id], now);
             }
         }
-        logActivity(org ? 'Organization updated' : 'Organization created', name,
-            org ? '' : (individual ? 'Customer · Individual' : choice === 'OPERATOR' ? 'Operator' : 'Customer · Enterprise'));
+        if (org) logActivity('Organization updated', name, '');
     });
     if (!ok) return;
     const backToOrder = orgModalFromOrderDraft;
@@ -7936,6 +7939,212 @@ function orgProfileTab(org) {
         </div>`).join('') : '<div style="font-size:12.5px;color:#86868b">No matching data found.</div>'}` : ''}`}`;
 }
 
+// ── Invitations (SA V2 4.2.1, 4.2.5) ──
+// Stored status is PENDING, ACCEPTED or REVOKED. Expired is read off the
+// clock, so a Pending invitation past expires_at shows as Expired with no
+// write. Revoked and Accepted never show on screen; only Pending and
+// Expired are "open".
+function invitationStatus(inv) {
+    if (inv.status === 'PENDING' && Date.now() >= new Date(inv.expires_at).getTime()) return 'EXPIRED';
+    return inv.status;
+}
+function isOpenInvitation(inv) { return ['PENDING', 'EXPIRED'].includes(invitationStatus(inv)); }
+function getOrgInvitations(orgId) {
+    return INVITATIONS.filter(inv => inv.org_id === orgId && isOpenInvitation(inv))
+        .sort((a, b) => b.sent_at.localeCompare(a.sent_at));
+}
+function invitationExpiry(fromIso) {
+    return new Date(new Date(fromIso).getTime() + SYSTEM_PARAMETERS.invitation_link_days * 86400000).toISOString();
+}
+function invitationRoleNames(inv) {
+    return inv.role_ids.map(id => ROLES.find(r => r.id === id)?.name).filter(Boolean).join(', ');
+}
+function invitationStatusBadge(inv) {
+    return invitationStatus(inv) === 'EXPIRED' ? '<span class="badge badge-zinc">Expired</span>' : '<span class="badge badge-amber">Pending</span>';
+}
+function isNotActivated(user) { return user?.activated === false; }
+// Account status as the Accounts list shows it; a disabled account that was
+// never set up is still Disabled (SA V2 4.2.1).
+function accountStatusBadge(user) {
+    if (user.status !== 'active') return '<span class="badge badge-zinc">Disabled</span>';
+    return isNotActivated(user) ? '<span class="badge badge-amber">Not activated</span>' : '<span class="badge badge-green">Active</span>';
+}
+function inviteValidityHint() {
+    const n = SYSTEM_PARAMETERS.invitation_link_days;
+    return `The link is valid for ${n} day${n === 1 ? '' : 's'} (Parameter Center → Invitation link validity).`;
+}
+// The disabled-account copy a customer admin sees hides that the account
+// exists elsewhere (SA V2 4.2.2).
+function disabledInviteeMessage() {
+    return isOperatorView() ? 'This account is disabled. Re-enable it first.' : 'This action is not available. Please contact AISO.';
+}
+
+function createInvitation(org, user, roleIds, now) {
+    const inv = { id: `inv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, org_id: org.id, email: user.email, user_id: user.id,
+        role_ids: [...roleIds], status: 'PENDING', invited_by: actingName() || 'System', sent_at: now, expires_at: invitationExpiry(now) };
+    INVITATIONS.push(inv);
+    logActivity('Member invited', org.name, `${user.email} · ${invitationRoleNames(inv)}`);
+    return inv;
+}
+
+// Revoking never deletes the record. A Not activated account with no other
+// open invitation goes with it (SA V2 4.2.5). `roleNames` carries the names
+// when the roles are already gone (roles removed).
+function revokeInvitation(inv, { reason = 'manual', roleNames = null, now = new Date().toISOString() } = {}) {
+    const org = getOrgById(inv.org_id);
+    const names = roleNames || invitationRoleNames(inv);
+    Object.assign(inv, { status: 'REVOKED', revoked_at: now, revoked_by: reason === 'roles removed' ? 'System' : (actingName() || 'System'), revoke_reason: reason });
+    const user = USERS.find(u => u.id === inv.user_id);
+    const dropAccount = isNotActivated(user) && !INVITATIONS.some(other => other.user_id === user.id && isOpenInvitation(other));
+    if (dropAccount) USERS = USERS.filter(u => u.id !== user.id);
+    const notes = [reason === 'manual' ? '' : reason, dropAccount ? 'account removed' : ''].filter(Boolean);
+    logActivity('Invitation revoked', inv.email, [org?.name, names, ...notes].filter(Boolean).join(' · '));
+    return dropAccount;
+}
+
+function resendInvitation(invId) {
+    const inv = INVITATIONS.find(x => x.id === invId);
+    const org = inv && getOrgById(inv.org_id);
+    if (!inv || !canSeeOrg(org) || !canAddMembers() || !isOpenInvitation(inv)) return;
+    if (org.status !== 'active') { showToast('Reactivate the organization first.', 'error'); return; }
+    const user = USERS.find(u => u.id === inv.user_id);
+    if (user && user.status !== 'active') { showToast(disabledInviteeMessage(), 'error'); return; }
+    const now = new Date().toISOString();
+    const ok = commitPortalMutation(() => {
+        // A new link replaces the old one; the inviter and sent time become
+        // the resender's (SA V2 4.2.5).
+        Object.assign(inv, { status: 'PENDING', invited_by: actingName() || 'System', sent_at: now, expires_at: invitationExpiry(now),
+            link_version: (inv.link_version || 1) + 1 });
+        logActivity('Invitation resent', inv.email, `${org.name} · ${invitationRoleNames(inv)}`);
+    });
+    if (!ok) return;
+    showOrgDetail(org.id, memberTabFor(org));
+    renderOrganizations();
+    showToast(`Invitation resent to ${inv.email}`);
+}
+
+function confirmRevokeInvitation(invId) {
+    const inv = INVITATIONS.find(x => x.id === invId);
+    const org = inv && getOrgById(inv.org_id);
+    if (!inv || !canSeeOrg(org) || !canRemoveMembers() || !isOpenInvitation(inv)) return;
+    showModal(`
+        <div style="padding:26px 28px">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Revoke invitation</h3>
+            <p style="font-size:13px;color:#86868b;margin:0;line-height:1.6">Revoke the invitation to ${esc(inv.email)}? The link stops working immediately. To invite again, send a new invitation.</p>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+                <button onclick="showOrgDetail('${org.id}', '${memberTabFor(org)}')" class="btn-secondary">Cancel</button>
+                <button onclick="revokeInvitationNow('${inv.id}')" class="btn-primary" style="background:#dc2626"><i class="ph ph-x-circle"></i> Revoke</button>
+            </div>
+        </div>`);
+}
+function revokeInvitationNow(invId) {
+    const inv = INVITATIONS.find(x => x.id === invId);
+    const org = inv && getOrgById(inv.org_id);
+    if (!inv || !canSeeOrg(org) || !canRemoveMembers() || !isOpenInvitation(inv)) return;
+    const ok = commitPortalMutation(() => { revokeInvitation(inv); });
+    if (!ok) return;
+    showOrgDetail(org.id, memberTabFor(org));
+    renderOrganizations();
+    showToast(`Invitation to ${inv.email} revoked`);
+}
+
+// ── Demo: stands in for the invitee opening the emailed link ──
+// The prototype cannot send mail, so this button plays the invitee. The link
+// check and what acceptance writes follow SA V2 4.2.3–4.2.5; only the step
+// "open the email" is simulated. Not a product feature (SA V2 附錄 A).
+const DEMO_BTN_STYLE = 'border:1px dashed #a1a1aa;background:transparent;color:#52525b;border-radius:8px;padding:3px 8px;font-size:11.5px;font-weight:600;white-space:nowrap;cursor:pointer';
+function invitationLinkProblem(inv) {
+    const status = invitationStatus(inv);
+    const org = getOrgById(inv.org_id);
+    const user = USERS.find(u => u.id === inv.user_id);
+    if (status === 'REVOKED') return 'This invitation is no longer valid.';
+    if (status === 'ACCEPTED') return 'This invitation has already been used. Please sign in.';
+    if (status === 'EXPIRED') return 'This invitation has expired. Ask your organization admin to resend it.';
+    if (!org || org.status !== 'active') return 'This invitation is no longer valid.';
+    if (!user) return 'This invitation is no longer valid.';
+    if (user.status !== 'active') return 'This account is disabled. Please contact AISO to re-enable it.';
+    if (!inv.role_ids.some(id => ROLES.some(r => r.id === id))) return 'This invitation is no longer valid.';
+    return '';
+}
+function acceptInvitationAs(inv, user, now) {
+    const org = getOrgById(inv.org_id);
+    const held = new Set(ROLE_BINDINGS.filter(b => b.user_id === user.id).map(b => b.role_id));
+    const added = inv.role_ids.filter(id => ROLES.some(r => r.id === id) && !held.has(id));
+    added.forEach((roleId, i) => ROLE_BINDINGS.push({ id: `rb-${Date.now()}-${inv.id}-${i}`, user_id: user.id, role_id: roleId, status: 'active', created_at: now }));
+    Object.assign(inv, { status: 'ACCEPTED', accepted_at: now });
+    const roles = invitationRoleNames(inv);
+    logActivity('Invitation accepted', inv.email, `${org.name} · ${roles}${added.length ? '' : ' · no new roles'}`, null,
+        { name: user.name, org_id: org.id, role: `${org.name} · ${roles}` });
+}
+function demoAcceptInvitation(invId) {
+    const inv = INVITATIONS.find(x => x.id === invId);
+    const org = inv && getOrgById(inv.org_id);
+    if (!inv || !canSeeOrg(org)) return;
+    const problem = invitationLinkProblem(inv);
+    if (problem) { showToast(`Demo: the invitee sees "${problem}"`, 'error'); return; }
+    const user = USERS.find(u => u.id === inv.user_id);
+    const activating = isNotActivated(user);
+    const now = new Date().toISOString();
+    const joined = [org.name];
+    const ok = commitPortalMutation(() => {
+        if (activating) {
+            Object.assign(user, { activated: true, activated_at: now, updated_at: now });
+            logActivity('Account activated', user.email, user.name, null, { name: user.name, org_id: null, role: '' });
+        }
+        acceptInvitationAs(inv, user, now);
+        // Setting up a new account accepts every other Pending invitation
+        // that still passes the link check; Expired ones wait for a resend.
+        if (activating) {
+            INVITATIONS.filter(other => other.user_id === user.id && other.id !== inv.id && invitationStatus(other) === 'PENDING' && !invitationLinkProblem(other))
+                .forEach(other => { acceptInvitationAs(other, user, now); joined.push(getOrgById(other.org_id).name); });
+        }
+    });
+    if (!ok) return;
+    showOrgDetail(org.id, memberTabFor(org));
+    renderOrganizations();
+    showToast(activating ? `Demo: ${user.name} set up the account and joined ${joined.join(', ')}` : `Demo: ${user.name} joined ${org.name} as ${invitationRoleNames(inv)}`);
+}
+
+// Open invitations as list rows: Members tab and the individual Account tab.
+function invitationRows(org, invitations) {
+    return `<div style="border:1px solid var(--border-light);border-radius:12px;overflow:hidden">${invitations.map((inv, i) => `
+        <div style="display:flex;align-items:center;gap:12px;padding:11px 14px;flex-wrap:wrap;${i < invitations.length - 1 ? 'border-bottom:1px solid var(--border-light)' : ''}">
+            <span style="flex:1;min-width:200px">
+                <span style="display:block;font-size:13px;font-weight:600;color:#1d1d1f">${esc(inv.email)} ${invitationStatusBadge(inv)}</span>
+                <span style="display:block;font-size:12px;color:#86868b">Invited by ${esc(inv.invited_by)} · Sent ${esc(ticketDateTime(inv.sent_at))} · Expires ${esc(ticketDateTime(inv.expires_at))}</span>
+            </span>
+            <span style="display:flex;gap:4px;flex-wrap:wrap">${inv.role_ids.map(id => ROLES.find(r => r.id === id)).filter(Boolean).map(r => `<span class="badge badge-zinc">${esc(r.name)}</span>`).join('')}</span>
+            ${canAddMembers() ? `<button onclick="resendInvitation('${inv.id}')" class="btn-ghost" title="Resend"><i class="ph ph-arrow-clockwise"></i></button>` : ''}
+            ${canRemoveMembers() ? `<button onclick="confirmRevokeInvitation('${inv.id}')" class="btn-ghost" title="Revoke"><i class="ph ph-x-circle"></i></button>` : ''}
+            <button onclick="demoAcceptInvitation('${inv.id}')" style="${DEMO_BTN_STYLE}" title="Prototype only: acts as the invitee opening the link">Demo: accept as invitee</button>
+        </div>`).join('')}</div>`;
+}
+
+// A Pending invitation that would make someone a manager stands in for one,
+// so a new enterprise is not told it has nobody while its first admin's
+// invitation is out.
+function hasPendingManagerInvite(org) {
+    return getOrgInvitations(org.id).some(inv => invitationStatus(inv) === 'PENDING' && (() => {
+        const grants = new Set(inv.role_ids.flatMap(id => effectivePermissions(ROLES.find(r => r.id === id))));
+        return ORG_MANAGER_GRANTS.every(g => grants.has(g));
+    })());
+}
+
+// ── Demo: password reset ──
+// Plays the account holder finishing "Forgot password" (SA V2 4.1.6): what it
+// writes is real, the email round trip is not.
+function demoResetPassword(userId) {
+    const user = USERS.find(u => u.id === userId);
+    if (!user || user.is_super_admin || user.status !== 'active' || isNotActivated(user)) return;
+    const ok = commitPortalMutation(() => {
+        user.updated_at = new Date().toISOString();
+        logActivity('Password reset', user.email, '', null, { name: user.name, org_id: null, role: '' });
+    });
+    if (!ok) return;
+    renderAccounts();
+    showToast(`Demo: ${user.name} set a new password. Their other sessions are signed out.`);
+}
+
 // Notices above the member list. Inviting is off while the org is inactive or
 // has no roles; an inactive org shows only that notice (SA V2 4.4.5).
 const ORG_NOTICE_STYLE = 'font-size:12.5px;color:#9a3412;background:#fff7ed;border-radius:10px;padding:10px 12px;margin-bottom:10px';
@@ -7947,6 +8156,7 @@ function inviteBlockedReason(org, roles) {
 
 function orgMembersTab(org, members, roles) {
     const blocked = inviteBlockedReason(org, roles);
+    const invitations = getOrgInvitations(org.id);
     return `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
             <div style="font-size:12.5px;color:#86868b">Each member holds one or more of this organization's roles.
@@ -7966,7 +8176,10 @@ function orgMembersTab(org, members, roles) {
             ${canEditMembers() ? `<button onclick="showEditMemberModal('${org.id}', '${user.id}')" class="btn-ghost" title="Change roles"><i class="ph ph-pencil-simple"></i></button>` : ''}
             ${canRemoveMembers() ? `<button onclick="confirmRemoveMember('${org.id}', '${user.id}')" class="btn-ghost" title="Remove from organization"><i class="ph ph-user-minus"></i></button>` : ''}
         </div>`).join('')}</div>`
-        : `<div style="padding:20px 0">${emptyState('ph-users', EMPTY_STATE_NO_DATA, '')}</div>`}`;
+        : `<div style="padding:20px 0">${emptyState('ph-users', EMPTY_STATE_NO_DATA, '')}</div>`}
+        ${invitations.length ? `
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:18px 0 8px">Invitations (${invitations.length})</div>
+        ${invitationRows(org, invitations)}` : ''}`;
 }
 
 // A role held by a member can be suspended without touching the account or
@@ -8153,6 +8366,12 @@ function deleteRole(orgId, roleId) {
     const ok = commitPortalMutation(() => {
         ROLES = ROLES.filter(r => r.id !== roleId);
         logActivity('Role deleted', org.name, role.name);
+        // Open invitations drop the role; one left with none is revoked by
+        // the system (SA V2 4.2.6).
+        getOrgInvitations(orgId).filter(inv => inv.role_ids.includes(roleId)).forEach(inv => {
+            inv.role_ids = inv.role_ids.filter(id => id !== roleId);
+            if (!inv.role_ids.length) revokeInvitation(inv, { reason: 'roles removed', roleNames: role.name });
+        });
     });
     if (!ok) return;
     showOrgDetail(orgId, 'roles');
@@ -8166,6 +8385,13 @@ function deleteRole(orgId, roleId) {
 const INDIVIDUAL_ACCOUNT_NOTE = 'An individual customer is one person, so there are no members or roles to manage. To end their access here, set the organization to Inactive; disabling the account on the Accounts page blocks it in every organization.';
 function orgAccountTab(org, members) {
     const holder = members[0];
+    const invitation = holder ? null : getOrgInvitations(org.id)[0];
+    if (invitation) {
+        const expired = invitationStatus(invitation) === 'EXPIRED';
+        return `<div style="${ORG_NOTICE_STYLE}">${esc(expired ? `The invitation to ${invitation.email} has expired.` : `Invitation sent to ${invitation.email} · expires ${ticketDateTime(invitation.expires_at)}`)}</div>
+        ${invitationRows(org, [invitation])}
+        <div class="field-hint" style="margin-top:10px">${INDIVIDUAL_ACCOUNT_NOTE}</div>`;
+    }
     if (!holder) {
         const blocked = inviteBlockedReason(org, getOrgRoles(org.id));
         const invite = isOperatorView() && canAddMembers()
@@ -8204,12 +8430,12 @@ function checkedRoleIds() { return [...document.querySelectorAll('.member-role-c
 // one holds its Owner role, and only for that role (SA V2 4.4.6).
 function canInviteTo(org) {
     if (!canSeeOrg(org) || !canAddMembers() || inviteBlockedReason(org, getOrgRoles(org.id))) return false;
-    return orgAllowsMembers(org) || (isOperatorView() && !getOrgMembers(org.id).length);
+    return orgAllowsMembers(org) || (isOperatorView() && !getOrgMembers(org.id).length && !getOrgInvitations(org.id).length);
 }
 function memberTabFor(org) { return orgAllowsMembers(org) ? 'members' : 'account'; }
 
-// The prototype adds the member straight away; the invitation itself lives in
-// the static account-flow screens (SA V2 附錄 A).
+// Sending creates a Pending invitation (SA V2 4.2.2). The email and the link
+// are not real; the Demo button on the invitation row plays the invitee.
 function showAddMemberModal(orgId) {
     const org = getOrgById(orgId);
     if (!canInviteTo(org)) return;
@@ -8219,7 +8445,7 @@ function showAddMemberModal(orgId) {
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 4px">Invite member</h3>
             <div style="font-size:13px;color:#86868b;margin-bottom:18px">${esc(org.name)}</div>
             <label class="field-label" for="member-email">Email <span class="req">*</span></label>
-            <input id="member-email" class="input-field" type="email" maxlength="100" autocomplete="off" placeholder="name@company.com" oninput="onMemberEmailInput('${org.id}')">
+            <input id="member-email" class="input-field" type="email" maxlength="100" autocomplete="off" placeholder="name@company.com" onblur="onMemberEmailInput('${org.id}')">
             <div id="member-email-hint" class="field-hint"></div>
             <div id="member-name-wrap" style="margin-top:12px">
                 <label class="field-label" for="member-name">Name <span class="req">*</span></label>
@@ -8227,6 +8453,7 @@ function showAddMemberModal(orgId) {
             </div>
             <div class="field-label" style="margin-top:14px">Roles <span class="req">*</span></div>
             <div id="member-roles-field" style="display:grid;gap:8px">${individual ? roleCheckboxes(org, getOrgRoles(org.id).map(r => r.id), { locked: true }) : roleCheckboxes(org)}</div>
+            <div class="field-hint" style="margin-top:10px">${esc(inviteValidityHint())}</div>
             <p id="member-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin:14px 0 0"></p>
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
                 <button onclick="showOrgDetail('${org.id}', '${memberTabFor(org)}')" class="btn-secondary">Cancel</button>
@@ -8239,19 +8466,25 @@ function showAddMemberModal(orgId) {
 // An email already on file reuses that account — this is where one account
 // comes to belong to several organizations. Only the desk sees whose account
 // it is; a customer admin is not told who holds an email elsewhere.
+// Looked up on blur; an empty or malformed email shows no hint (SA V2 4.2.2).
 function onMemberEmailInput(orgId) {
-    const user = findUserByEmail(document.getElementById('member-email')?.value);
+    const email = (document.getElementById('member-email')?.value || '').trim();
     const hint = document.getElementById('member-email-hint');
     const nameWrap = document.getElementById('member-name-wrap');
+    if (!email || formEmailError(email)) {
+        if (nameWrap) nameWrap.style.display = '';
+        if (hint) hint.textContent = '';
+        return;
+    }
+    const user = findUserByEmail(email);
     if (nameWrap) nameWrap.style.display = user ? 'none' : '';
     if (!hint) return;
-    if (!user) { hint.textContent = 'A new account is created with this email.'; return; }
-    const already = getOrgBindings(orgId).some(b => b.user_id === user.id);
-    hint.textContent = already
-        ? 'This account is already a member here. Change its roles from the member list instead.'
-        : isOperatorView()
-            ? `Existing account: ${user.name}. It keeps its other roles and is added to this organization.`
-            : 'This email already has an account. It will be added to this organization.';
+    if (!user) { hint.textContent = 'No account uses this email. An invitation to set one up will be sent; the account stays Not activated until then.'; return; }
+    if (user.is_super_admin) { hint.textContent = 'This action is not available. Please contact AISO.'; return; }
+    if (user.status !== 'active') { hint.textContent = disabledInviteeMessage(); return; }
+    hint.textContent = isOperatorView()
+        ? `Existing account: ${user.name}. It keeps its other roles and gets these after accepting. Its password is not reset.`
+        : 'This email already has an account. It will get these roles after accepting the invitation.';
 }
 
 function addMember(orgId) {
@@ -8267,25 +8500,33 @@ function addMember(orgId) {
     const emailError = formEmailError(email);
     if (emailError) errors.push(fieldErr('#member-email', emailError));
     else if (existing?.is_super_admin) errors.push(fieldErr('#member-email', 'This action is not available. Please contact AISO.'));
-    else if (existing && existing.status !== 'active') errors.push(fieldErr('#member-email', isOperatorView() ? 'This account is disabled. Re-enable it first.' : 'This action is not available. Please contact AISO.'));
+    else if (existing && existing.status !== 'active') errors.push(fieldErr('#member-email', disabledInviteeMessage()));
     else if (existing && getOrgBindings(orgId).some(b => b.user_id === existing.id)) errors.push(fieldErr('#member-email', 'This account is already a member here. Change its roles from the member list instead.'));
+    else {
+        const open = getOrgInvitations(orgId).find(inv => inv.email.toLowerCase() === email.toLowerCase());
+        if (open) errors.push(fieldErr('#member-email', invitationStatus(open) === 'EXPIRED'
+            ? 'An invitation to this email has expired. Resend it, or revoke it and invite again.'
+            : 'An invitation to this email is already pending. Resend it, or revoke it and invite again.'));
+    }
     if (!emailError && !existing && !name) errors.push(fieldErr('#member-name', 'Please enter Name.'));
     if (!roleIds.length) errors.push(fieldErr('#member-roles-field', 'Please select Roles.'));
     if (showFormErrors(errors, 'member-error')) return;
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
-        let user = existing;
-        if (!user) {
-            user = { id: `u-${Date.now()}`, name, email, status: 'active', is_super_admin: false, created_at: now, updated_at: now };
-            USERS.push(user);
-        }
-        roleIds.forEach((roleId, i) => ROLE_BINDINGS.push({ id: `rb-${Date.now()}-${i}`, user_id: user.id, role_id: roleId, status: 'active', created_at: now }));
-        logActivity('Member added', org.name, `${user.email} · ${roleIds.map(id => ROLES.find(r => r.id === id)?.name).join(', ')}${existing ? ' · existing account' : ' · new account'}`);
+        createInvitation(org, existing || newInvitee(name, email, now), roleIds, now);
     });
     if (!ok) return;
     showOrgDetail(org.id, memberTabFor(org));
     renderOrganizations();
-    showToast(`${existing ? existing.name : name} added to ${org.name}`);
+    showToast(`Invitation sent to ${existing ? existing.email : email}`);
+}
+
+// An invitee without an account gets one that cannot sign in until it is set
+// up from the link (SA V2 4.2.1).
+function newInvitee(name, email, now) {
+    const user = { id: `u-${Date.now()}`, name, email, status: 'active', activated: false, is_super_admin: false, created_at: now, updated_at: now };
+    USERS.push(user);
+    return user;
 }
 
 // The signed-in account may not change a role it holds in the organization it
@@ -8372,6 +8613,7 @@ function removeMember(orgId, userId) {
     const ok = commitPortalMutation(() => {
         ROLE_BINDINGS = ROLE_BINDINGS.filter(b => !ids.has(b.id));
         logActivity('Member removed', org.name, user.email);
+        getOrgInvitations(orgId).filter(inv => inv.user_id === userId).forEach(inv => revokeInvitation(inv, { reason: 'member removed' }));
     });
     if (!ok) return;
     showOrgDetail(org.id, 'members');
