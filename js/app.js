@@ -5904,14 +5904,14 @@ function showOrderModal(orderId = null, { resume = false } = {}) {
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 18px">${existing ? `Edit ${esc(existing.order_no)}` : 'New Order'}</h3>
 
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px 18px">
-                ${field('ord-no', 'Order No', 'order_no', { required: true, placeholder: 'PO-2026-0001' })}
+                ${field('ord-no', 'Order No', 'order_no', { required: true, placeholder: 'e.g. PO-2026-0001' })}
                 ${field('ord-contract', 'Contract No', 'contract_no', { placeholder: 'e.g. CT-2026-0001' })}
                 ${field('ord-date', 'Order Date', 'order_date', { required: true, type: 'date' })}
                 ${field('ord-sales', 'Sales Contact', 'sales_contact', { placeholder: 'e.g. Name of the sales owner' })}
                 ${orderCustomerField(d)}
                 ${field('ord-si', 'System Integrator', 'si_name', { placeholder: 'e.g. Name of the integrator', hint: 'Free text. The SI that delivers and installs, if any.' })}
-                ${field('ord-hw-sup', 'HW Supplier', 'hw_supplier_name', { placeholder: 'Required when the order has HW lines', hint: 'Free text. Required if any line is HW.' })}
-                ${field('ord-sw-sup', 'SW Supplier', 'sw_supplier_name', { placeholder: 'Required when a SW line has no supplier', hint: 'Free text. Required if a SW line has no supplier of its own.' })}
+                ${field('ord-hw-sup', 'HW Supplier', 'hw_supplier_name', { placeholder: 'e.g. Name of the HW supplier', hint: 'Required if any line is HW.' })}
+                ${field('ord-sw-sup', 'SW Supplier', 'sw_supplier_name', { placeholder: 'e.g. Name of the SW supplier', hint: 'Required if a SW line has no supplier of its own.' })}
             </div>
 
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:22px 0 10px">Documents</div>
@@ -5994,7 +5994,7 @@ function ordLineCard(l, i) {
             <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-top:12px">
                 <div>
                     <label class="field-label">Warranty (months)</label>
-                    <input type="number" class="input-field" data-err="${i}-warranty" min="1" step="1" value="${esc(l.warranty_months)}"
+                    <input type="number" class="input-field" data-err="${i}-warranty" min="1" step="1" placeholder="e.g. 36" value="${esc(l.warranty_months)}"
                            oninput="orderDraft.lines[${i}].warranty_months=this.value;unitDatesRefreshEnds('${i}')">
                 </div>
                 <div class="field-hint" style="align-self:end">The term is per line. Delivery and warranty start are recorded per unit below, as they actually happen.</div>
@@ -6033,9 +6033,9 @@ function ordLineCard(l, i) {
                     <tbody>
                         ${l.bom.map((b, bi) => `
                         <tr>
-                            <td style="padding:3px 8px 3px 0;vertical-align:top">${ordInput({ attrs: 'data-req placeholder="CPU"', oninput: `orderDraft.lines[${i}].bom[${bi}].component_type=this.value.trim()`, value: b.component_type })}</td>
-                            <td style="padding:3px 8px 3px 0;vertical-align:top">${ordInput({ attrs: 'placeholder="—"', oninput: `orderDraft.lines[${i}].bom[${bi}].brand=this.value.trim()`, value: b.brand })}</td>
-                            <td style="padding:3px 8px 3px 0;vertical-align:top">${ordInput({ attrs: 'data-req placeholder="Model"', oninput: `orderDraft.lines[${i}].bom[${bi}].model=this.value.trim()`, value: b.model })}</td>
+                            <td style="padding:3px 8px 3px 0;vertical-align:top">${ordInput({ attrs: 'data-req placeholder="e.g. CPU"', oninput: `orderDraft.lines[${i}].bom[${bi}].component_type=this.value.trim()`, value: b.component_type })}</td>
+                            <td style="padding:3px 8px 3px 0;vertical-align:top">${ordInput({ attrs: 'placeholder="e.g. Intel"', oninput: `orderDraft.lines[${i}].bom[${bi}].brand=this.value.trim()`, value: b.brand })}</td>
+                            <td style="padding:3px 8px 3px 0;vertical-align:top">${ordInput({ attrs: 'data-req placeholder="e.g. Xeon 60 Core"', oninput: `orderDraft.lines[${i}].bom[${bi}].model=this.value.trim()`, value: b.model })}</td>
                             <td style="padding:3px 0;vertical-align:top"><input type="number" class="input-field" min="1" max="${ORDER_QTY_MAX}" step="1" value="${b.qty}" onchange="ordSetBomQty(${i},${bi},this.value)"></td>
                             <td style="padding:3px 0 3px 4px;text-align:right;vertical-align:top"><button onclick="ordRemoveBom(${i},${bi})" class="btn-ghost" title="Remove component"><i class="ph ph-x"></i></button></td>
                         </tr>`).join('')}
@@ -7240,10 +7240,11 @@ function confirmCancelOrder(id) {
 function cancelOrder(id) {
     const o = getOrderById(id);
     if (!o || o.status === 'CANCELLED' || !canUpdateOrders() || cancelBlockedByTickets(o)) return;
+    const prevStatus = o.status;
     const ok = commitPortalMutation(() => {
         o.status = 'CANCELLED';
         o.updated_at = new Date().toISOString();
-        logActivity('Order cancelled', o.order_no, o.customer_name);
+        logActivity('Order cancelled', o.order_no, `${o.customer_name} · ${prevStatus === 'DRAFT' ? 'Draft' : 'Confirmed'}`);
     });
     if (!ok) return;
     closeModal();
@@ -8500,9 +8501,14 @@ function getTicketMessages(ticketId) {
 function getLineTickets(lineId) { return TICKETS.filter(t => t.order_line_id === lineId); }
 function getOrderTickets(orderId) { return TICKETS.filter(t => t.order_id === orderId); }
 
-function nextTicketNo() {
-    const max = TICKETS.reduce((m, t) => Math.max(m, parseInt((t.ticket_no || '').replace(/\D/g, ''), 10) || 0), 0);
-    return `TK-${String(max + 1).padStart(4, '0')}`;
+function nextTicketNo(now = new Date()) {
+    // The month is taken in UTC+8 (SA V2 4.6.1); the sequence restarts monthly
+    // and simply grows past 999.
+    const tw = new Date(now.getTime() + 8 * 3600000);
+    const prefix = `TK-${tw.getUTCFullYear()}${String(tw.getUTCMonth() + 1).padStart(2, '0')}`;
+    const max = TICKETS.filter(x => (x.ticket_no || '').startsWith(prefix))
+        .reduce((m, x) => Math.max(m, parseInt(x.ticket_no.slice(prefix.length), 10) || 0), 0);
+    return `${prefix}${String(max + 1).padStart(3, '0')}`;
 }
 
 const TICKET_STATUS_LABEL = {
@@ -8526,13 +8532,27 @@ function ticketPriorityBadge(p) {
 
 function ticketTimeAgo(iso) {
     if (!iso) return '';
-    const diffMs = Date.now() - new Date(iso).getTime();
-    const mins = Math.max(0, Math.round(diffMs / 60000));
+    const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
     if (mins < 60) return `${mins}m ago`;
-    const hours = Math.round(mins / 60);
+    const hours = Math.floor(mins / 60);
     if (hours < 48) return `${hours}h ago`;
-    return `${Math.round(hours / 24)}d ago`;
+    return `${Math.floor(hours / 24)}d ago`;
 }
+
+// The customer's "last updated" moves only with what the customer can see:
+// messages to or from them and status changes (SA V2 4.6.1).
+function ticketCustomerUpdatedAt(t) {
+    if (t.customer_updated_at) return t.customer_updated_at;
+    const seen = getTicketMessages(t.id).filter(m => !m.is_internal).map(m => m.created_at);
+    return seen.length ? seen[seen.length - 1] : t.created_at;
+}
+function ticketUpdatedAtFor(t) { return isCustomerView() ? ticketCustomerUpdatedAt(t) : t.updated_at; }
+
+// Desk-only information (internal notes, handling, acceptance, first
+// response) is visible to anyone in the operator view who can read tickets;
+// changing it takes ticket.u (SA V2 4.6.1 權限).
+function canSeeDeskInfo() { return isOperatorView() && canViewTickets(); }
+
 function ticketDateTime(iso) {
     if (!iso) return '—';
     const d = new Date(iso);
@@ -8574,10 +8594,10 @@ function setTicketAcceptance(ticketId, value) {
 // snapshot taken when the ticket was opened.
 function ticketInternalParty(t, state) {
     const order = getOrderById(t.order_id);
-    if (state === 'HW_SUPPLIER') return (order?.hw_supplier_name || (t.scope === 'HW' ? t.snapshot?.supplier_name : '') || '').trim();
+    if (state === 'HW_SUPPLIER') return (order?.hw_supplier_name || t.snapshot?.hw_supplier_name || (t.scope === 'HW' ? t.snapshot?.supplier_name : '') || '').trim();
     if (state === 'SW_SUPPLIER') {
         const line = t.scope === 'SW' ? ORDER_LINES.find(l => l.id === t.order_line_id) : null;
-        return (line?.supplier_name || order?.sw_supplier_name || (t.scope === 'SW' ? t.snapshot?.supplier_name : '') || '').trim();
+        return (line?.supplier_name || order?.sw_supplier_name || t.snapshot?.sw_supplier_name || (t.scope === 'SW' ? t.snapshot?.supplier_name : '') || '').trim();
     }
     if (state === 'SI') return (order?.si_name || t.snapshot?.si_name || '').trim();
     if (state === 'AISO_INTERNAL') return 'AISO';
@@ -8608,6 +8628,11 @@ function setTicketInternalState(ticketId, state, { assigneeId = null, note = '' 
     // Internal work goes to a named colleague when there is one to name.
     if (state === 'AISO_INTERNAL' && !assigneeId && deskStaff().some(u => u.id !== actingUser()?.id)) {
         showReferInternalModal(t.id);
+        return;
+    }
+    // The colleague may have lost ticket access while the picker was open.
+    if (assigneeId && !deskStaff().some(u => u.id === assigneeId)) {
+        showFormErrors([fieldErr('#refer-assignee', `${userNameById(assigneeId)} can no longer confirm tickets. Pick someone else.`)]);
         return;
     }
     const party = state === 'AISO_INTERNAL' && assigneeId ? userNameById(assigneeId) : ticketInternalParty(t, state);
@@ -8661,6 +8686,15 @@ function ticketFirstResponse(t) {
     return { targetHours, elapsedHours, answered, overdue, ratio: Math.min(1, elapsedHours / targetHours) };
 }
 
+// "answered in" rounds down; "waiting" and "overdue" round up, and overdue
+// counts the hours past the target (SA V2 4.6.4).
+function ticketFirstResponseText(t, fr) {
+    if (fr.answered) return `answered in ${fr.elapsedHours < 1 ? `${Math.floor(fr.elapsedHours * 60)}m` : `${Math.floor(fr.elapsedHours)}h`}`;
+    if (t.status === 'RESOLVED' || t.status === 'CLOSED') return 'Not answered';
+    if (fr.overdue) return `${Math.ceil(fr.elapsedHours - fr.targetHours)}h · overdue`;
+    return `${Math.ceil(fr.elapsedHours)}h · waiting`;
+}
+
 // Coverage from the snapshot: warranty for HW, license for SW.
 function ticketCoverage(snap) {
     if (!snap?.coverage_end) return { known: false };
@@ -8680,11 +8714,13 @@ let notifMenuOpen = false;
 // role can update tickets.
 function deskStaff() {
     const roleIds = new Set(ROLES
-        .filter(r => orgHasType(getOrgById(r.org_id), 'OPERATOR') && r.permissions.includes(PORTAL_PERMISSIONS.TICKET_UPDATE))
+        .filter(r => { const org = getOrgById(r.org_id); return orgHasType(org, 'OPERATOR') && org.status === 'active'
+            && effectivePermissions(r).includes(PORTAL_PERMISSIONS.TICKET_UPDATE); })
         .map(r => r.id));
     const userIds = new Set(ROLE_BINDINGS.filter(b => b.status === 'active' && roleIds.has(b.role_id)).map(b => b.user_id));
     return USERS.filter(u => userIds.has(u.id) && u.status === 'active').sort((a, b) => a.name.localeCompare(b.name));
 }
+
 function userNameById(id) { return USERS.find(u => u.id === id)?.name || ''; }
 
 // Call inside a commitPortalMutation. Nobody is notified of their own action.
@@ -8764,7 +8800,7 @@ function renderNotificationBell() {
                     <span style="min-width:0;flex:1"><span class="txt">${esc(notificationText(n))}</span>
                         <span style="display:block;color:#86868b;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t?.subject || '')} · ${ticketTimeAgo(n.created_at)}</span></span>
                 </button>`;
-            }).join('') : '<div style="font-size:12.5px;color:#86868b;padding:14px 10px;text-align:center">Nothing yet. Colleagues can flag you in internal notes.</div>'}
+            }).join('') : `<div style="font-size:12.5px;color:#86868b;padding:14px 10px;text-align:center">${EMPTY_STATE_NO_DATA}</div>`}
         </div>` : ''}`;
 }
 
@@ -8808,7 +8844,7 @@ function showReferInternalModal(ticketId) {
                 ${staff.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}
             </select>
             <label class="field-label" for="refer-note" style="margin-top:12px">What to confirm</label>
-            <textarea id="refer-note" class="input-field" style="min-height:72px" placeholder="e.g. Check the replacement part before shipping"></textarea>
+            <textarea id="refer-note" class="input-field" style="min-height:72px" maxlength="4000" placeholder="e.g. Check the replacement part before shipping"></textarea>
             <div class="field-hint">Goes into the internal note.</div>
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
                 <button onclick="showTicketDetail('${t.id}')" class="btn-secondary text-xs">Cancel</button>
@@ -8819,7 +8855,14 @@ function showReferInternalModal(ticketId) {
 
 function confirmTicketInternal(ticketId) {
     const t = getTicketById(ticketId);
-    if (!t || !isWaitingOnMe(t)) return;
+    if (!t) return;
+    // Still the current confirmer, acting as AISO with ticket.u (SA V2 4.6.4).
+    const me = actingUser();
+    if (!isWaitingOnMe(t) || !canManageTickets() || !deskStaff().some(u => u.id === me?.id)) {
+        showToast(`You are no longer the confirmer on ${t.ticket_no}.`, 'error');
+        showTicketDetail(t.id);
+        return;
+    }
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
         const msgId = `tm-${Date.now()}`;
@@ -8905,7 +8948,7 @@ function getFilteredTickets() {
         if (q && ![t.ticket_no, t.subject, t.customer_name, t.snapshot?.order_no, t.snapshot?.product_name, t.serial_no]
             .some(v => (v || '').toLowerCase().includes(q))) return false;
         return true;
-    }).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+    }).sort((a, b) => (ticketUpdatedAtFor(b) || '').localeCompare(ticketUpdatedAtFor(a) || ''));
 }
 
 function renderTicketStats() {
@@ -8916,7 +8959,7 @@ function renderTicketStats() {
     const open = all.filter(t => t.status === 'OPEN' || t.status === 'IN_PROGRESS').length;
     const awaiting = all.filter(t => t.status === 'AWAITING_CUSTOMER_INFO').length;
     const overdue = all.filter(t => ticketFirstResponse(t).overdue).length;
-    const resolved = all.filter(t => (t.resolved_at || '').slice(0, 7) === month).length;
+    const resolved = all.filter(t => t.resolved_at && toIsoDate(new Date(t.resolved_at)).slice(0, 7) === month).length;
     const stat = (v, l, color = '#1d1d1f') => `<div class="tk-stat"><div class="v" style="color:${color}">${v}</div><div class="l">${l}</div></div>`;
     // First-response timing is the desk's own measure; customers do not see it.
     target.innerHTML = stat(open, 'Open') + stat(awaiting, 'Awaiting customer', awaiting ? '#b45309' : '#1d1d1f')
@@ -8960,15 +9003,15 @@ function renderServiceDesk() {
         return `
         <tr class="cursor-pointer" onclick="if(!event.target.closest('button'))showTicketDetail('${t.id}')">
             <td>${ticketNeedsMe(t) ? `<span class="tk-needs-dot" title="${isWaitingOnMe(t) ? 'Waiting for your confirmation' : 'You were flagged on this ticket'}"></span>` : ''}<span style="font-weight:600;font-size:13px;color:#1d1d1f">${esc(t.ticket_no)}</span>
-                <div style="font-size:11px;color:#86868b;margin-top:1px">${ticketTimeAgo(t.updated_at)}</div></td>
+                <div style="font-size:11px;color:#86868b;margin-top:1px">${ticketTimeAgo(ticketUpdatedAtFor(t))}</div></td>
             <td><span style="font-size:13px;color:#1d1d1f">${esc(t.subject)}</span>
                 <div style="font-size:11.5px;color:#86868b;margin-top:1px">${esc(t.category)} · via ${esc(t.channel || '—')}</div></td>
             <td><span style="font-size:13px;color:#1d1d1f">${esc(t.customer_name)}</span></td>
             <td><span style="font-size:13px;font-weight:600;color:#1d1d1f">${esc(t.snapshot?.order_no || '—')}</span>
-                <div style="font-size:11.5px;color:#86868b;margin-top:1px">${esc(t.scope)} · ${esc(t.snapshot?.product_name || '')}${t.serial_no ? ` · <span style="font-family:ui-monospace,Menlo,monospace;white-space:nowrap">${esc(t.serial_no)}</span>` : ''}</div></td>
+                <div style="font-size:11.5px;color:#86868b;margin-top:1px">${esc(t.scope)} · ${esc(t.snapshot?.product_name || '')}${ticketDeviceLabel(t) ? ` · <span style="font-family:ui-monospace,Menlo,monospace;white-space:nowrap">${esc(ticketDeviceLabel(t))}</span>` : ''}</div></td>
             <td style="white-space:nowrap">${ticketPriorityBadge(t.priority)}</td>
             <td style="white-space:nowrap">${ticketStatusBadge(t.status)}${isOperatorView() && fr.overdue ? ' <span class="badge badge-red" style="margin-left:4px" title="No AISO reply within the first-response target">Overdue</span>' : ''}
-                ${isOperatorView() && isTicketReferred(t) ? `<div style="margin-top:4px">${ticketInternalChip(t, { compact: true })}</div>` : ''}
+                ${isOperatorView() && isTicketReferred(t) ? `<div style="margin-top:4px">${ticketInternalChip(t)}</div>` : ''}
                 ${isOperatorView() && ticketAcceptance(t) !== 'PENDING' ? `<div style="margin-top:4px">${ticketAcceptanceBadge(t)}</div>` : ''}</td>
             <td></td>
         </tr>`;
@@ -9018,9 +9061,11 @@ function lineLicenseChoices(line) {
 }
 
 // Build the snapshot a ticket keeps from the order + line (+ serial or key) it points at.
-function buildTicketSnapshot(order, line, serialNo = '', licenseKey = '') {
+function buildTicketSnapshot(order, line, unitIndex = -1, licenseKey = '') {
     const isSw = line.scope === 'SW';
     const keyChoice = isSw ? (lineLicenseChoices(line).find(c => c.key === licenseKey) || lineLicenseChoices(line)[0]) : null;
+    const hwSupplier = order.hw_supplier_name || '';
+    const swSupplier = (isSw && line.supplier_name) || order.sw_supplier_name || '';
     return {
         order_no: order.order_no,
         line_no: line.line_no,
@@ -9028,11 +9073,24 @@ function buildTicketSnapshot(order, line, serialNo = '', licenseKey = '') {
         sla_plan: line.sla_plan || '',
         first_response_hours: firstResponseTargetHours(line.sla_plan || ''),
         coverage_kind: isSw ? 'license' : 'warranty',
-        coverage_end: isSw ? (line.license_end || '') : unitWarrantyEnd(line, (line.serial_nos || []).indexOf(serialNo)),
-        supplier_name: isSw ? (line.supplier_name || order.sw_supplier_name || '') : (order.hw_supplier_name || ''),
+        coverage_end: isSw ? (line.license_end || '') : (unitIndex >= 0 ? unitWarrantyEnd(line, unitIndex) : ''),
+        // The card shows the supplier of the line's own scope; both are kept (SA V2 4.6.1).
+        supplier_name: isSw ? swSupplier : hwSupplier,
+        hw_supplier_name: hwSupplier, sw_supplier_name: swSupplier,
         si_name: order.si_name || '',
         license_key: keyChoice?.key || '',
     };
+}
+
+// How a ticket names its device: the serial, or "Unit [n] · serial pending"
+// when it was opened on a unit whose serial was not filled yet.
+function ticketDeviceLabel(t) {
+    if (t.scope !== 'HW') return t.snapshot?.license_key || '';
+    if (t.serial_no) return t.serial_no;
+    return Number.isInteger(t.unit_index) ? `Unit ${t.unit_index + 1} · serial pending` : '';
+}
+function lineUnitLabel(line, u) {
+    return `Unit ${u + 1} · ${(line.serial_nos[u] || '').trim() || 'serial pending'}`;
 }
 
 // ── Create ──
@@ -9047,7 +9105,7 @@ function showTicketCreateModal({ lineId = null } = {}) {
     }
     ticketDraft = {
         customer_org_id: isCustomerView() ? activeOrgId() : (getCustomerOrgs().find(o => o.name === document.getElementById('ticket-customer')?.value)?.id || ''),
-        order_id: '', order_line_id: '', serial_no: '', license_key: '',
+        order_id: '', order_line_id: '', unit_index: -1, license_key: '',
         channel: isCustomerView() ? 'Workspace' : 'Email',
         priority: 'MEDIUM', category: TICKET_CATEGORIES[0],
         subject: '', description: '',
@@ -9063,8 +9121,7 @@ function showTicketCreateModal({ lineId = null } = {}) {
             ticketDraft.customer_org_id = order.customer_org_id;
             ticketDraft.order_id = order.id;
             ticketDraft.order_line_id = line.id;
-            const serials = (line.serial_nos || []).filter(s => s.trim());
-            if (serials.length === 1) ticketDraft.serial_no = serials[0];
+            if (line.scope === 'HW' && line.qty === 1) ticketDraft.unit_index = 0;
             const keys = lineLicenseChoices(line);
             if (keys.length === 1) ticketDraft.license_key = keys[0].key;
         }
@@ -9074,12 +9131,11 @@ function showTicketCreateModal({ lineId = null } = {}) {
 
 function tkSet(key, value) {
     ticketDraft[key] = value;
-    if (key === 'customer_org_id') { ticketDraft.order_id = ''; ticketDraft.order_line_id = ''; ticketDraft.serial_no = ''; ticketDraft.license_key = ''; }
-    if (key === 'order_id') { ticketDraft.order_line_id = ''; ticketDraft.serial_no = ''; ticketDraft.license_key = ''; }
+    if (key === 'customer_org_id') { ticketDraft.order_id = ''; ticketDraft.order_line_id = ''; ticketDraft.unit_index = -1; ticketDraft.license_key = ''; }
+    if (key === 'order_id') { ticketDraft.order_line_id = ''; ticketDraft.unit_index = -1; ticketDraft.license_key = ''; }
     if (key === 'order_line_id') {
         const line = ORDER_LINES.find(l => l.id === value);
-        const serials = (line?.serial_nos || []).filter(s => s.trim());
-        ticketDraft.serial_no = serials.length === 1 ? serials[0] : '';
+        ticketDraft.unit_index = line?.scope === 'HW' && line.qty === 1 ? 0 : -1;
         const keys = line ? lineLicenseChoices(line) : [];
         ticketDraft.license_key = keys.length === 1 ? keys[0].key : '';
     }
@@ -9095,19 +9151,19 @@ const TICKET_FIND_LIMIT = 8;
 function ticketFindMatches(query) {
     const q = String(query || '').trim().toLowerCase();
     if (q.length < 2) return [];
-    const orders = ORDERS.filter(o => o.status === 'CONFIRMED' && canSeeOrder(o));
+    const orders = ORDERS.filter(o => o.status === 'CONFIRMED' && canSeeOrder(o) && getOrgById(o.customer_org_id)?.status === 'active');
     const out = [];
     for (const o of orders) {
-        if (o.order_no.toLowerCase().includes(q)) out.push({ kind: 'order', order: o });
+        if (o.order_no.toLowerCase().includes(q)) out.push({ kind: 'order', order: o, value: o.order_no });
         for (const l of getOrderLines(o.id)) {
-            (l.serial_nos || []).filter(sn => sn && sn.toLowerCase().includes(q))
-                .forEach(sn => out.push({ kind: 'serial', order: o, line: l, value: sn }));
+            (l.serial_nos || []).forEach((sn, u) => { if (sn && sn.toLowerCase().includes(q)) out.push({ kind: 'serial', order: o, line: l, value: sn, unit: u }); });
             lineLicenseChoices(l).filter(c => c.key.toLowerCase().includes(q))
-                .forEach(c => out.push({ kind: 'key', order: o, line: l, value: c.key, units: c.units }));
+                .forEach(c => out.push({ kind: 'key', order: o, line: l, value: c.key }));
         }
-        if (out.length > TICKET_FIND_LIMIT * 4) break;
     }
-    return out;
+    // Exact matches first, then newest order first (SA V2 4.6.3).
+    const exact = m => (m.value || '').trim().toLowerCase() === q ? 0 : 1;
+    return out.sort((a, b) => exact(a) - exact(b) || (b.order.order_date || '').localeCompare(a.order.order_date || ''));
 }
 
 function ticketFindResults(query) {
@@ -9121,10 +9177,10 @@ function ticketFindResults(query) {
             <i class="ph ${icon[m.kind]}" style="color:#1432E6"></i>
             <div style="flex:1;min-width:0">
                 <div style="font-size:13px;font-weight:600">${m.kind === 'order' ? esc(m.order.order_no) : `<span class="tk-mono" style="background:transparent;padding:0">${esc(m.value)}</span>`}</div>
-                <div style="font-size:11.5px;color:#86868b">${m.kind === 'order' ? 'Order' : `${esc(m.line.product_name)} · ${esc(m.order.order_no)}${m.units ? ` · ${esc(m.units)}` : ''}`}${isCustomerView() ? '' : ` · ${esc(m.order.customer_name)}`}</div>
+                <div style="font-size:11.5px;color:#86868b">${m.kind === 'order' ? 'Order' : `${esc(m.line.product_name)} · ${esc(m.order.order_no)}${m.kind === 'serial' ? ` · Unit ${m.unit + 1}` : ''}`}${isCustomerView() ? '' : ` · ${esc(m.order.customer_name)}`}</div>
             </div>
         </button>`).join('')}
-        ${all.length > TICKET_FIND_LIMIT ? `<div style="font-size:11.5px;color:#86868b">Showing ${TICKET_FIND_LIMIT} of ${all.length}${all.length > TICKET_FIND_LIMIT * 4 ? '+' : ''}. Type more to narrow it down.</div>` : ''}
+        ${all.length > TICKET_FIND_LIMIT ? `<div style="font-size:11.5px;color:#86868b">Showing ${TICKET_FIND_LIMIT} of ${all.length}. Type more to narrow it down.</div>` : ''}
     </div>`;
 }
 
@@ -9142,12 +9198,9 @@ function tkPickFound(idx) {
     if (!isCustomerView()) d.customer_org_id = m.order.customer_org_id;
     d.order_id = m.order.id;
     d.order_line_id = m.line?.id || '';
-    d.serial_no = m.kind === 'serial' ? m.value : '';
+    d.unit_index = m.kind === 'serial' ? m.unit : -1;
     d.license_key = m.kind === 'key' ? m.value : '';
-    if (m.line && m.kind !== 'serial') {
-        const serials = (m.line.serial_nos || []).filter(s => s.trim());
-        if (serials.length === 1) d.serial_no = serials[0];
-    }
+    if (m.line && m.kind !== 'serial' && m.line.scope === 'HW' && m.line.qty === 1) d.unit_index = 0;
     if (m.line && m.kind !== 'key') {
         const keys = lineLicenseChoices(m.line);
         if (keys.length === 1) d.license_key = keys[0].key;
@@ -9162,7 +9215,8 @@ function ticketDraftReady() {
     const d = ticketDraft;
     const line = ORDER_LINES.find(l => l.id === d.order_line_id);
     if (!line) return false;
-    if (line.scope === 'HW' && (line.serial_nos || []).some(s => s.trim()) && !d.serial_no) return false;
+    // A HW ticket is about one unit, picked even when its serial is still blank.
+    if (line.scope === 'HW' && !(d.unit_index >= 0 && d.unit_index < line.qty)) return false;
     if (line.scope === 'SW' && lineLicenseChoices(line).length > 1 && !d.license_key) return false;
     return true;
 }
@@ -9171,17 +9225,17 @@ function renderTicketCreateModal() {
     const d = ticketDraft;
     // Customer orgs that hold at least one confirmed order (SA V2 4.5.3).
     const customers = isCustomerView() ? []
-        : getCustomerOrgs().filter(org => ORDERS.some(o => o.status === 'CONFIRMED' && o.customer_org_id === org.id))
+        : getCustomerOrgs().filter(org => org.status === 'active' && ORDERS.some(o => o.status === 'CONFIRMED' && o.customer_org_id === org.id))
             .sort((a, b) => a.name.localeCompare(b.name));
     const orders = ORDERS.filter(o => canSeeOrder(o) && o.customer_org_id === d.customer_org_id && o.status === 'CONFIRMED')
         .sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
     const lines = d.order_id ? getOrderLines(d.order_id) : [];
     const line = ORDER_LINES.find(l => l.id === d.order_line_id);
     const order = line ? getOrderById(line.order_id) : null;
-    const serials = (line?.serial_nos || []).filter(s => s.trim());
     const ready = ticketDraftReady();
     const keyChoices = line?.scope === 'SW' ? lineLicenseChoices(line) : [];
-    const snap = ready ? buildTicketSnapshot(order, line, d.serial_no, d.license_key) : null;
+    const snap = ready ? buildTicketSnapshot(order, line, d.unit_index, d.license_key) : null;
+    const pickedSerial = line?.scope === 'HW' && d.unit_index >= 0 ? (line.serial_nos[d.unit_index] || '').trim() : '';
 
     // Keep typed text across re-renders triggered by picker clicks.
     const keep = id => document.getElementById(id)?.value;
@@ -9210,7 +9264,7 @@ function renderTicketCreateModal() {
                     ? `<div class="tk-pick sel" style="cursor:default"><i class="ph ph-buildings" style="color:#1432E6"></i><span style="font-size:13px;font-weight:600">${esc(activeOrg()?.name || '')}</span></div>`
                     : `<select class="input-field" onchange="tkSet('customer_org_id', this.value)">
                         <option value="">Select customer…</option>
-                        ${customers.map(c => `<option value="${c.id}" ${c.id === d.customer_org_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+                        ${customers.map(c => `<option value="${c.id}" ${c.id === d.customer_org_id ? 'selected' : ''}>${esc(orderCustomerLabel(c))}</option>`).join('')}
                        </select>
                        <div class="field-hint">Customer organizations with a confirmed order.</div>`}
 
@@ -9233,10 +9287,10 @@ function renderTicketCreateModal() {
                     </button>`).join('')
                 : '<div style="font-size:12.5px;color:#c7c7cc;padding:8px 0">Select an order first.</div>'}
 
-                ${line && line.scope === 'HW' && serials.length ? `
+                ${line && line.scope === 'HW' ? `
                 <div class="tk-step"><span class="n">4</span>Serial number</div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                    ${serials.map(s => `<button class="tk-pick ${s === d.serial_no ? 'sel' : ''}" onclick="ticketDraft.serial_no='${esc(s)}';renderTicketCreateModal()" style="width:auto;padding:6px 12px"><span class="tk-mono" style="background:transparent;padding:0">${esc(s)}</span></button>`).join('')}
+                    ${line.serial_nos.map((s, u) => `<button class="tk-pick ${u === d.unit_index ? 'sel' : ''}" onclick="ticketDraft.unit_index=${u};renderTicketCreateModal()" style="width:auto;padding:6px 12px"><span class="tk-mono" style="background:transparent;padding:0">${esc(lineUnitLabel(line, u))}</span></button>`).join('')}
                 </div>
                 <div class="field-hint">One unit per ticket. Two units with the same fault are two tickets.</div>` : ''}
 
@@ -9253,7 +9307,7 @@ function renderTicketCreateModal() {
 
             <div style="min-height:0;padding:26px 28px;overflow-y:auto;background:var(--bg-subtle)">
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin-bottom:8px">Entitlement</div>
-                ${ready ? ticketEntitlementCard(snap, d.serial_no) : `<div style="border:1px dashed var(--border);border-radius:12px;padding:22px;text-align:center;font-size:12.5px;color:#86868b"><i class="ph ph-shield-check" style="font-size:22px;display:block;margin-bottom:6px"></i>Warranty / license and SLA appear here once a line${line && line.scope === 'HW' && serials.length ? ' and serial' : ''}${keyChoices.length > 1 ? ' and license key' : ''} is selected.</div>`}
+                ${ready ? ticketEntitlementCard(snap, pickedSerial || (d.unit_index >= 0 ? lineUnitLabel(line, d.unit_index) : '')) : `<div style="border:1px dashed var(--border);border-radius:12px;padding:22px;text-align:center;font-size:12.5px;color:#86868b"><i class="ph ph-shield-check" style="font-size:22px;display:block;margin-bottom:6px"></i>Warranty / license and SLA appear here once a line${line && line.scope === 'HW' ? ' and serial' : ''}${keyChoices.length > 1 ? ' and license key' : ''} is selected.</div>`}
                 ${ready ? '<div style="font-size:11px;color:#86868b;margin-top:6px"><i class="ph ph-camera"></i> Copied onto the ticket at creation; later order edits do not change it.</div>' : ''}
 
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:20px 0 8px">Request</div>
@@ -9274,7 +9328,7 @@ function renderTicketCreateModal() {
                 <div style="margin-top:12px"><label class="field-label" for="tk-subject">Subject <span class="req">*</span></label>
                     <input id="tk-subject" class="input-field" maxlength="120" placeholder="One line the customer would recognise" value="${esc(d.subject)}" oninput="tkSetText('subject', this.value)"></div>
                 <div style="margin-top:12px"><label class="field-label" for="tk-description">Description <span class="req">*</span></label>
-                    <textarea id="tk-description" class="input-field" style="min-height:96px" placeholder="What happened, when, what was tried" oninput="tkSetText('description', this.value)">${esc(d.description)}</textarea></div>
+                    <textarea id="tk-description" class="input-field" style="min-height:96px" maxlength="4000" placeholder="What happened, when, what was tried" oninput="tkSetText('description', this.value)">${esc(d.description)}</textarea></div>
                 <div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
                     <div><label class="field-label" for="tk-reported">Reported by: Name</label>
                         <input id="tk-reported" class="input-field" maxlength="100" placeholder="Customer contact name" value="${esc(d.reported_by)}" ${isCustomerView() ? 'readonly' : `oninput="tkSetText('reported_by', this.value)"`}></div>
@@ -9325,14 +9379,18 @@ function saveTicket() {
     const ticket = {
         id: `tk-${Date.now()}`, ticket_no: nextTicketNo(),
         customer_name: order.customer_name, customer_org_id: order.customer_org_id ?? null,
-        order_id: order.id, order_line_id: line.id, serial_no: d.serial_no, scope: line.scope,
+        order_id: order.id, order_line_id: line.id, scope: line.scope,
+        serial_no: line.scope === 'HW' ? (line.serial_nos[d.unit_index] || '').trim() : '',
+        unit_index: line.scope === 'HW' ? d.unit_index : null,
+        license_key: line.scope === 'SW' ? (d.license_key || '') : '',
+        created_by: actingUser()?.id || currentUser?.id || null,
         subject: d.subject.trim(), description: d.description.trim(),
         category: d.category, priority: d.priority, status: 'OPEN',
         channel: d.channel, reported_by: d.reported_by.trim(), reported_by_email: reporterEmail,
-        snapshot: buildTicketSnapshot(order, line, d.serial_no, d.license_key),
+        snapshot: buildTicketSnapshot(order, line, d.unit_index, d.license_key),
         internal_state: 'NONE', internal_party: '', internal_since: null,
         acceptance: 'PENDING',
-        created_at: now, updated_at: now, first_response_at: null, resolved_at: null,
+        created_at: now, updated_at: now, customer_updated_at: now, first_response_at: null, resolved_at: null,
     };
     const ok = commitPortalMutation(() => {
         TICKETS.unshift(ticket);
@@ -9342,7 +9400,7 @@ function saveTicket() {
             author_name: authorName.split(' · ')[0], is_internal: false, created_at: now, body: ticket.description,
             attachments: d.attachments.map(a => ({ ...a })),
         });
-        logActivity('Ticket opened', ticket.ticket_no, `${ticket.subject} · ${ticket.snapshot.order_no}${ticket.serial_no ? ` · ${ticket.serial_no}` : ''}`);
+        logActivity('Ticket opened', ticket.ticket_no, `${ticket.subject} · ${ticket.snapshot.order_no}${ticketDeviceLabel(ticket) ? ` · ${ticketDeviceLabel(ticket)}` : ''}`);
     });
     if (!ok) return;
     closeModal();
@@ -9361,9 +9419,10 @@ function showTicketDetail(id) {
     if (!t) return;
     if (!canSeeTicket(t)) return;
     const manage = canManageTickets();
+    const desk = canSeeDeskInfo();
     markTicketNotificationsRead(t.id);
     const staff = manage ? deskStaff().filter(u => u.id !== actingUser()?.id) : [];
-    const messages = getTicketMessages(id).filter(m => manage || !m.is_internal);
+    const messages = getTicketMessages(id).filter(m => desk || !m.is_internal);
     const fr = ticketFirstResponse(t);
     const order = getOrderById(t.order_id);
     const line = ORDER_LINES.find(l => l.id === t.order_line_id);
@@ -9390,7 +9449,7 @@ function showTicketDetail(id) {
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                             <span style="font-size:18px;font-weight:700;color:#1d1d1f">${esc(t.ticket_no)}</span>
                             ${ticketStatusBadge(t.status)}${ticketPriorityBadge(t.priority)}
-                            ${manage && fr.overdue ? '<span class="badge badge-red">Overdue</span>' : ''}
+                            ${desk && fr.overdue ? '<span class="badge badge-red">Overdue</span>' : ''}
                         </div>
                         <div style="font-size:15px;font-weight:600;color:#1d1d1f;margin-top:6px">${esc(t.subject)}</div>
                         <div style="font-size:12.5px;color:#86868b;margin-top:2px">${esc(t.customer_name)} · opened ${esc(ticketDateTime(t.created_at))} via ${esc(t.channel || '—')}${t.reported_by ? ` by ${esc(t.reported_by)}` : ''} · ${esc(t.category)}</div>
@@ -9405,40 +9464,45 @@ function showTicketDetail(id) {
                     <button class="btn-primary text-xs" onclick="confirmTicketInternal('${t.id}')"><i class="ph ph-check"></i> Mark confirmed</button>
                 </div>` : ''}
                 <div style="margin-top:14px;flex:1">
-                    ${messages.map(m => `
+                    ${messages.map(m => {
+                        // Customers see the desk, not the person (SA V2 4.6.5).
+                        const who = m.author_type !== 'CUSTOMER' && isCustomerView() ? 'AISO Service Desk' : m.author_name;
+                        return `
                     <div class="tk-msg ${m.is_internal ? 'internal' : ''}">
-                        <div class="av ${m.author_type === 'CUSTOMER' ? 'av-c' : 'av-i'}">${esc(getUserInitials(m.author_name || (m.author_type === 'CUSTOMER' ? t.customer_name : 'AISO')))}</div>
+                        <div class="av ${m.author_type === 'CUSTOMER' ? 'av-c' : 'av-i'}">${esc(getUserInitials(who || (m.author_type === 'CUSTOMER' ? t.customer_name : 'AISO')))}</div>
                         <div style="min-width:0;flex:1">
-                            <span class="who">${esc(m.author_name || '—')}</span>
+                            <span class="who">${esc(who || '—')}</span>
                             <span class="badge ${m.is_internal ? 'badge-amber' : (m.author_type === 'CUSTOMER' ? 'badge-customer' : 'badge-zinc')}" style="margin-left:6px">${m.is_internal ? 'Internal note' : (m.author_type === 'CUSTOMER' ? 'Customer' : 'AISO')}</span>
                             <span class="when">${esc(ticketDateTime(m.created_at))}</span>
                             <div class="body">${esc(m.body)}</div>
                             ${m.is_internal && (m.notify_user_ids || []).length ? `<div style="font-size:11.5px;color:#86868b;margin-top:4px"><i class="ph ph-bell"></i> Notified ${esc(m.notify_user_ids.map(userNameById).filter(Boolean).join(', '))}${m.email_notify ? ' · in-app and email' : ''}</div>` : ''}
                             ${(m.attachments || []).length ? `<div class="tk-att-list" style="margin-top:8px">${ticketAttachmentGallery(m.attachments, m.id)}</div>` : ''}
                         </div>
-                    </div>`).join('')}
+                    </div>`; }).join('')}
                 </div>
 
-                ${!canReplyTickets() ? '' : closed ? '<div style="margin-top:14px;font-size:12.5px;color:#86868b;text-align:center">This ticket is closed. Reopen it from the status control to continue the conversation.</div>' : `
+                ${!canReplyTickets() ? '' : closed ? `<div style="margin-top:14px;font-size:12.5px;color:#86868b;text-align:center">${isCustomerView() ? 'This ticket is closed. Open a new ticket if you need more help.' : 'This ticket is closed. Reopen it from the status control to continue the conversation.'}</div>` : `
                 <div style="margin-top:14px;border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:#fff">
                     ${manage ? `<div style="display:flex;gap:6px;margin-bottom:8px">
                         <button class="filter-tab ${ticketReplyMode === 'reply' ? 'active' : ''}" onclick="ticketReplyMode='reply';showTicketDetail('${t.id}')">Reply to customer</button>
                         <button class="filter-tab ${ticketReplyMode === 'note' ? 'active' : ''}" onclick="ticketReplyMode='note';showTicketDetail('${t.id}')">Internal note</button>
                     </div>` : ''}
-                    <textarea id="tk-reply" class="input-field" style="min-height:64px;${ticketReplyMode === 'note' ? 'background:#fffbeb;border-color:#fde68a' : ''}" placeholder="${ticketReplyMode === 'note' ? 'Note for the desk only. The customer never sees this.' : (manage ? 'Write a reply to the customer…' : 'Write a message to AISO…')}" oninput="ticketReplyDraft.text=this.value">${esc(reply.text)}</textarea>
+                    <textarea id="tk-reply" class="input-field" maxlength="4000" style="min-height:64px;${ticketReplyMode === 'note' ? 'background:#fffbeb;border-color:#fde68a' : ''}" placeholder="${ticketReplyMode === 'note' ? 'Note for the desk only. The customer never sees this.' : (manage ? 'Write a reply to the customer…' : 'Write a message to AISO…')}" oninput="ticketReplyDraft.text=this.value">${esc(reply.text)}</textarea>
                     ${reply.attachments.length ? `<div class="tk-att-list" style="margin-top:8px">${ticketAttachmentChips(reply.attachments, 'removeTicketReplyAttachment')}</div>` : ''}
-                    ${ticketReplyMode === 'note' ? `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px">
+                    ${ticketReplyMode === 'note' ? `<div id="tk-notify" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px">
                         <span style="font-size:11.5px;font-weight:600;color:#86868b"><i class="ph ph-bell"></i> Notify</span>
+                        ${(reply.notify || []).filter(id => !staff.some(u => u.id === id)).map(id => `<button class="tk-chip active" style="padding:4px 10px;font-size:12px;text-decoration:line-through" title="No longer has ticket access" onclick="toggleReplyNotify('${id}')">${esc(userNameById(id))}</button>`).join('')}
                         ${staff.length ? staff.map(u => `<button class="tk-chip ${(reply.notify || []).includes(u.id) ? 'active' : ''}" style="padding:4px 10px;font-size:12px" onclick="toggleReplyNotify('${u.id}')">${esc(u.name)}</button>`).join('')
                             : '<span style="font-size:11.5px;color:#86868b">No AISO colleagues with ticket access yet — add people to AISO under Organizations.</span>'}
                         ${staff.length ? `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#1d1d1f;margin-left:6px;cursor:pointer" title="Besides the in-app notification">
                             <input type="checkbox" ${reply.email ? 'checked' : ''} ${(reply.notify || []).length ? '' : 'disabled'} onchange="ticketReplyDraft.email=this.checked"> Also email</label>` : ''}
                     </div>` : ''}
+                    <div style="margin-top:8px">${ticketAttachmentDropZone('tk-reply-files', 'onTicketReplyFiles(this.files)')}</div>
                     <div id="tk-att-error" class="field-error-text"></div>
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px">
-                        <label class="btn-secondary text-xs" style="cursor:pointer" title="${esc(TICKET_ATTACHMENT_HINT)}"><i class="ph ph-paperclip"></i> Attach<input type="file" multiple accept="${TICKET_ATTACHMENT_ACCEPT}" style="display:none" onchange="onTicketReplyFiles(this.files)"></label>
+                    <div class="field-hint">${TICKET_ATTACHMENT_HINT}</div>
+                    <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:8px">
                         <div style="display:flex;gap:8px">
-                            ${manage && ticketReplyMode === 'reply' && t.status !== 'AWAITING_CUSTOMER_INFO' ? `<button class="btn-secondary text-xs" onclick="postTicketMessage('${t.id}', { thenStatus: 'AWAITING_CUSTOMER_INFO' })">Send & mark awaiting customer</button>` : ''}
+                            ${manage && ticketReplyMode === 'reply' && (t.status === 'OPEN' || t.status === 'IN_PROGRESS') ? `<button class="btn-secondary text-xs" onclick="postTicketMessage('${t.id}', { thenStatus: 'AWAITING_CUSTOMER_INFO' })">Send & mark awaiting customer</button>` : ''}
                             <button class="btn-primary text-xs" onclick="postTicketMessage('${t.id}')"><i class="ph ph-paper-plane-tilt"></i> ${ticketReplyMode === 'note' ? 'Add note' : 'Send'}</button>
                         </div>
                     </div>
@@ -9450,35 +9514,35 @@ function showTicketDetail(id) {
                 ${manage ? `<select class="input-field" onchange="setTicketStatus('${t.id}', this.value)">
                     ${TICKET_STATUSES.map(s => `<option value="${s}" ${s === t.status ? 'selected' : ''}>${TICKET_STATUS_LABEL[s]}</option>`).join('')}
                 </select>` : `<div>${ticketStatusBadge(t.status)}</div>`}
-                ${manage ? `
+                ${desk ? `
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:16px 0 8px">Internal handling</div>
-                <select class="input-field" onchange="setTicketInternalState('${t.id}', this.value)" ${t.status === 'RESOLVED' || t.status === 'CLOSED' ? 'disabled title="Reopen the ticket to refer it"' : ''}>
+                <select class="input-field" onchange="setTicketInternalState('${t.id}', this.value)" ${!manage ? 'disabled' : t.status === 'RESOLVED' || t.status === 'CLOSED' ? 'disabled title="Reopen the ticket to refer it"' : ''}>
                     ${TICKET_INTERNAL_STATES.map(st => `<option value="${st}" ${st === ticketInternalState(t) ? 'selected' : ''}>${TICKET_INTERNAL_STATE_LABEL[st]}</option>`).join('')}
                 </select>
                 ${isTicketReferred(t) ? `<div style="margin-top:8px">${ticketInternalChip(t)}</div>
                 ${t.internal_note ? `<div style="font-size:11.5px;color:#86868b;margin-top:6px">${esc(t.internal_note)}</div>` : ''}` : ''}
                 <div class="field-hint" style="margin-top:6px">Desk only. The customer keeps seeing ${esc(TICKET_STATUS_LABEL[t.status])}.</div>
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:16px 0 8px">Acceptance</div>
-                <select class="input-field" onchange="setTicketAcceptance('${t.id}', this.value)">
+                <select class="input-field" onchange="setTicketAcceptance('${t.id}', this.value)" ${manage ? '' : 'disabled'}>
                     ${TICKET_ACCEPTANCE.map(a => `<option value="${a}" ${a === ticketAcceptance(t) ? 'selected' : ''}>${TICKET_ACCEPTANCE_LABEL[a]}</option>`).join('')}
                 </select>
                 <div class="field-hint" style="margin-top:6px">Desk only. Whether AISO takes this on and whether it is billed.</div>` : ''}
-                ${manage ? `<div style="margin-top:14px">
+                ${desk ? `<div style="margin-top:14px">
                     <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#86868b;margin-bottom:4px"><span>Handled by</span><b style="color:#1d1d1f">AISO Service Desk</b></div>
                     <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#86868b;margin-bottom:4px">
                         <span>First response · ${fr.targetHours}h target${t.snapshot?.sla_plan ? ` (SLA ${esc(t.snapshot.sla_plan)})` : ''}</span>
-                        <b style="color:${fr.overdue ? '#dc2626' : (fr.answered ? '#047857' : '#1d1d1f')}">${fr.answered ? `answered in ${fr.elapsedHours < 1 ? `${Math.round(fr.elapsedHours * 60)}m` : `${Math.round(fr.elapsedHours)}h`}` : `${Math.round(fr.elapsedHours)}h${fr.overdue ? ' · overdue' : ' · waiting'}`}</b>
+                        <b style="color:${fr.overdue ? '#dc2626' : (fr.answered ? '#047857' : '#1d1d1f')}">${ticketFirstResponseText(t, fr)}</b>
                     </div>
                     <div class="tk-sla-bar"><i style="width:${Math.round(fr.ratio * 100)}%;background:${fr.overdue ? '#ef4444' : (fr.answered ? '#10b981' : '#f59e0b')}"></i></div>
                 </div>` : ''}
 
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:20px 0 8px">Entitlement snapshot</div>
-                ${ticketEntitlementCard(t.snapshot || {}, t.serial_no)}
+                ${ticketEntitlementCard(t.snapshot || {}, ticketDeviceLabel(t))}
 
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:20px 0 8px">Order</div>
                 ${kv('Order', order ? `<a href="#" onclick="event.preventDefault();closeModal();showOrderDetail('${order.id}')" style="color:#1432E6;font-weight:600">${esc(t.snapshot?.order_no || order.order_no)}</a>` : esc(t.snapshot?.order_no || '—'))}
                 ${kv('Line', `${t.snapshot?.line_no ?? '—'} · ${esc(t.scope)} · ${esc(t.snapshot?.product_name || '—')}`)}
-                ${t.serial_no ? kv('Serial', `<span class="tk-mono">${esc(t.serial_no)}</span>`) : ''}
+                ${t.scope === 'HW' && ticketDeviceLabel(t) ? kv('Serial', `<span class="tk-mono">${esc(ticketDeviceLabel(t))}</span>`) : ''}
                 ${bomSummary ? kv('BOM', esc(bomSummary)) : ''}
                 ${kv('Category', esc(t.category))}
                 ${kv('Channel', esc(t.channel || '—'))}
@@ -9504,6 +9568,15 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
     const manage = canManageTickets();
     const isNote = manage && ticketReplyMode === 'note';
     const notify = isNote && ticketReplyDraft.ticketId === ticketId ? [...(ticketReplyDraft.notify || [])] : [];
+    // Everyone named must still be able to work tickets (SA V2 4.6.4).
+    const gone = notify.filter(id => !deskStaff().some(u => u.id === id));
+    if (gone.length) {
+        ticketReplyDraft.text = body;
+        showTicketDetail(t.id);
+        showFormErrors([fieldErr('#tk-notify', `${gone.map(userNameById).join(', ')} can no longer be notified. Remove them to add this note.`)]);
+        return;
+    }
+    const fromStatus = t.status;
     // Named colleagues may also be emailed (SA V2 4.6); the prototype records the choice only.
     const emailNotify = notify.length > 0 && !!ticketReplyDraft.email;
     const now = new Date().toISOString();
@@ -9519,9 +9592,10 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
         });
         if (notify.length) notifyUsers(notify, t, 'NOTE', msgId);
         t.updated_at = now;
+        if (!isNote) t.customer_updated_at = now;
         if (manage && !isNote) {
             if (!t.first_response_at) t.first_response_at = now;
-            if (thenStatus) t.status = thenStatus;
+            if (thenStatus && (t.status === 'OPEN' || t.status === 'IN_PROGRESS')) t.status = thenStatus;
             else if (t.status === 'OPEN') t.status = 'IN_PROGRESS';
         }
         // A customer answering an information request, or writing again after
@@ -9530,7 +9604,11 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
             t.status = 'IN_PROGRESS';
             t.resolved_at = null;
         }
-        logActivity(isNote ? 'Ticket note added' : (manage ? 'Ticket replied' : 'Customer replied'), t.ticket_no, (body || `${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`).slice(0, 80));
+        // The detail carries what the reply did to the status, and who a note notified.
+        const detail = (body || `${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`).slice(0, 80)
+            + (fromStatus !== t.status ? ` · ${TICKET_STATUS_LABEL[fromStatus]} → ${TICKET_STATUS_LABEL[t.status]}` : '')
+            + (notify.length ? ` · notified ${notify.map(userNameById).join(', ')}` : '');
+        logActivity(isNote ? 'Ticket note added' : (manage ? 'Ticket replied' : 'Customer replied'), t.ticket_no, detail);
     });
     if (!ok) return;
     // Stay in the mode just used: flipping back to Reply after a note made the
@@ -9546,11 +9624,23 @@ function setTicketStatus(ticketId, status) {
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
         const from = t.status;
+        const fromHandling = ticketInternalState(t);
         t.status = status;
         t.updated_at = now;
+        t.customer_updated_at = now;
+        let handlingNote = '';
         if (status === 'RESOLVED' || status === 'CLOSED') {
             t.resolved_at = t.resolved_at || now;
-            // Nobody is being waited on once the ticket is done.
+            // Nobody is being waited on once the ticket is done; the thread
+            // records who the desk had been waiting on (SA V2 4.6.1).
+            if (fromHandling !== 'NONE') {
+                TICKET_MESSAGES.push({
+                    id: `tm-${Date.now()}`, ticket_id: t.id, author_type: 'INTERNAL', author_name: actingName(),
+                    is_internal: true, created_at: now, attachments: [],
+                    body: `Back with the desk (was ${TICKET_INTERNAL_STATE_LABEL[fromHandling]}).`,
+                });
+                handlingNote = ` · handling ${TICKET_INTERNAL_STATE_LABEL[fromHandling]} → ${TICKET_INTERNAL_STATE_LABEL.NONE}`;
+            }
             t.internal_state = 'NONE';
             t.internal_party = '';
             t.internal_since = null;
@@ -9558,7 +9648,7 @@ function setTicketStatus(ticketId, status) {
             t.internal_referred_by = null;
             settlePendingConfirmations(t);
         } else t.resolved_at = null;
-        logActivity('Ticket status changed', t.ticket_no, `${TICKET_STATUS_LABEL[from]} → ${TICKET_STATUS_LABEL[status]}`);
+        logActivity('Ticket status changed', t.ticket_no, `${TICKET_STATUS_LABEL[from]} → ${TICKET_STATUS_LABEL[status]}${handlingNote}`);
     });
     if (!ok) return;
     renderServiceDesk();
@@ -9602,24 +9692,30 @@ function readFileAsDataUrl(file) {
 }
 
 // Validate and read a FileList; returns what could be added plus the first error.
-async function readTicketAttachments(fileList, existing, maxCount = TICKET_ATTACHMENT_MAX_COUNT) {
+async function readTicketAttachments(fileList, existing, maxCount = TICKET_ATTACHMENT_MAX_COUNT, { wholeBatch = false } = {}) {
+    const files = Array.from(fileList || []);
     const added = [];
-    const errors = [];
-    for (const file of Array.from(fileList || [])) {
-        if (existing.length + added.length >= maxCount) { errors.push(`You can attach up to ${maxCount} files.`); break; }
+    const errors = []; // { rank, msg }: count 0, format 1, size 2, read 3
+    if (wholeBatch && existing.length + files.length > maxCount) {
+        const msg = `You can attach up to ${maxCount} files.`;
+        return { added, error: msg, errors: [msg] };
+    }
+    for (const file of files) {
+        if (existing.length + added.length >= maxCount) { errors.push({ rank: 0, msg: `You can attach up to ${maxCount} files.` }); break; }
         const kind = ticketAttachmentKind(file);
-        if (!kind) { errors.push(`${file.name}: unsupported file type.`); continue; }
-        if (file.size > TICKET_ATTACHMENT_MAX_BYTES) { errors.push(`${file.name} exceeds the 5 MB limit.`); continue; }
-        if (kind === 'file' && file.size > TICKET_ATTACHMENT_STORE_BYTES) { errors.push(`${file.name}: files other than images must be under 500 KB in this prototype.`); continue; }
+        if (!kind) { errors.push({ rank: 1, msg: `${file.name}: unsupported file type.` }); continue; }
+        if (file.size > TICKET_ATTACHMENT_MAX_BYTES) { errors.push({ rank: 2, msg: `${file.name} exceeds the 5 MB limit.` }); continue; }
+        if (kind === 'file' && file.size > TICKET_ATTACHMENT_STORE_BYTES) { errors.push({ rank: 2, msg: `${file.name}: files other than images must be under 500 KB in this prototype.` }); continue; }
         try {
             const data_url = kind === 'image' ? await Store.compressImage(file) : await readFileAsDataUrl(file);
             added.push({ id: `att-${Date.now()}-${added.length}`, name: file.name, type: file.type || '', size: file.size, is_image: kind === 'image', data_url });
         } catch (e) {
-            errors.push(`${file.name} could not be read.`);
+            errors.push({ rank: 3, msg: `${file.name} could not be read.` });
         }
     }
-    // Callers that show one line take the last; order documents list them all.
-    return { added, error: errors[errors.length - 1] || '', errors };
+    // Tickets show the first error by kind; order documents list them all.
+    const first = [...errors].sort((a, b) => a.rank - b.rank)[0];
+    return { added, error: first?.msg || '', errors: errors.map(e => e.msg) };
 }
 
 function setTicketAttachmentError(msg) {
@@ -9667,7 +9763,7 @@ function closeTicketAttachmentPreview() { document.getElementById('tk-preview-ro
 
 async function onTicketDraftFiles(fileList) {
     if (!ticketDraft) return;
-    const { added, error } = await readTicketAttachments(fileList, ticketDraft.attachments);
+    const { added, error } = await readTicketAttachments(fileList, ticketDraft.attachments, TICKET_ATTACHMENT_MAX_COUNT, { wholeBatch: true });
     ticketDraft.attachments.push(...added);
     if (added.length) renderTicketCreateModal();
     setTicketAttachmentError(error);
@@ -9680,7 +9776,7 @@ function removeTicketDraftAttachment(i) {
 async function onTicketReplyFiles(fileList) {
     const text = document.getElementById('tk-reply')?.value;
     if (text !== undefined) ticketReplyDraft.text = text;
-    const { added, error } = await readTicketAttachments(fileList, ticketReplyDraft.attachments);
+    const { added, error } = await readTicketAttachments(fileList, ticketReplyDraft.attachments, TICKET_ATTACHMENT_MAX_COUNT, { wholeBatch: true });
     ticketReplyDraft.attachments.push(...added);
     if (added.length) showTicketDetail(ticketReplyDraft.ticketId);
     setTicketAttachmentError(error);
