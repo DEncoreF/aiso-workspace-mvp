@@ -3935,8 +3935,23 @@ const SYSTEM_PARAM_FIELDS = [
     { key: 'first_response_7x24', label: 'First response target (7x24)', unit: 'hours', min: 1, max: 999, sla: '7x24' },
     { key: 'first_response_onsite', label: 'First response target (On-site)', unit: 'hours', min: 1, max: 999, sla: 'On-site' },
     { key: 'first_response_5x8', label: 'First response target (5x8)', unit: 'hours', min: 1, max: 999, sla: '5x8' },
-    { key: 'first_response_no_sla', label: 'First response target (No SLA)', unit: 'hours', min: 1, max: 999, sla: '' },
+    { key: 'first_response_no_sla', label: 'First response target (No SLA)', unit: 'hours', min: 1, max: 999, sla: 'No SLA' },
+    // Values the SA first left to the development team now have defaults
+    // and live here (SA V2.53).
+    { key: 'password_reset_link_minutes', label: 'Password reset link validity', unit: 'minutes', min: 15, max: 1440,
+      hint: 'Sets the expiry of reset links requested from now on.' },
+    { key: 'signin_attempts_before_lock', label: 'Sign-in attempts before lock', unit: 'attempts', min: 3, max: 20,
+      hint: 'Failed sign-ins in a row before the account locks. A successful sign-in or password reset starts the count again.' },
+    { key: 'signin_lock_minutes', label: 'Sign-in lock duration', unit: 'minutes', min: 5, max: 1440,
+      hint: 'A locked account opens again after this long, or at once on a password reset.' },
+    { key: 'session_idle_minutes', label: 'Session idle timeout', unit: 'minutes', min: 5, max: 480,
+      hint: 'With no request for this long, the next one goes to the sign-in page.' },
+    { key: 'activity_log_retention_days', label: 'Activity Log retention', unit: 'days', min: 30, max: 3650,
+      hint: 'Older records are cleared automatically.' },
 ];
+
+// "SLA 7x24", but plain "No SLA" for a line without one.
+function slaLabel(plan) { return plan === 'No SLA' ? 'No SLA' : `SLA ${plan}`; }
 
 function firstResponseTargetHours(slaPlan) {
     const field = SYSTEM_PARAM_FIELDS.find(f => f.sla === slaPlan) || SYSTEM_PARAM_FIELDS.find(f => f.key === 'first_response_no_sla');
@@ -4218,13 +4233,6 @@ function renderSystemParams() {
             ${f.hint ? `<div class="field-hint">${esc(f.hint)}</div>` : ''}
             ${f.email && !SYSTEM_PARAMETERS.service_desk_mailbox ? '<div class="field-hint" style="color:#b45309"><i class="ph ph-warning"></i> Service desk mailbox is not set. Desk emails are not being sent.</div>' : ''}
         </div>`;
-    // The development team sets these two; they are listed so the page shows
-    // every parameter this phase adds.
-    const devRow = (label, note) => `
-        <div style="padding:14px 18px;border-bottom:1px solid #f1f3f5">
-            <div class="field-label">${label}</div>
-            <div style="font-size:12.5px;color:#86868b">${note}</div>
-        </div>`;
     const fields = key => SYSTEM_PARAM_FIELDS.filter(f => key(f)).map(row).join('');
     host.innerHTML = `
         <section>
@@ -4233,8 +4241,16 @@ function renderSystemParams() {
                 <p class="text-xs text-[#86868b] mt-0.5">How long invitation and password reset links stay valid.</p>
             </div>
             <div class="border border-[#f1f3f5] rounded-lg overflow-hidden">
-                ${fields(f => f.key === 'invitation_link_days')}
-                ${devRow('Password reset link validity', 'Unit and default set by the development team.')}
+                ${fields(f => f.key === 'invitation_link_days' || f.key === 'password_reset_link_minutes')}
+            </div>
+        </section>
+        <section>
+            <div class="mb-3">
+                <h3 class="text-sm font-semibold flex items-center gap-2"><i class="ph ph-lock-key text-aiso"></i> Sign-in</h3>
+                <p class="text-xs text-[#86868b] mt-0.5">Locking after failed sign-ins, and how long an idle session lasts.</p>
+            </div>
+            <div class="border border-[#f1f3f5] rounded-lg overflow-hidden">
+                ${fields(f => f.key.startsWith('signin_') || f.key === 'session_idle_minutes')}
             </div>
         </section>
         <section>
@@ -4251,7 +4267,7 @@ function renderSystemParams() {
                 <h3 class="text-sm font-semibold flex items-center gap-2"><i class="ph ph-clock-counter-clockwise text-aiso"></i> Activity Log</h3>
             </div>
             <div class="border border-[#f1f3f5] rounded-lg overflow-hidden">
-                ${devRow('Activity Log retention', 'Period set by the development team. Older records are cleared automatically.')}
+                ${fields(f => f.key === 'activity_log_retention_days')}
             </div>
         </section>`;
 }
@@ -6084,7 +6100,7 @@ function ordLineCard(l, i) {
                         ${ordInput({ attrs: `data-req data-key="${i}-${ki}" placeholder="License key"`, oninput: `orderDraft.lines[${i}].license_keys[${ki}].key=this.value.trim()`, value: lk.key, style: mono })}
                     </div>`).join('') + (collapsed ? bulkMoreButton(l.license_keys.length, BULK_COLLAPSED_ROWS, `orderDraft.lines[${i}]._keysShowAll=true;renderOrderDraftLines()`) : ''); })()}
                 </div>
-                <div class="field-hint">One key per license — the row count follows Qty. Required before the order is confirmed.</div>
+                <div class="field-hint">One key per license — the row count follows Qty. Leave blank when the software has no key.</div>
             </div>`}
         </div>`;
 }
@@ -6507,7 +6523,6 @@ function validateOrderDraft(status) {
             } else {
                 if (!l.license_start) errors.push(fieldErr(at(i, 'ls'), 'Please select License Start.'));
                 if (!l.license_end) errors.push(fieldErr(at(i, 'le'), 'Please select License End.'));
-                if (l.license_keys.some(lk => !lk.key.trim())) errors.push(fieldErr(at(i, 'keys'), `All ${l.qty} license keys are required to confirm.`));
             }
         });
     }
@@ -6838,7 +6853,6 @@ function saveLicenseAdjustment() {
     if (!next.supplier_name && !order.sw_supplier_name) errors.push(fieldErr('[data-err="la-supplier_name"]', 'Supplier is required because the order has no SW supplier.'));
     if (!next.license_start) errors.push(fieldErr('[data-err="la-ls"]', 'Please select License Start.'));
     if (!next.license_end) errors.push(fieldErr('[data-err="la-le"]', 'Please select License End.'));
-    if (next.license_keys.some(lk => !lk.key)) errors.push(fieldErr('[data-err="la-keys"]', 'Every key row needs a key.'));
     errors.push(...licenseLineErrors(next, 'la'));
     errors.push(...licenseKeyDuplicateErrors(getOrderLines(order.id).map(l => l.id === line.id ? next : l), l => (l === next ? 'la' : null)));
     if (showFormErrors(errors, 'la-error')) return;
@@ -7080,7 +7094,7 @@ function showOrderDetail(id) {
                     <span style="font-size:13px;font-weight:600;color:#1d1d1f">${esc(l.product_name)}</span>
                     ${l.version ? `<span style="font-size:12.5px;color:#86868b">v${esc(l.version)}</span>` : ''}
                     <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
-                        ${l.sla_plan ? `<span class="badge badge-blue">SLA ${esc(l.sla_plan)}</span>` : ''}
+                        ${l.sla_plan ? `<span class="badge badge-blue">${esc(slaLabel(l.sla_plan))}</span>` : ''}
                         <span style="font-size:12.5px;color:#86868b">Qty ${l.qty}</span>
                         ${o.status === 'CONFIRMED' && canCreateTickets() ? `<button onclick="closeModal();showTicketCreateModal({ lineId: '${l.id}' })" class="btn-secondary text-xs" style="padding:4px 10px" title="Open a service ticket on this line"><i class="ph ph-headset"></i> Open ticket</button>` : ''}
                     </span>
@@ -7090,11 +7104,9 @@ function showOrderDetail(id) {
                 <div style="font-size:12.5px;color:#86868b;margin-top:6px">${l.license_start || l.license_end ? `License ${esc(l.license_start || '?')} → ${esc(l.license_end || '?')}` : ''}${l.supplier_name ? `${l.license_start || l.license_end ? ' · ' : ''}Supplier ${esc(l.supplier_name)}` : ''}</div>` : ''}
                 ${l.scope === 'HW' && l.warranty_months ? `
                 <div style="font-size:12.5px;color:#86868b;margin-top:6px">Warranty ${l.warranty_months} months per unit</div>` : ''}
-                ${(l.license_keys || []).length ? `
+                ${(l.license_keys || []).some(lk => lk.key) ? `
                 <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
-                    ${l.license_keys.map(lk => `<span style="display:inline-flex;align-items:center;gap:6px">${lk.key
-                        ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(lk.key)}</span>`
-                        : '<span class="badge badge-amber">Key missing</span>'}</span>`).join('')}
+                    ${l.license_keys.filter(lk => lk.key).map(lk => `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(lk.key)}</span>`).join('')}
                 </div>` : ''}
                 ${l.scope === 'SW' && o.status === 'CONFIRMED' && canUpdateOrders() ? `
                 <div style="margin-top:8px"><button onclick="showLicenseAdjustModal('${l.id}')" class="btn-secondary text-xs" style="padding:4px 10px"><i class="ph ph-key"></i> Adjust license</button></div>` : ''}
@@ -9051,7 +9063,7 @@ function ticketEntitlementCard(snap, serialNo) {
     return `<div class="tk-ent ${ok ? '' : 'exp'}">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
             <div style="font-size:12.5px;font-weight:700;color:${ok ? '#047857' : '#b91c1c'}"><span class="tk-dot" style="background:${ok ? '#10b981' : '#ef4444'}"></span>${esc(headline)}</div>
-            ${snap.sla_plan ? `<span class="badge badge-blue">SLA ${esc(snap.sla_plan)}</span>` : ''}
+            ${snap.sla_plan ? `<span class="badge badge-blue">${esc(slaLabel(snap.sla_plan))}</span>` : ''}
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:8px;font-size:12.5px">
             <div><span style="color:#86868b">${snap.coverage_kind === 'license' ? 'License key' : 'Serial'}</span><div style="margin-top:2px"><span class="tk-mono">${esc(serialNo || snap.license_key || '—')}</span></div></div>
@@ -9292,7 +9304,7 @@ function renderTicketCreateModal() {
                 ${d.order_id ? lines.map(l => `<button class="tk-pick ${l.id === d.order_line_id ? 'sel' : ''}" onclick="tkSet('order_line_id', '${l.id}')" style="margin-bottom:6px">
                         <span class="badge ${l.scope === 'HW' ? 'badge-hw' : 'badge-sw'}">${l.scope}</span>
                         <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${esc(l.product_name)}${l.version ? ` <span style="font-weight:400;color:#86868b">v${esc(l.version)}</span>` : ''}</div>
-                        <div style="font-size:11.5px;color:#86868b">Qty ${l.qty}${l.sla_plan ? ` · SLA ${esc(l.sla_plan)}` : ''} · ${l.scope === 'HW' ? esc(lineWarrantySummary(l)) : (l.license_end ? `license to ${esc(l.license_end)}` : 'license period not set')}</div></div>
+                        <div style="font-size:11.5px;color:#86868b">Qty ${l.qty}${l.sla_plan ? ` · ${esc(slaLabel(l.sla_plan))}` : ''} · ${l.scope === 'HW' ? esc(lineWarrantySummary(l)) : (l.license_end ? `license to ${esc(l.license_end)}` : 'license period not set')}</div></div>
                     </button>`).join('')
                 : '<div style="font-size:12.5px;color:#c7c7cc;padding:8px 0">Select an order first.</div>'}
 
@@ -9539,7 +9551,7 @@ function showTicketDetail(id) {
                 ${desk ? `<div style="margin-top:14px">
                     <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#86868b;margin-bottom:4px"><span>Handled by</span><b style="color:#1d1d1f">AISO Service Desk</b></div>
                     <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#86868b;margin-bottom:4px">
-                        <span>First response · ${fr.targetHours}h target${t.snapshot?.sla_plan ? ` (SLA ${esc(t.snapshot.sla_plan)})` : ''}</span>
+                        <span>First response · ${fr.targetHours}h target${t.snapshot?.sla_plan ? ` (${esc(slaLabel(t.snapshot.sla_plan))})` : ''}</span>
                         <b style="color:${fr.overdue ? '#dc2626' : (fr.answered ? '#047857' : '#1d1d1f')}">${ticketFirstResponseText(t, fr)}</b>
                     </div>
                     <div class="tk-sla-bar"><i style="width:${Math.round(fr.ratio * 100)}%;background:${fr.overdue ? '#ef4444' : (fr.answered ? '#10b981' : '#f59e0b')}"></i></div>

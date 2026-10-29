@@ -16,7 +16,7 @@ const Store = (function () {
     //       out) and persisted, plus USERS / ROLES / ROLE_BINDINGS.
     // v4.6: account split out of organization (new grant in the type registry).
     // v4.7: roles in one organization merge; seed gives Tom a second role.
-    const VERSION = 12;
+    const VERSION = 13;
     const IMG_MAX_WIDTH = 800;
     const IMG_JPEG_QUALITY = 0.8;
 

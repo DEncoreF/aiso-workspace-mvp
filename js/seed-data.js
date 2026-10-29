@@ -627,7 +627,7 @@ function normalizeOrderLineUnits(lines) {
 }
 
 // Per-line service level, matching the reference prototype's plan list.
-const ORDER_SLA_PLAN_OPTIONS = ['5x8', '7x24', 'On-site'];
+const ORDER_SLA_PLAN_OPTIONS = ['5x8', '7x24', 'On-site', 'No SLA'];
 
 // One serial per unit: serial_nos.length tracks qty, and a CONFIRMED order
 // requires every HW serial filled in. The BOM applies to every unit in the
@@ -739,6 +739,11 @@ let SYSTEM_PARAMETERS = {
     first_response_onsite: 8,
     first_response_5x8: 24,
     first_response_no_sla: 24,
+    password_reset_link_minutes: 60,
+    signin_attempts_before_lock: 5,
+    signin_lock_minutes: 15,
+    session_idle_minutes: 30,
+    activity_log_retention_days: 365,
 };
 
 let TICKETS = [
