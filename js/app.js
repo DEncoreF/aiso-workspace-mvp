@@ -8953,7 +8953,7 @@ function getFilteredTickets() {
         if (handling === 'REFERRED' && !isTicketReferred(t)) return false;
         if (handling && handling !== 'REFERRED' && ticketInternalState(t) !== handling) return false;
         if (acceptance && ticketAcceptance(t) !== acceptance) return false;
-        if (q && ![t.ticket_no, t.subject, t.customer_name, t.snapshot?.order_no, t.snapshot?.product_name, t.serial_no]
+        if (q && ![t.ticket_no, t.subject, t.customer_name, t.snapshot?.order_no, t.snapshot?.product_name, ticketDeviceLabel(t)]
             .some(v => (v || '').toLowerCase().includes(q))) return false;
         return true;
     }).sort((a, b) => (ticketUpdatedAtFor(b) || '').localeCompare(ticketUpdatedAtFor(a) || ''));
@@ -9090,12 +9090,13 @@ function buildTicketSnapshot(order, line, unitIndex = -1, licenseKey = '') {
     };
 }
 
-// How a ticket names its device: the serial, or "Unit [n] · serial pending"
-// when it was opened on a unit whose serial was not filled yet.
+// How a ticket names its device: the unit's serial as the order has it now
+// (SA V2.52: it follows the order), or the license key on a SW line.
 function ticketDeviceLabel(t) {
     if (t.scope !== 'HW') return t.snapshot?.license_key || '';
-    if (t.serial_no) return t.serial_no;
-    return Number.isInteger(t.unit_index) ? `Unit ${t.unit_index + 1} · serial pending` : '';
+    const line = ORDER_LINES.find(l => l.id === t.order_line_id);
+    const live = Number.isInteger(t.unit_index) ? (line?.serial_nos?.[t.unit_index] || '').trim() : '';
+    return live || t.serial_no || '';
 }
 function lineUnitLabel(line, u) {
     return `Unit ${u + 1} · ${(line.serial_nos[u] || '').trim() || 'serial pending'}`;
