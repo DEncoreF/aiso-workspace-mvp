@@ -170,9 +170,12 @@ function isOperatorView() { return isSuperAdminContext() || orgHasType(activeOrg
 function isCustomerView() { return !isOperatorView() && orgHasType(activeOrg(), 'CUSTOMER'); }
 // Record scope, deny by default (SA V2 D16): the desk sees everything, a
 // customer its own records, and a type with no scope defined here sees none.
+// A customer sees an order once it has been confirmed: confirmed, or
+// cancelled after confirmation (SA V2 4.5.1).
 function canSeeOrder(o) {
     if (isOperatorView()) return true;
-    return isCustomerView() && !!o && o.customer_org_id === activeOrgId() && o.status !== 'DRAFT';
+    return isCustomerView() && !!o && o.customer_org_id === activeOrgId()
+        && (o.status === 'CONFIRMED' || (o.status === 'CANCELLED' && !!o.confirmed_at));
 }
 function canSeeTicket(t) {
     if (isOperatorView()) return true;
@@ -5736,12 +5739,33 @@ function getFilteredOrders() {
         if (q && ![o.order_no, o.customer_name, o.hw_supplier_name, o.sw_supplier_name, o.si_name]
             .some(v => (v || '').toLowerCase().includes(q))) return false;
         return true;
-    }).sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
+    }).sort((a, b) => (b.order_date || '').localeCompare(a.order_date || '')
+        || (b.created_at || '').localeCompare(a.created_at || ''));
+}
+
+// The order list pages like every list (SA V2 §3: 10 per page).
+let orderPage = 1;
+let orderFilterKey = '';
+function setOrderPage(page) {
+    orderPage = Math.max(1, parseInt(page, 10) || 1);
+    renderOrders();
 }
 
 function renderOrders() {
-    const list = getFilteredOrders();
+    // A customer never sees drafts, so the Draft tab is not offered (SA V2 4.5.2).
+    const draftTab = document.querySelector('#order-filter-tabs .filter-tab[data-val="DRAFT"]');
+    if (draftTab) draftTab.style.display = isCustomerView() ? 'none' : '';
+    if (isCustomerView() && document.getElementById('order-filter-status')?.value === 'DRAFT') setOrderFilter('');
+
+    const all = getFilteredOrders();
     const searching = !!(document.getElementById('order-search')?.value || '').trim();
+    const filterKey = `${document.getElementById('order-filter-status')?.value || ''}|${document.getElementById('order-search')?.value || ''}`;
+    if (filterKey !== orderFilterKey) { orderFilterKey = filterKey; orderPage = 1; }
+    const totalPages = Math.max(1, Math.ceil(all.length / PRODUCT_PAGE_SIZE));
+    orderPage = Math.min(Math.max(orderPage, 1), totalPages);
+    const list = all.slice((orderPage - 1) * PRODUCT_PAGE_SIZE, orderPage * PRODUCT_PAGE_SIZE);
+    const pager = document.getElementById('orders-pagination');
+    if (pager) pager.innerHTML = listPagerHtml(all.length, orderPage, totalPages, page => `setOrderPage(${page})`);
 
     document.getElementById('orders-tbody').innerHTML = list.length ? list.map(o => `
         <tr class="cursor-pointer" onclick="if(!event.target.closest('button'))showOrderDetail('${o.id}')">
@@ -5754,7 +5778,7 @@ function renderOrders() {
             <td>${orderStatusBadge(o.status)}</td>
             <td class="text-right" onclick="event.stopPropagation()">
                 <div class="flex items-center gap-0.5 justify-end">
-                    ${o.status === 'DRAFT' && canUpdateOrders() ? `<button onclick="showOrderModal('${o.id}')" class="btn-ghost" title="Edit"><i class="ph ph-pencil-simple"></i></button>` : ''}
+                    ${orderEditable(o) && canUpdateOrders() ? `<button onclick="showOrderModal('${o.id}')" class="btn-ghost" title="Edit"><i class="ph ph-pencil-simple"></i></button>` : ''}
                 </div>
             </td>
         </tr>`).join('') : `<tr><td colspan="7" class="text-center py-16">${emptyState(
@@ -5771,8 +5795,61 @@ function renderOrders() {
 
 let orderDraft = null;
 
-// Draft lines get their id up front: a bundled SW line points at its HW
-// line by id before either has been saved.
+const ORDER_TEXT_MAX = 100;
+const ORDER_VERSION_MAX = 50;
+const ORDER_QTY_MAX = 999;
+const ORD_CLEAR_LINE_BODY = 'The serial numbers, BOM and dates entered for this line will be removed.';
+
+// Draft and confirmed orders open in the editor; a confirmed one can only be
+// saved as confirmed again (SA V2 4.5.1).
+function orderEditable(o) { return !!o && (o.status === 'DRAFT' || o.status === 'CONFIRMED'); }
+
+// A text box capped at its length, with a live count (SA V2 §3 輸入長度).
+function ordCount(el) {
+    const c = el.parentElement.querySelector('.ord-count');
+    if (c) c.textContent = `${el.value.length}/${el.maxLength}`;
+}
+function ordInput({ attrs = '', oninput = '', value = '', max = ORDER_TEXT_MAX, style = '' }) {
+    const v = String(value ?? '');
+    return `<div style="position:relative;flex:1;min-width:0">
+        <input type="text" class="input-field" maxlength="${max}" style="box-sizing:border-box;padding-right:58px;${style}" value="${esc(v)}" ${attrs} oninput="ordCount(this);${oninput}">
+        <span class="ord-count" style="position:absolute;right:10px;top:20px;transform:translateY(-50%);font-size:10px;color:#86868b;pointer-events:none">${v.length}/${max}</span>
+    </div>`;
+}
+
+// A confirm stacked over an open form, so the form keeps what was typed.
+let stackedConfirmAction = null;
+function showStackedConfirm({ title, body, cancelLabel = 'Cancel', confirmLabel, onConfirm, onCancel = null }) {
+    document.getElementById('stacked-confirm')?.remove();
+    stackedConfirmAction = { onConfirm, onCancel };
+    const el = document.createElement('div');
+    el.id = 'stacked-confirm';
+    el.className = 'modal-backdrop';
+    el.style.zIndex = '90';
+    el.innerHTML = `<div class="modal-card" style="padding:26px 28px">
+        <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">${esc(title)}</h3>
+        <p style="font-size:13px;color:#86868b;line-height:1.6;margin:0 0 18px">${esc(body)}</p>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn-secondary text-xs" onclick="resolveStackedConfirm(false)">${esc(cancelLabel)}</button>
+            <button class="btn-primary text-xs" onclick="resolveStackedConfirm(true)">${esc(confirmLabel)}</button>
+        </div>
+    </div>`;
+    document.body.appendChild(el);
+}
+function resolveStackedConfirm(ok) {
+    const action = stackedConfirmAction;
+    stackedConfirmAction = null;
+    document.getElementById('stacked-confirm')?.remove();
+    if (ok) action?.onConfirm?.(); else action?.onCancel?.();
+}
+
+// What the form holds, without the panel state kept in _-prefixed fields, so
+// an untouched form can close without writing anything.
+function orderDraftFingerprint(d) {
+    return JSON.stringify(d, (k, v) => (k.startsWith('_') ? undefined : v));
+}
+
+// Draft lines get their id up front, so the form can address them before save.
 function newOrderLineDraft(lineNo) {
     return {
         id: `ol-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -5780,7 +5857,7 @@ function newOrderLineDraft(lineNo) {
         sla_plan: '',
         serial_nos: [''], bom: [],
         warranty_months: '', delivered_dates: [''], warranty_starts: [''],
-        parent_line_id: null, supplier_name: '',
+        supplier_name: '',
         license_keys: [], version: '', license_start: '', license_end: '',
         notes: '',
     };
@@ -5789,31 +5866,36 @@ function newOrderLineDraft(lineNo) {
 function showOrderModal(orderId = null, { resume = false } = {}) {
     const existing = orderId ? getOrderById(orderId) : null;
     if (orderId && !existing) return;
-    if (existing && existing.status !== 'DRAFT') {
-        showToast('Only draft orders can be edited.', 'error');
+    if (existing && !orderEditable(existing)) {
+        showToast(`${existing.order_no} is now ${orderStatusWord(existing.status)}. Reload to see the latest.`, 'error');
         return;
     }
     // Coming back from "+ New customer" keeps everything typed so far.
-    if (!(resume && orderDraft)) orderDraft = existing ? {
-        ...JSON.parse(JSON.stringify(existing)),
-        lines: markCustomProductLines(JSON.parse(JSON.stringify(getOrderLines(orderId)))),
-        attachments: JSON.parse(JSON.stringify(existing.attachments || [])),
-    } : {
-        id: null, order_no: '', contract_no: '', customer_name: '', customer_org_id: null,
-        hw_supplier_name: '', hw_supplier_org_id: null, sw_supplier_name: '', sw_supplier_org_id: null,
-        si_name: '', si_org_id: null,
-        sales_contact: '', order_date: todayIso(), status: 'DRAFT', notes: '',
-        lines: [newOrderLineDraft(1)],
-        attachments: [],
-    };
+    if (!(resume && orderDraft)) {
+        orderDraft = existing ? {
+            ...JSON.parse(JSON.stringify(existing)),
+            lines: markCustomProductLines(JSON.parse(JSON.stringify(getOrderLines(orderId)))),
+            attachments: JSON.parse(JSON.stringify(existing.attachments || [])),
+        } : {
+            id: null, order_no: '', contract_no: '', customer_name: '', customer_org_id: null,
+            hw_supplier_name: '', hw_supplier_org_id: null, sw_supplier_name: '', sw_supplier_org_id: null,
+            si_name: '', si_org_id: null,
+            sales_contact: '', order_date: todayIso(), status: 'DRAFT', notes: '',
+            lines: [newOrderLineDraft(1)],
+            attachments: [],
+        };
+        orderDraft._openedStatus = existing?.status || null;
+        orderDraft._fingerprint = orderDraftFingerprint(orderDraft);
+    }
 
     const d = orderDraft;
+    const confirmedEdit = d._openedStatus === 'CONFIRMED';
     const field = (id, label, key, opts = {}) => `
         <div>
             <label class="field-label" for="${id}">${label}${opts.required ? ' <span class="req">*</span>' : ''}</label>
-            <input type="${opts.type || 'text'}" id="${id}" class="input-field" autocomplete="off"
-                   value="${esc(d[key])}" ${opts.placeholder ? `placeholder="${esc(opts.placeholder)}"` : ''}
-                   ${opts.list ? `list="${opts.list}"` : ''} oninput="orderDraft.${key}=this.value.trim()">
+            ${opts.type === 'date'
+                ? `<input type="date" id="${id}" class="input-field" value="${esc(d[key])}" oninput="orderDraft.${key}=this.value">`
+                : ordInput({ attrs: `id="${id}" autocomplete="off" ${opts.placeholder ? `placeholder="${esc(opts.placeholder)}"` : ''}`, oninput: `orderDraft.${key}=this.value.trim()`, value: d[key] })}
             ${opts.hint ? `<div class="field-hint">${esc(opts.hint)}</div>` : ''}
         </div>`;
 
@@ -5829,13 +5911,13 @@ function showOrderModal(orderId = null, { resume = false } = {}) {
                 ${orderCustomerField(d)}
                 ${field('ord-si', 'System Integrator', 'si_name', { placeholder: 'e.g. Name of the integrator', hint: 'Free text. The SI that delivers and installs, if any.' })}
                 ${field('ord-hw-sup', 'HW Supplier', 'hw_supplier_name', { placeholder: 'Required when the order has HW lines', hint: 'Free text. Required if any line is HW.' })}
-                ${field('ord-sw-sup', 'SW Supplier', 'sw_supplier_name', { placeholder: 'Required when the order has SW lines', hint: 'Free text. Required if any line is SW.' })}
+                ${field('ord-sw-sup', 'SW Supplier', 'sw_supplier_name', { placeholder: 'Required when a SW line has no supplier', hint: 'Free text. Required if a SW line has no supplier of its own.' })}
             </div>
 
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:22px 0 10px">Documents</div>
             ${ticketAttachmentDropZone('ord-draft-files', "onOrderDocFiles('orderDraft', this.files)")}
             <div class="field-hint" style="margin-top:6px">${ORDER_DOC_HINT}</div>
-            <p id="ord-att-error" style="font-size:12px;font-weight:600;color:#dc2626;margin-top:6px"></p>
+            <div id="ord-att-error" style="font-size:12px;font-weight:600;color:#dc2626;margin-top:6px"></div>
             <div id="ord-attachments-list" style="display:flex;flex-direction:column;gap:8px;margin-top:8px">${orderDocRows('orderDraft')}</div>
 
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:22px 0 10px">Order Lines</div>
@@ -5846,8 +5928,10 @@ function showOrderModal(orderId = null, { resume = false } = {}) {
 
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
                 <button onclick="closeModal()" class="btn-secondary text-xs">Cancel</button>
-                <button onclick="saveOrder('DRAFT')" class="btn-secondary text-xs">Save as Draft</button>
-                <button onclick="saveOrder('CONFIRMED')" class="btn-primary text-xs">Confirm Order</button>
+                ${confirmedEdit
+                    ? `<button onclick="saveOrder('CONFIRMED')" class="btn-primary text-xs">Save changes</button>`
+                    : `<button onclick="saveOrder('DRAFT')" class="btn-secondary text-xs">Save as Draft</button>
+                <button onclick="saveOrder('CONFIRMED')" class="btn-primary text-xs">Confirm Order</button>`}
             </div>
         </div>
     `, true);
@@ -5856,25 +5940,25 @@ function showOrderModal(orderId = null, { resume = false } = {}) {
     setTimeout(() => document.getElementById('ord-no')?.focus(), 50);
 }
 
+// The word an order's status reads as in "[Order No] is now [status]".
+function orderStatusWord(s) { return ({ DRAFT: 'a draft', CONFIRMED: 'confirmed', CANCELLED: 'cancelled' })[s] || 'changed'; }
+
 function renderOrderDraftLines() {
     const host = document.getElementById('ord-lines');
     if (!host) return;
-    // Every line is its own card in form order; a SW line names the HW line
-    // it is licensed for in its own "Hardware line" field (SA V2 4.5.3).
     host.innerHTML = orderDraft.lines.map((l, i) => ordLineCard(l, i)).join('');
 }
 
 function ordLineCard(l, i) {
     const lines = orderDraft.lines;
-    const parent = l.parent_line_id ? lines.find(x => x.id === l.parent_line_id) : null;
     const products = getVisibleProducts(l.scope === 'HW' ? 'hardware' : 'software').filter(p => p.status === 'published');
     const removable = lines.length > 1;
+    const mono = 'font-family:ui-monospace,SFMono-Regular,Menlo,monospace';
     return `
         <div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
                 <span style="font-size:12.5px;font-weight:700;color:#86868b">Line ${i + 1}</span>
                 <span class="badge ${l.scope === 'HW' ? 'badge-hw' : 'badge-sw'}">${l.scope}</span>
-                ${parent ? `<span class="field-hint" style="margin:0">bundled with Line ${lines.indexOf(parent) + 1}</span>` : ''}
                 ${removable ? `<button onclick="ordRemoveLine(${i})" class="btn-ghost" style="margin-left:auto" title="Remove line"><i class="ph ph-trash"></i></button>` : ''}
             </div>
             <div style="display:grid;grid-template-columns:100px 1fr 120px 80px;gap:12px">
@@ -5892,8 +5976,7 @@ function ordLineCard(l, i) {
                         ${products.map(p => `<option value="${p.id}" ${l.product_id === p.id ? 'selected' : ''}>${esc(p.name)}${p.model ? ` (${esc(p.model)})` : ''}</option>`).join('')}
                         <option value="__custom" ${l.custom_product ? 'selected' : ''}>Other (type a name)</option>
                     </select>
-                    ${l.custom_product ? `<input type="text" class="input-field" data-err="${i}-product-name" style="margin-top:8px" maxlength="100" placeholder="Product name"
-                        value="${esc(l.product_name)}" oninput="orderDraft.lines[${i}].product_name=this.value.trim()">` : ''}
+                    ${l.custom_product ? `<div style="margin-top:8px">${ordInput({ attrs: `data-err="${i}-product-name" placeholder="Product name"`, oninput: `orderDraft.lines[${i}].product_name=this.value.trim()`, value: l.product_name })}</div>` : ''}
                 </div>
                 <div>
                     <label class="field-label">SLA</label>
@@ -5904,7 +5987,7 @@ function ordLineCard(l, i) {
                 </div>
                 <div>
                     <label class="field-label">Qty</label>
-                    <input type="number" class="input-field" min="1" step="1" value="${l.qty}" onchange="ordSetQty(${i}, this.value)">
+                    <input type="number" class="input-field" min="1" max="${ORDER_QTY_MAX}" step="1" value="${l.qty}" onchange="ordSetQty(${i}, this.value)">
                 </div>
             </div>
             ${l.scope === 'HW' ? `
@@ -5925,10 +6008,9 @@ function ordLineCard(l, i) {
                 <div data-err="${i}-serials" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
                     ${(() => { const collapsed = l.serial_nos.length > BULK_COLLAPSE_AT && !l._snShowAll;
                         return (collapsed ? l.serial_nos.slice(0, BULK_COLLAPSED_ROWS) : l.serial_nos).map((sn, si) => `
-                    <div style="display:flex;align-items:center;gap:10px">
-                        <span style="font-size:11.5px;font-weight:600;color:#86868b;width:56px;flex-shrink:0">Unit ${si + 1}</span>
-                        <input type="text" class="input-field" data-req data-sn="${i}-${si}" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="Serial number"
-                               value="${esc(sn)}" oninput="orderDraft.lines[${i}].serial_nos[${si}]=this.value.trim()" onkeydown="ordSerialKeydown(event, ${i}, ${si})">
+                    <div style="display:flex;align-items:flex-start;gap:10px">
+                        <span style="font-size:11.5px;font-weight:600;color:#86868b;width:56px;flex-shrink:0;padding-top:12px">Unit ${si + 1}</span>
+                        ${ordInput({ attrs: `data-req data-sn="${i}-${si}" placeholder="Serial number" onkeydown="ordSerialKeydown(event, ${i}, ${si})"`, oninput: `orderDraft.lines[${i}].serial_nos[${si}]=this.value.trim()`, value: sn, style: mono })}
                     </div>`).join('') + (collapsed ? bulkMoreButton(l.serial_nos.length, BULK_COLLAPSED_ROWS, `orderDraft.lines[${i}]._snShowAll=true;renderOrderDraftLines()`) : ''); })()}
                 </div>
                 <div class="field-hint">One serial per unit — the row count follows Qty. Enter moves to the next unit, so a barcode scanner can scan them in a row. Required before the order is confirmed.</div>
@@ -5942,41 +6024,34 @@ function ordLineCard(l, i) {
                 ${l.bom.length ? `
                 <table data-err="${i}-bom" style="width:100%;border-collapse:collapse">
                     <thead><tr>
-                        <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0;width:22%">Component</th>
-                        <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0;width:22%">Brand</th>
+                        <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0;width:24%">Component</th>
+                        <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0;width:24%">Brand</th>
                         <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0">Model</th>
-                        <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 0 6px 0;width:64px">Qty</th>
+                        <th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 0 6px 0;width:76px">Qty</th>
                         <th style="width:34px"></th>
                     </tr></thead>
                     <tbody>
                         ${l.bom.map((b, bi) => `
                         <tr>
-                            <td style="padding:3px 8px 3px 0"><input type="text" class="input-field" data-req placeholder="CPU" value="${esc(b.component_type)}" oninput="orderDraft.lines[${i}].bom[${bi}].component_type=this.value.trim()"></td>
-                            <td style="padding:3px 8px 3px 0"><input type="text" class="input-field" placeholder="—" value="${esc(b.brand)}" oninput="orderDraft.lines[${i}].bom[${bi}].brand=this.value.trim()"></td>
-                            <td style="padding:3px 8px 3px 0"><input type="text" class="input-field" data-req placeholder="Model" value="${esc(b.model)}" oninput="orderDraft.lines[${i}].bom[${bi}].model=this.value.trim()"></td>
-                            <td style="padding:3px 0"><input type="number" class="input-field" min="1" step="1" value="${b.qty}" oninput="orderDraft.lines[${i}].bom[${bi}].qty=parseInt(this.value,10)||1"></td>
-                            <td style="padding:3px 0 3px 4px;text-align:right"><button onclick="ordRemoveBom(${i},${bi})" class="btn-ghost" title="Remove component"><i class="ph ph-x"></i></button></td>
+                            <td style="padding:3px 8px 3px 0;vertical-align:top">${ordInput({ attrs: 'data-req placeholder="CPU"', oninput: `orderDraft.lines[${i}].bom[${bi}].component_type=this.value.trim()`, value: b.component_type })}</td>
+                            <td style="padding:3px 8px 3px 0;vertical-align:top">${ordInput({ attrs: 'placeholder="—"', oninput: `orderDraft.lines[${i}].bom[${bi}].brand=this.value.trim()`, value: b.brand })}</td>
+                            <td style="padding:3px 8px 3px 0;vertical-align:top">${ordInput({ attrs: 'data-req placeholder="Model"', oninput: `orderDraft.lines[${i}].bom[${bi}].model=this.value.trim()`, value: b.model })}</td>
+                            <td style="padding:3px 0;vertical-align:top"><input type="number" class="input-field" min="1" max="${ORDER_QTY_MAX}" step="1" value="${b.qty}" onchange="ordSetBomQty(${i},${bi},this.value)"></td>
+                            <td style="padding:3px 0 3px 4px;text-align:right;vertical-align:top"><button onclick="ordRemoveBom(${i},${bi})" class="btn-ghost" title="Remove component"><i class="ph ph-x"></i></button></td>
                         </tr>`).join('')}
                     </tbody>
                 </table>` : ''}
                 <button onclick="ordAddBom(${i})" class="btn-secondary text-xs" style="margin-top:${l.bom.length ? '10px' : '0'}"><i class="ph ph-plus"></i> Add Component</button>
             </div>` : `
-            <div style="margin-top:12px;max-width:420px">
-                <label class="field-label">Hardware line</label>
-                <select class="input-field" data-err="${i}-hw-line" onchange="ordSetParent(${i}, this.value)">
-                    <option value="" ${parent ? '' : 'selected'}>—</option>
-                    ${lines.map((x, xi) => x.scope === 'HW' ? `<option value="${x.id}" ${parent === x ? 'selected' : ''}>Line ${xi + 1} · ${esc(x.product_name || 'No product yet')}</option>` : '').join('')}
-                </select>
-            </div>
             <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px;margin-top:12px">
                 <div>
                     <label class="field-label">Supplier</label>
-                    <input type="text" class="input-field" placeholder="${esc(orderDraft.sw_supplier_name || 'Order SW supplier')}" value="${esc(l.supplier_name)}" oninput="orderDraft.lines[${i}].supplier_name=this.value.trim()">
+                    ${ordInput({ attrs: `placeholder="${esc(orderDraft.sw_supplier_name || 'Order SW supplier')}"`, oninput: `orderDraft.lines[${i}].supplier_name=this.value.trim()`, value: l.supplier_name })}
                     <div class="field-hint">Blank uses the order's SW supplier.</div>
                 </div>
                 <div>
                     <label class="field-label">Version</label>
-                    <input type="text" class="input-field" placeholder="e.g. 4.1.0" value="${esc(l.version)}" oninput="orderDraft.lines[${i}].version=this.value.trim()">
+                    ${ordInput({ attrs: 'placeholder="e.g. 4.1.0"', oninput: `orderDraft.lines[${i}].version=this.value.trim()`, value: l.version, max: ORDER_VERSION_MAX })}
                 </div>
                 <div>
                     <label class="field-label">License Start</label>
@@ -5996,66 +6071,14 @@ function ordLineCard(l, i) {
                 <div data-err="${i}-keys" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
                     ${(() => { const collapsed = l.license_keys.length > BULK_COLLAPSE_AT && !l._keysShowAll;
                         return (collapsed ? l.license_keys.slice(0, BULK_COLLAPSED_ROWS) : l.license_keys).map((lk, ki) => `
-                    <div style="display:flex;align-items:center;gap:10px">
-                        <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0">Key ${ki + 1}</span>
-                        <input type="text" class="input-field" data-req data-key="${i}-${ki}" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="License key"
-                               value="${esc(lk.key)}" oninput="orderDraft.lines[${i}].license_keys[${ki}].key=this.value.trim()">
-                        ${parent ? `<select class="input-field" data-unit="${i}-${ki}" style="width:230px;flex-shrink:0" title="Which unit this key is for"
-                               onchange="orderDraft.lines[${i}].license_keys[${ki}].unit=this.value===''?null:Number(this.value)">${ordUnitOptions(parent, lk.unit)}</select>` : ''}
+                    <div style="display:flex;align-items:flex-start;gap:10px">
+                        <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0;padding-top:12px">Key ${ki + 1}</span>
+                        ${ordInput({ attrs: `data-req data-key="${i}-${ki}" placeholder="License key"`, oninput: `orderDraft.lines[${i}].license_keys[${ki}].key=this.value.trim()`, value: lk.key, style: mono })}
                     </div>`).join('') + (collapsed ? bulkMoreButton(l.license_keys.length, BULK_COLLAPSED_ROWS, `orderDraft.lines[${i}]._keysShowAll=true;renderOrderDraftLines()`) : ''); })()}
                 </div>
-                <div class="field-hint">${parent
-                    ? 'Bind each key to one unit or to all units. Repeat a key on several rows to share it between units.'
-                    : 'One key per license — the row count follows Qty. Required before the order is confirmed.'}</div>
+                <div class="field-hint">One key per license — the row count follows Qty. Required before the order is confirmed.</div>
             </div>`}
         </div>`;
-}
-
-// ── Bundled software (docs/ORDER_MANAGEMENT_PLAN.md, License ↔ SN) ──
-// A bundled SW line is an ordinary SW line with parent_line_id set, chosen in
-// its own Hardware line field. It can sit anywhere in the form.
-
-// Losing the HW line (removed, turned into SW, or unpicked) keeps the SW line
-// and its keys; only the units they were bound to go (SA V2 4.5.3).
-function ordDetachFrom(hwLineId) {
-    orderDraft.lines.filter(x => x.parent_line_id === hwLineId).forEach(x => {
-        x.parent_line_id = null;
-        x.license_keys.forEach(k => { k.unit = null; });
-    });
-}
-
-// The binding is by unit index, so a unit whose serial is still blank can
-// already take a key. A unit that Qty no longer covers stays selected and is
-// flagged; saving refuses it rather than silently rebinding.
-function ordUnitOptions(parent, unit) {
-    const units = parent.serial_nos.map((sn, u) => `<option value="${u}" ${unit === u ? 'selected' : ''}>Unit ${u + 1} · ${esc(sn.trim() || 'serial pending')}</option>`);
-    const gone = unit !== null && unit >= parent.qty ? `<option value="${unit}" selected>Unit ${unit + 1} (removed)</option>` : '';
-    return `<option value="" ${unit === null ? 'selected' : ''}>All units</option>${units.join('')}${gone}`;
-}
-
-function ordSetParent(i, value) {
-    const l = orderDraft.lines[i];
-    const next = value || null;
-    if (l.parent_line_id === next) return;
-    const bound = l.parent_line_id && l.license_keys.some(k => k.key && k.unit !== null);
-    if (bound && !window.confirm('Clear the units bound to these license keys? The keys stay on this line.')) {
-        renderOrderDraftLines();
-        return;
-    }
-    l.license_keys.forEach(k => { k.unit = null; });
-    l.parent_line_id = next;
-    const hw = next ? orderDraft.lines.find(x => x.id === next) : null;
-    if (hw) {
-        // Nothing typed yet: one key per unit of that line. Otherwise the keys
-        // stay and take its units in order; keys past its last unit cover all.
-        if (!l.license_keys.some(k => k.key)) {
-            l.qty = hw.qty;
-            l.license_keys = Array.from({ length: hw.qty }, (_, u) => ({ key: '', unit: u }));
-        } else {
-            l.license_keys.forEach((k, ki) => { k.unit = ki < hw.qty ? ki : null; });
-        }
-    }
-    renderOrderDraftLines();
 }
 
 function ordAddLine() {
@@ -6064,32 +6087,43 @@ function ordAddLine() {
 }
 
 function ordRemoveLine(i) {
-    const id = orderDraft.lines[i].id;
-    if (id) ordDetachFrom(id);
-    orderDraft.lines = orderDraft.lines.filter((x, xi) => xi !== i);
-    renderOrderDraftLines();
+    const drop = () => { orderDraft.lines.splice(i, 1); renderOrderDraftLines(); };
+    if (!ordLineHasUnitData(orderDraft.lines[i])) { drop(); return; }
+    showStackedConfirm({ title: 'Clear this line?', body: ORD_CLEAR_LINE_BODY, confirmLabel: 'Remove', onConfirm: drop });
+}
+
+// A HW line holding typed serials, BOM or dates asks before it is cleared.
+function ordLineHasUnitData(l) {
+    return l.scope === 'HW' && ((l.serial_nos || []).some(s => s.trim())
+        || (l.bom || []).some(b => b.component_type || b.brand || b.model)
+        || (l.delivered_dates || []).some(Boolean) || (l.warranty_starts || []).some(Boolean));
 }
 
 function ordSetScope(i, scope) {
     const l = orderDraft.lines[i];
     if (l.scope === scope) return;
-    l.scope = scope;
-    l.product_id = '';
-    l.product_name = '';
-    l.custom_product = false;
-    if (scope === 'SW') {
-        l.serial_nos = []; l.bom = [];
-        l.warranty_months = ''; l.delivered_dates = []; l.warranty_starts = [];
-        l.license_keys = Array.from({ length: l.qty }, () => ({ key: '', unit: null }));
-        // A SW line cannot carry bundled software: lines that picked it let go.
-        ordDetachFrom(l.id);
-    } else {
-        l.parent_line_id = null;
-        l.serial_nos = Array.from({ length: l.qty }, () => '');
-        fitUnitArrays(l);
-        l.license_keys = []; l.version = ''; l.license_start = ''; l.license_end = '';
+    const apply = () => {
+        l.scope = scope;
+        l.product_id = '';
+        l.product_name = '';
+        l.custom_product = false;
+        if (scope === 'SW') {
+            l.serial_nos = []; l.bom = [];
+            l.warranty_months = ''; l.delivered_dates = []; l.warranty_starts = [];
+            l.license_keys = Array.from({ length: l.qty }, () => ({ key: '' }));
+        } else {
+            l.supplier_name = '';
+            l.serial_nos = Array.from({ length: l.qty }, () => '');
+            fitUnitArrays(l);
+            l.license_keys = []; l.version = ''; l.license_start = ''; l.license_end = '';
+        }
+        renderOrderDraftLines();
+    };
+    if (scope === 'SW' && ordLineHasUnitData(l)) {
+        showStackedConfirm({ title: 'Clear this line?', body: ORD_CLEAR_LINE_BODY, confirmLabel: 'Clear', onConfirm: apply, onCancel: renderOrderDraftLines });
+        return;
     }
-    renderOrderDraftLines();
+    apply();
 }
 
 // The name box belongs to "Other" alone, and switching to Other starts it
@@ -6117,13 +6151,13 @@ function markCustomProductLines(lines) {
 
 function ordSetQty(i, value) {
     const l = orderDraft.lines[i];
-    l.qty = Math.max(1, parseInt(value, 10) || 1);
+    l.qty = Math.min(ORDER_QTY_MAX, Math.max(1, parseInt(value, 10) || 1));
     // Keep what's typed; only grow or shrink the array to match qty.
     if (l.scope === 'HW') {
         l.serial_nos = Array.from({ length: l.qty }, (_, si) => l.serial_nos[si] || '');
         fitUnitArrays(l);
     } else {
-        l.license_keys = Array.from({ length: l.qty }, (_, ki) => l.license_keys[ki] || { key: '', unit: null });
+        l.license_keys = Array.from({ length: l.qty }, (_, ki) => l.license_keys[ki] || { key: '' });
     }
     renderOrderDraftLines();
 }
@@ -6246,6 +6280,11 @@ function ordRemoveBom(i, bi) {
     renderOrderDraftLines();
 }
 
+function ordSetBomQty(i, bi, value) {
+    orderDraft.lines[i].bom[bi].qty = Math.min(ORDER_QTY_MAX, Math.max(1, parseInt(value, 10) || 1));
+    renderOrderDraftLines();
+}
+
 // ── Documents ──
 // Header-level attachments (PO scans, contracts, sign-off sheets). Reuses the
 // ticket attachment file-read/validation pipeline — same size/type limits,
@@ -6295,11 +6334,12 @@ function renderOrderDocRows(ns) {
 async function onOrderDocFiles(ns, fileList) {
     const target = orderDocTarget(ns);
     if (!target) return;
-    const { added, error } = await readTicketAttachments(fileList, target.attachments, ORDER_DOC_MAX_COUNT);
+    const { added, errors } = await readTicketAttachments(fileList, target.attachments, ORDER_DOC_MAX_COUNT);
     target.attachments.push(...added.map(a => ({ ...a, doc_type: '' })));
     renderOrderDocRows(ns);
+    // Each file turned away gets its own line (SA V2 4.5.3 編號 10).
     const errEl = document.getElementById('ord-att-error');
-    if (errEl) errEl.textContent = error || '';
+    if (errEl) errEl.innerHTML = errors.map(esc).join('<br>');
 }
 
 function removeOrderDoc(ns, i) {
@@ -6322,6 +6362,7 @@ function setOrderDocFilter(orderId, type) {
 }
 
 function orderDocSection(o) {
+    if (isCustomerView()) return '';
     const docs = o.attachments || [];
     const canManage = o.status === 'CONFIRMED' && canUpdateOrders();
     if (!docs.length && !canManage) return '';
@@ -6419,6 +6460,11 @@ function validateOrderDraft(status) {
     const errors = [];
     const at = (i, f) => `[data-err="${i}-${f}"]`;
     const sn = (i, si) => `[data-sn="${i}-${si}"]`;
+    // Someone confirmed or cancelled the order while this form was open.
+    if (d.id) {
+        const now = getOrderById(d.id);
+        if (now && now.status !== d._openedStatus) return [formErr(`${now.order_no} is now ${orderStatusWord(now.status)}. Reload to see the latest.`)];
+    }
     if (!d.order_no) errors.push(fieldErr('#ord-no', 'Please enter Order No.'));
     if (!d.order_date) errors.push(fieldErr('#ord-date', 'Please select Order Date.'));
     if (!d.customer_org_id) errors.push(fieldErr('#ord-customer', 'Please select Customer.'));
@@ -6431,7 +6477,7 @@ function validateOrderDraft(status) {
         if (l.custom_product && !l.product_name) errors.push(fieldErr(at(i, 'product-name'), 'Please enter Product name.'));
         else if (!l.product_name) errors.push(fieldErr(at(i, 'product'), 'Please select Product.'));
         if (l.scope === 'HW' && l.bom.some(b => !b.component_type || !b.model)) errors.push(fieldErr(at(i, 'bom'), 'Every BOM row needs a component and a model.'));
-        if (l.scope === 'SW') errors.push(...licenseLineErrors(l, String(i), d.lines.find(x => x.id === l.parent_line_id)));
+        if (l.scope === 'SW') errors.push(...licenseLineErrors(l, String(i)));
     });
     if (status === 'CONFIRMED') {
         // Every cell holding a repeated serial is flagged, not just the later ones.
@@ -6466,47 +6512,73 @@ function validateOrderDraft(status) {
     });
     d.lines.forEach((l, i) => {
         if (l.scope !== 'HW') return;
-        l.serial_nos.forEach((x, si) => { const k = x.trim().toUpperCase(); if (k && taken.has(k)) errors.push(fieldErr([sn(i, si), at(i, 'serials')], `Serial ${x} is already on ${taken.get(k)}.`)); });
+        l.serial_nos.forEach((x, si) => { const k = x.trim().toUpperCase(); if (k && taken.has(k)) errors.push(fieldErr([sn(i, si), at(i, 'serials')], `Serial ${x.trim()} is already on ${taken.get(k)}.`)); });
     });
+    errors.push(...ticketedSerialErrors(d));
     return errors;
+}
+
+// Tickets opened on a line keep pointing at the serial or key they were
+// opened on, so an edit may not change that serial or drop that key
+// (SA V2 4.5.3 編號 19, 26; 4.5.5 Adjust license).
+function ticketNos(list) { return list.map(t => t.ticket_no).join(', '); }
+function groupTicketsBy(lineId, field) {
+    const by = new Map();
+    // Older tickets keep the key only in their snapshot.
+    const valueOf = t => (t[field] || t.snapshot?.[field] || '').trim();
+    TICKETS.filter(t => t.order_line_id === lineId && valueOf(t)).forEach(t => {
+        const k = valueOf(t).toUpperCase();
+        if (!by.has(k)) by.set(k, { value: valueOf(t), tickets: [] });
+        by.get(k).tickets.push(t);
+    });
+    return [...by.values()];
+}
+function ticketedSerialErrors(d) {
+    if (!d.id) return [];
+    const errors = [];
+    getOrderLines(d.id).forEach(saved => groupTicketsBy(saved.id, 'serial_no').forEach(({ value, tickets }) => {
+        const u = (saved.serial_nos || []).findIndex(s => s.trim().toUpperCase() === value.toUpperCase());
+        const i = d.lines.findIndex(x => x.id === saved.id);
+        const line = d.lines[i];
+        const kept = line && line.scope === 'HW' && u >= 0 && (line.serial_nos[u] || '').trim().toUpperCase() === value.toUpperCase();
+        if (!kept) errors.push(fieldErr(line ? [`[data-sn="${i}-${u}"]`, `[data-err="${i}-serials"]`] : [], `Serial ${value} is used by ${ticketNos(tickets)}. It cannot be changed.`));
+    }));
+    return errors;
+}
+function removedTicketedKeys(lineId, keys) {
+    const have = new Set(keys.map(k => (k.key || '').trim().toUpperCase()).filter(Boolean));
+    return groupTicketsBy(lineId, 'license_key').filter(g => !have.has(g.value.toUpperCase()))
+        .map(g => `License key ${g.value} is used by ${ticketNos(g.tickets)}. It cannot be removed.`);
 }
 
 // Checks one SW line on its own; shared by the order editor (anchors "<line
 // index>-…") and the post-confirmation license adjustment ("la-…").
-function licenseLineErrors(l, ns, parent) {
+function licenseLineErrors(l, ns) {
     const errors = [];
     if (l.license_start && l.license_end && l.license_start > l.license_end) errors.push(fieldErr(`[data-err="${ns}-le"]`, 'License start is after license end.'));
-    if (parent) l.license_keys.forEach((lk, ki) => {
-        if (lk.unit !== null && lk.unit >= parent.qty) errors.push(fieldErr([`[data-unit="${ns}-${ki}"]`, `[data-err="${ns}-keys"]`], `Key ${ki + 1} is bound to Unit ${lk.unit + 1}, which the hardware line no longer has. Rebind it.`));
-    });
     return errors;
 }
 
-// A key may repeat inside one bundled line to cover several units, never
-// across lines and never twice on the same unit (or next to "All units").
+// A key appears once per order: never twice on a line, never on two lines.
 // `nsOf` names a line's anchors on screen, or null when it is not shown.
 function licenseKeyDuplicateErrors(lines, nsOf = () => null) {
     const errors = [];
-    const seen = new Map(); // KEY → { lineIndex, units, at }
+    const seen = new Map(); // KEY → { lineIndex, at } of its first appearance
     const keyAt = (ns, ki) => ns === null ? [] : [`[data-key="${ns}-${ki}"]`, `[data-err="${ns}-keys"]`];
-    lines.forEach((l, i) => (l.license_keys || []).forEach((lk, ki) => {
-        const key = lk.key.trim().toUpperCase();
-        if (!key) return;
-        const here = keyAt(nsOf(l, i), ki);
-        const prior = seen.get(key);
-        if (!prior) { seen.set(key, { lineIndex: i, units: new Set([lk.unit]), at: here }); return; }
-        const at = here.length ? here : prior.at;
-        if (prior.lineIndex !== i) errors.push(fieldErr(at, `License key ${lk.key} is on both line ${prior.lineIndex + 1} and line ${i + 1}.`));
-        else if (lk.unit === null || prior.units.has(null) || prior.units.has(lk.unit)) errors.push(fieldErr(at, `License key ${lk.key} repeats without a different unit.`));
-        prior.units.add(lk.unit);
-    }));
+    lines.forEach((l, i) => {
+        const onLine = new Set();
+        (l.license_keys || []).forEach((lk, ki) => {
+            const key = (lk.key || '').trim().toUpperCase();
+            if (!key) return;
+            const here = keyAt(nsOf(l, i), ki);
+            if (onLine.has(key)) { errors.push(fieldErr(here, `License key ${lk.key.trim()} appears more than once on this line.`)); return; }
+            onLine.add(key);
+            const prior = seen.get(key);
+            if (!prior) { seen.set(key, { lineIndex: i, at: here }); return; }
+            errors.push(fieldErr(here.length ? here : prior.at, `License key ${lk.key.trim()} is on both line ${prior.lineIndex + 1} and line ${i + 1}.`));
+        });
+    });
     return errors;
-}
-
-function licenseUnitLabel(parent, unit) {
-    if (unit === null) return 'All units';
-    if (unit >= parent.qty) return `Unit ${unit + 1} (removed)`;
-    return `Unit ${unit + 1} · ${(parent.serial_nos[unit] || '').trim() || 'serial pending'}`;
 }
 
 // ── Bulk entry (docs/ORDER_MANAGEMENT_PLAN.md, 大量序號與 License 輸入) ──
@@ -6547,12 +6619,16 @@ function ordSerialPreview(l, i) {
     if (!values.length) return `<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn-secondary text-xs" onclick="orderDraft.lines[${i}]._snPaste=false;renderOrderDraftLines()">Cancel</button></div>`;
     const seen = new Set();
     const dupes = [...new Set(values.filter(v => { const k = v.toUpperCase(); if (seen.has(k)) return true; seen.add(k); return false; }))];
+    const tooLong = values.filter(v => v.length > ORDER_TEXT_MAX);
+    const blocked = dupes.length || tooLong.length;
     return `
         <div style="font-size:12.5px;color:#1d1d1f">${values.length} serial${values.length === 1 ? '' : 's'} → Qty becomes ${values.length}, filled in order.</div>
         ${dupes.length ? `<div style="font-size:12px;color:#dc2626;margin-top:4px">Appears more than once: ${esc(dupes.slice(0, 5).join(', '))}${dupes.length > 5 ? ` and ${dupes.length - 5} more` : ''}. Remove the duplicates to apply.</div>` : ''}
+        ${tooLong.length ? `<div style="font-size:12px;color:#dc2626;margin-top:4px">Each serial can be up to 100 characters. Shorten the marked rows to apply.</div>
+            ${tooLong.map(v => `<div class="tk-mono" style="font-size:11.5px;background:#fef2f2;color:#b91c1c;border-radius:6px;padding:3px 8px;margin-top:4px;word-break:break-all">${esc(v)}</div>`).join('')}` : ''}
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
             <button class="btn-secondary text-xs" onclick="orderDraft.lines[${i}]._snPaste=false;renderOrderDraftLines()">Cancel</button>
-            <button class="btn-primary text-xs" ${dupes.length ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''} onclick="ordApplySerialPaste(${i})">Apply ${values.length} serial${values.length === 1 ? '' : 's'}</button>
+            <button class="btn-primary text-xs" ${blocked ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''} onclick="ordApplySerialPaste(${i})">Apply ${values.length} serial${values.length === 1 ? '' : 's'}</button>
         </div>`;
 }
 
@@ -6564,7 +6640,7 @@ function ordRenderSerialPreview(i) {
 function ordApplySerialPaste(i) {
     const l = orderDraft.lines[i];
     const values = splitPastedValues(l._snText);
-    if (!values.length) return;
+    if (!values.length || values.some(v => v.length > ORDER_TEXT_MAX)) return;
     l.qty = values.length;
     l.serial_nos = values;
     fitUnitArrays(l);
@@ -6587,70 +6663,23 @@ function ordSerialKeydown(e, i, si) {
 }
 
 // License paste: shared by the order editor ('0', '1', … = draft line index)
-// and Adjust license ('adjust').
+// and Adjust license ('adjust'). One column of keys, filled in order.
 function licensePasteTarget(ref) {
     if (ref === 'adjust') {
-        const line = ORDER_LINES.find(l => l.id === licenseDraft.lineId);
-        return {
-            state: licenseDraft,
-            parent: line?.parent_line_id ? ORDER_LINES.find(l => l.id === line.parent_line_id) : null,
-            rerender: renderLicenseAdjustModal,
-            apply: keys => { licenseDraft.license_keys = keys; },
-        };
+        return { state: licenseDraft, rerender: renderLicenseAdjustModal, apply: keys => { licenseDraft.license_keys = keys; } };
     }
     const l = orderDraft.lines[Number(ref)];
-    return {
-        state: l,
-        parent: l.parent_line_id ? orderDraft.lines.find(x => x.id === l.parent_line_id) : null,
-        rerender: renderOrderDraftLines,
-        apply: keys => { l.license_keys = keys; l.qty = Math.max(1, keys.length); },
-    };
+    return { state: l, rerender: renderOrderDraftLines, apply: keys => { l.license_keys = keys; l.qty = Math.max(1, keys.length); } };
 }
 
-// Turn pasted text into keys. Two columns bind by serial; one column binds
-// in unit order or, for a single key, to all units. Nothing is applied while
-// `errors` is non-empty.
-function planLicensePaste(text, parent, mode) {
-    const rows = splitPastedRows(text);
-    const plan = { rows: [], keys: [], errors: [], notes: [], twoColumn: false };
-    if (!rows.length) return plan;
-    plan.twoColumn = rows.every(r => r.length >= 2);
-    if (plan.twoColumn) {
-        if (!parent) { plan.errors.push('Serial + key pairs need a line bundled with hardware. Paste keys only.'); return plan; }
-        const seenUnits = new Map();
-        rows.forEach(([sn, key]) => {
-            const unit = parent.serial_nos.findIndex(s => s.trim().toUpperCase() === sn.toUpperCase());
-            let issue = '';
-            if (unit < 0) issue = 'Serial not on this hardware line';
-            else if (seenUnits.has(unit)) issue = `Serial already listed with ${seenUnits.get(unit)}`;
-            plan.rows.push({ unit: unit < 0 ? null : unit, sn, key, issue });
-            if (!issue) { seenUnits.set(unit, key); plan.keys.push({ key, unit }); }
-        });
-        const bad = plan.rows.filter(r => r.issue).length;
-        if (bad) plan.errors.push(`${bad} row${bad === 1 ? '' : 's'} could not be matched to a unit.`);
-        const unbound = parent.qty - seenUnits.size;
-        if (!bad && unbound > 0) plan.notes.push(`${unbound} unit${unbound === 1 ? '' : 's'} will have no key.`);
-        return plan;
-    }
-    const keys = rows.map(r => r[0]);
-    if (parent && mode === 'shared') {
-        if (keys.length > 1) plan.errors.push('"Shared by all units" takes one key. Paste a single key, or pick one per unit.');
-        else { plan.keys = [{ key: keys[0], unit: null }]; plan.rows = [{ unit: null, sn: 'All units', key: keys[0], issue: '' }]; }
-        return plan;
-    }
-    if (parent) {
-        if (keys.length > parent.qty) plan.errors.push(`${keys.length} keys for ${parent.qty} units. Remove ${keys.length - parent.qty} or add units first.`);
-        keys.forEach((key, u) => {
-            const issue = u >= parent.qty ? 'No unit left for this key' : '';
-            plan.rows.push({ unit: u < parent.qty ? u : null, sn: u < parent.qty ? (parent.serial_nos[u] || '').trim() || 'serial pending' : '—', key, issue });
-            if (!issue) plan.keys.push({ key, unit: u });
-        });
-        if (!plan.errors.length && keys.length < parent.qty) plan.notes.push(`Units ${keys.length + 1}–${parent.qty} will have no key.`);
-        return plan;
-    }
-    plan.keys = keys.map(key => ({ key, unit: null }));
-    plan.rows = keys.map(key => ({ unit: null, sn: '', key, issue: '' }));
-    return plan;
+// Turn pasted text into keys. Nothing is applied while `errors` is non-empty.
+function planLicensePaste(text) {
+    const keys = splitPastedValues(text);
+    const tooLong = keys.filter(k => k.length > ORDER_TEXT_MAX);
+    return {
+        keys: keys.map(key => ({ key })),
+        errors: tooLong.length ? ['Each key can be up to 100 characters. Shorten the marked rows to apply.'] : [],
+    };
 }
 
 function licensePastePanel(ref) {
@@ -6660,7 +6689,7 @@ function licensePastePanel(ref) {
     return `
                 <div style="margin-top:8px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff">
                     <textarea class="input-field" style="min-height:90px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace"
-                              placeholder="${t.parent ? 'Paste two columns (serial, key) from Excel, or one column of keys' : 'Paste a column of keys, one per line'}"
+                              placeholder="Paste a column of keys, one per line"
                               oninput="licensePasteTarget('${ref}').state._kp.text=this.value;renderLicensePastePreview('${ref}')">${esc(p.text || '')}</textarea>
                     <div id="kp-preview-${ref}" style="margin-top:8px">${licensePastePreview(ref)}</div>
                 </div>`;
@@ -6668,33 +6697,22 @@ function licensePastePanel(ref) {
 
 function licensePastePreview(ref) {
     const t = licensePasteTarget(ref);
-    const p = t.state._kp;
-    const oneColumn = splitPastedRows(p.text).length && !splitPastedRows(p.text).every(r => r.length >= 2);
-    const mode = p.mode || 'order';
-    const plan = planLicensePaste(p.text, t.parent, mode);
+    const plan = planLicensePaste(t.state._kp.text);
     const cancel = `<button class="btn-secondary text-xs" onclick="licensePasteTarget('${ref}').state._kp={open:false};licensePasteTarget('${ref}').rerender()">Cancel</button>`;
-    if (!plan.rows.length && !plan.errors.length) return `<div style="display:flex;justify-content:flex-end">${cancel}</div>`;
-    const shown = plan.rows.slice(0, BULK_PREVIEW_ROWS);
+    if (!plan.keys.length) return `<div style="display:flex;justify-content:flex-end">${cancel}</div>`;
+    const shown = plan.keys.slice(0, BULK_PREVIEW_ROWS);
     return `
-        ${t.parent && oneColumn ? `<div style="display:flex;gap:14px;font-size:12.5px;margin-bottom:8px">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="kp-mode-${ref}" ${mode === 'order' ? 'checked' : ''} onchange="licensePasteTarget('${ref}').state._kp.mode='order';renderLicensePastePreview('${ref}')"> One per unit, in order</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="kp-mode-${ref}" ${mode === 'shared' ? 'checked' : ''} onchange="licensePasteTarget('${ref}').state._kp.mode='shared';renderLicensePastePreview('${ref}')"> Shared by all units</label>
-        </div>` : ''}
-        ${plan.twoColumn ? '<div style="font-size:12px;color:#86868b;margin-bottom:6px">Two columns detected: keys bind by matching the serial.</div>' : ''}
-        ${shown.length ? `<div style="max-height:220px;overflow-y:auto;border:1px solid var(--border-light);border-radius:8px">
+        <div style="max-height:220px;overflow-y:auto;border:1px solid var(--border-light);border-radius:8px">
             <table style="width:100%;border-collapse:collapse;font-size:12px">
-                <thead><tr style="background:var(--bg-subtle)">${t.parent ? '<th style="text-align:left;padding:5px 8px;color:#86868b;font-weight:600">Unit</th><th style="text-align:left;padding:5px 8px;color:#86868b;font-weight:600">Serial</th>' : ''}<th style="text-align:left;padding:5px 8px;color:#86868b;font-weight:600">Key</th><th></th></tr></thead>
-                <tbody>${shown.map(r => `<tr style="border-top:1px solid var(--border-light);${r.issue ? 'background:#fef2f2' : ''}">
-                    ${t.parent ? `<td style="padding:4px 8px;white-space:nowrap">${r.unit === null ? (r.sn === 'All units' ? 'All' : '—') : `Unit ${r.unit + 1}`}</td><td style="padding:4px 8px;font-family:ui-monospace,Menlo,monospace">${esc(r.sn)}</td>` : ''}
-                    <td style="padding:4px 8px;font-family:ui-monospace,Menlo,monospace">${esc(r.key)}</td>
-                    <td style="padding:4px 8px;color:#dc2626">${esc(r.issue)}</td></tr>`).join('')}</tbody>
+                <thead><tr style="background:var(--bg-subtle)"><th style="text-align:left;padding:5px 8px;color:#86868b;font-weight:600">Key</th></tr></thead>
+                <tbody>${shown.map(k => `<tr style="border-top:1px solid var(--border-light);${k.key.length > ORDER_TEXT_MAX ? 'background:#fef2f2' : ''}">
+                    <td style="padding:4px 8px;font-family:ui-monospace,Menlo,monospace;word-break:break-all">${esc(k.key)}</td></tr>`).join('')}</tbody>
             </table></div>
-            ${plan.rows.length > shown.length ? `<div style="font-size:11.5px;color:#86868b;margin-top:4px">and ${plan.rows.length - shown.length} more rows</div>` : ''}` : ''}
+        ${plan.keys.length > shown.length ? `<div style="font-size:11.5px;color:#86868b;margin-top:4px">and ${plan.keys.length - shown.length} more rows</div>` : ''}
         ${plan.errors.map(e => `<div style="font-size:12px;color:#dc2626;margin-top:6px">${esc(e)}</div>`).join('')}
-        ${plan.notes.map(n => `<div style="font-size:12px;color:#b45309;margin-top:6px">${esc(n)}</div>`).join('')}
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
             ${cancel}
-            <button class="btn-primary text-xs" ${plan.errors.length || !plan.keys.length ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''} onclick="applyLicensePaste('${ref}')">Apply ${plan.keys.length} key${plan.keys.length === 1 ? '' : 's'}</button>
+            <button class="btn-primary text-xs" ${plan.errors.length ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''} onclick="applyLicensePaste('${ref}')">Apply ${plan.keys.length} key${plan.keys.length === 1 ? '' : 's'}</button>
         </div>`;
 }
 
@@ -6705,13 +6723,13 @@ function renderLicensePastePreview(ref) {
 
 function openLicensePaste(ref) {
     const t = licensePasteTarget(ref);
-    t.state._kp = { open: true, text: '', mode: 'order' };
+    t.state._kp = { open: true, text: '' };
     t.rerender();
 }
 
 function applyLicensePaste(ref) {
     const t = licensePasteTarget(ref);
-    const plan = planLicensePaste(t.state._kp.text, t.parent, t.state._kp.mode || 'order');
+    const plan = planLicensePaste(t.state._kp.text);
     if (plan.errors.length || !plan.keys.length) return;
     t.apply(plan.keys);
     t.state._kp = { open: false };
@@ -6720,7 +6738,7 @@ function applyLicensePaste(ref) {
 }
 
 // ── Adjust license (confirmed orders) ──
-// Keys get reissued, renewed or rebound after an order is confirmed. Only the
+// Keys get reissued or renewed after an order is confirmed. Only the
 // SW line's license fields are editable here; the rest of the order stays
 // locked, and every change lands in the Activity Log with before → after.
 
@@ -6734,7 +6752,7 @@ function showLicenseAdjustModal(lineId) {
         lineId,
         supplier_name: line.supplier_name || '', version: line.version || '',
         license_start: line.license_start || '', license_end: line.license_end || '',
-        license_keys: (line.license_keys || []).map(lk => ({ ...lk })),
+        license_keys: (line.license_keys || []).map(lk => ({ key: lk.key })),
     };
     renderLicenseAdjustModal();
 }
@@ -6743,21 +6761,25 @@ function renderLicenseAdjustModal() {
     const d = licenseDraft;
     const line = ORDER_LINES.find(l => l.id === d.lineId);
     const order = getOrderById(line.order_id);
-    const parent = line.parent_line_id ? ORDER_LINES.find(x => x.id === line.parent_line_id) : null;
-    const input = (label, key, type = 'text', placeholder = '', anchor = key) => `
+    const text = (label, key, placeholder, max) => `
         <div>
             <label class="field-label">${label}</label>
-            <input type="${type}" class="input-field" data-err="la-${anchor}" value="${esc(d[key])}" ${placeholder ? `placeholder="${esc(placeholder)}"` : ''} oninput="licenseDraft.${key}=this.value">
+            ${ordInput({ attrs: `data-err="la-${key}" placeholder="${esc(placeholder)}"`, oninput: `licenseDraft.${key}=this.value`, value: d[key], max })}
+        </div>`;
+    const date = (label, key, anchor) => `
+        <div>
+            <label class="field-label">${label}</label>
+            <input type="date" class="input-field" data-err="la-${anchor}" value="${esc(d[key])}" oninput="licenseDraft.${key}=this.value">
         </div>`;
     showModal(`
         <div style="padding:26px 28px;max-height:82vh;overflow-y:auto">
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Adjust license · ${esc(line.product_name)}</h3>
-            <p style="font-size:13px;color:#86868b;margin:0 0 18px;line-height:1.6">${esc(order.order_no)} · line ${line.line_no}${parent ? ` · bundled with ${esc(parent.product_name)}` : ''}. Every change is recorded in the Activity Log.</p>
+            <p style="font-size:13px;color:#86868b;margin:0 0 18px;line-height:1.6">${esc(order.order_no)} · line ${line.line_no}. Every change is recorded in the Activity Log.</p>
             <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px">
-                ${input('Supplier', 'supplier_name', 'text', order.sw_supplier_name || 'Order SW supplier')}
-                ${input('Version', 'version', 'text', 'e.g. 4.1.0')}
-                ${input('License Start', 'license_start', 'date', '', 'ls')}
-                ${input('License End', 'license_end', 'date', '', 'le')}
+                ${text('Supplier', 'supplier_name', order.sw_supplier_name || 'Order SW supplier', ORDER_TEXT_MAX)}
+                ${text('Version', 'version', 'e.g. 4.1.0', ORDER_VERSION_MAX)}
+                ${date('License Start', 'license_start', 'ls')}
+                ${date('License End', 'license_end', 'le')}
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:14px">
                 <label class="field-label" style="margin:0">License Keys (${d.license_keys.length})</label>
@@ -6766,17 +6788,14 @@ function renderLicenseAdjustModal() {
             ${licensePastePanel('adjust')}
             <div data-err="la-keys" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
                 ${(d.license_keys.length > BULK_COLLAPSE_AT && !d._keysShowAll ? d.license_keys.slice(0, BULK_COLLAPSED_ROWS) : d.license_keys).map((lk, ki) => `
-                <div style="display:flex;align-items:center;gap:10px">
-                    <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0">Key ${ki + 1}</span>
-                    <input type="text" class="input-field" data-req data-key="la-${ki}" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="License key"
-                           value="${esc(lk.key)}" oninput="licenseDraft.license_keys[${ki}].key=this.value">
-                    ${parent ? `<select class="input-field" data-unit="la-${ki}" style="width:230px;flex-shrink:0"
-                           onchange="licenseDraft.license_keys[${ki}].unit=this.value===''?null:Number(this.value)">${ordUnitOptions(parent, lk.unit)}</select>` : ''}
-                    ${d.license_keys.length > 1 ? `<button onclick="licenseDraft.license_keys.splice(${ki},1);renderLicenseAdjustModal()" class="btn-ghost" title="Remove key"><i class="ph ph-x"></i></button>` : ''}
+                <div style="display:flex;align-items:flex-start;gap:10px">
+                    <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0;padding-top:12px">Key ${ki + 1}</span>
+                    ${ordInput({ attrs: `data-req data-key="la-${ki}" placeholder="License key"`, oninput: `licenseDraft.license_keys[${ki}].key=this.value`, value: lk.key, style: 'font-family:ui-monospace,SFMono-Regular,Menlo,monospace' })}
+                    ${d.license_keys.length > 1 ? `<button onclick="adjustRemoveKey(${ki})" class="btn-ghost" style="margin-top:6px" title="Remove key"><i class="ph ph-x"></i></button>` : ''}
                 </div>`).join('')}
                 ${d.license_keys.length > BULK_COLLAPSE_AT && !d._keysShowAll ? bulkMoreButton(d.license_keys.length, BULK_COLLAPSED_ROWS, 'licenseDraft._keysShowAll=true;renderLicenseAdjustModal()') : ''}
             </div>
-            <button onclick="licenseDraft.license_keys.push({ key: '', unit: null });renderLicenseAdjustModal()" class="btn-secondary text-xs" style="margin-top:10px"><i class="ph ph-plus"></i> Add Key</button>
+            <button onclick="licenseDraft.license_keys.push({ key: '' });renderLicenseAdjustModal()" class="btn-secondary text-xs" style="margin-top:10px"><i class="ph ph-plus"></i> Add Key</button>
             <p id="la-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin-top:12px"></p>
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
                 <button onclick="licenseDraft=null;showOrderDetail('${order.id}')" class="btn-secondary text-xs">Cancel</button>
@@ -6785,26 +6804,40 @@ function renderLicenseAdjustModal() {
         </div>`, true);
 }
 
+// A key a ticket was opened on cannot be removed (SA V2 4.5.5 Adjust license 編號 6).
+function adjustRemoveKey(ki) {
+    const rest = licenseDraft.license_keys.filter((_, x) => x !== ki);
+    const blocked = removedTicketedKeys(licenseDraft.lineId, rest)[0];
+    if (blocked) { showToast(blocked, 'error'); return; }
+    licenseDraft.license_keys = rest;
+    renderLicenseAdjustModal();
+}
+
 function saveLicenseAdjustment() {
     const d = licenseDraft;
     const line = ORDER_LINES.find(l => l.id === d.lineId);
     const order = getOrderById(line.order_id);
-    const parent = line.parent_line_id ? ORDER_LINES.find(x => x.id === line.parent_line_id) : null;
+    if (order.status !== 'CONFIRMED') {
+        showFormErrors([formErr(`${order.order_no} is now ${orderStatusWord(order.status)}. Reload to see the latest.`)], 'la-error');
+        return;
+    }
     const next = {
         supplier_name: d.supplier_name.trim(), version: d.version.trim(),
         license_start: d.license_start, license_end: d.license_end,
-        license_keys: d.license_keys.map(lk => ({ key: lk.key.trim(), unit: parent ? lk.unit : null })),
+        license_keys: d.license_keys.map(lk => ({ key: lk.key.trim() })),
     };
     const errors = [];
     if (!next.supplier_name && !order.sw_supplier_name) errors.push(fieldErr('[data-err="la-supplier_name"]', 'Supplier is required because the order has no SW supplier.'));
     if (!next.license_start) errors.push(fieldErr('[data-err="la-ls"]', 'Please select License Start.'));
     if (!next.license_end) errors.push(fieldErr('[data-err="la-le"]', 'Please select License End.'));
     if (next.license_keys.some(lk => !lk.key)) errors.push(fieldErr('[data-err="la-keys"]', 'Every key row needs a key.'));
-    errors.push(...licenseLineErrors(next, 'la', parent));
+    errors.push(...licenseLineErrors(next, 'la'));
     errors.push(...licenseKeyDuplicateErrors(getOrderLines(order.id).map(l => l.id === line.id ? next : l), l => (l === next ? 'la' : null)));
     if (showFormErrors(errors, 'la-error')) return;
+    const blocked = removedTicketedKeys(line.id, next.license_keys)[0];
+    if (blocked) { showToast(blocked, 'error'); return; }
 
-    const keyList = keys => keys.map(lk => `${lk.key}${parent ? ` (${licenseUnitLabel(parent, lk.unit)})` : ''}`).join(', ') || '—';
+    const keyList = keys => keys.map(lk => lk.key).join(', ') || '—';
     const changes = [
         ['supplier', line.supplier_name || '', next.supplier_name],
         ['version', line.version || '', next.version],
@@ -6829,12 +6862,29 @@ function saveLicenseAdjustment() {
 }
 
 function saveOrder(status) {
+    const errEl = document.getElementById('ord-att-error');
+    if (errEl) errEl.textContent = '';
     if (showFormErrors(validateOrderDraft(status), 'ord-error')) return;
 
     const d = orderDraft;
     const isNew = !d.id;
-    const now = new Date().toISOString();
     const prev = isNew ? null : getOrderById(d.id);
+    // An untouched form closes without a log entry or a toast (SA V2 4.5.3).
+    if (!isNew && status === prev.status && orderDraftFingerprint(d) === d._fingerprint) {
+        closeModal();
+        orderDraft = null;
+        return;
+    }
+    // Keys a ticket was opened on stay on their line.
+    if (!isNew) {
+        const blocked = getOrderLines(d.id).flatMap(saved => {
+            const line = d.lines.find(x => x.id === saved.id);
+            return removedTicketedKeys(saved.id, line && line.scope === 'SW' ? line.license_keys : []);
+        })[0];
+        if (blocked) { showToast(blocked, 'error'); return; }
+    }
+
+    const now = new Date().toISOString();
     const customerOrg = getOrgById(d.customer_org_id);
     const ok = commitPortalMutation(() => {
         const record = {
@@ -6847,9 +6897,11 @@ function saveOrder(status) {
             sales_contact: d.sales_contact, order_date: d.order_date,
             status, notes: d.notes,
             attachments: d.attachments || [],
-            // Whoever creates the order is its initiator (SA V2 D45).
+            // Whoever creates the order is its initiator (SA V2 D45); data
+            // written straight into the store has none and reads as System.
             created_by: isNew ? (actingUser()?.id || currentUser?.id || null) : (prev?.created_by ?? null),
             created_at: d.created_at || now, updated_at: now,
+            confirmed_at: status === 'CONFIRMED' ? (prev?.confirmed_at || now) : null,
         };
         const idx = ORDERS.findIndex(o => o.id === record.id);
         if (idx >= 0) ORDERS[idx] = record; else ORDERS.push(record);
@@ -6866,14 +6918,22 @@ function saveOrder(status) {
             warranty_months: l.scope === 'HW' && parseInt(l.warranty_months, 10) >= 1 ? parseInt(l.warranty_months, 10) : null,
             delivered_dates: l.scope === 'HW' ? l.serial_nos.map((_, u) => l.delivered_dates?.[u] || '') : [],
             warranty_starts: l.scope === 'HW' ? l.serial_nos.map((_, u) => l.warranty_starts?.[u] || '') : [],
-            parent_line_id: l.scope === 'SW' ? (l.parent_line_id || null) : null,
             supplier_name: l.scope === 'SW' ? (l.supplier_name || '') : '',
-            license_keys: l.scope === 'SW' ? l.license_keys.map(lk => ({ key: lk.key.trim(), unit: l.parent_line_id ? lk.unit : null })) : [],
+            license_keys: l.scope === 'SW' ? l.license_keys.map(lk => ({ key: lk.key.trim() })) : [],
             version: l.scope === 'SW' ? l.version : '',
             license_start: l.scope === 'SW' ? l.license_start : '',
             license_end: l.scope === 'SW' ? l.license_end : '',
             notes: l.notes || '',
         }));
+
+        // A confirmed order moved to another customer takes its tickets along
+        // (SA V2 4.5.6).
+        if (prev && prev.customer_org_id !== record.customer_org_id) {
+            TICKETS.filter(t => t.order_id === record.id).forEach(t => {
+                t.customer_org_id = record.customer_org_id;
+                t.customer_name = record.customer_name;
+            });
+        }
 
         logActivity(isNew ? 'Order created' : 'Order updated', record.order_no,
             `${record.customer_name} · ${d.lines.length} line${d.lines.length === 1 ? '' : 's'} · ${status}`);
@@ -6883,7 +6943,7 @@ function saveOrder(status) {
     closeModal();
     orderDraft = null;
     renderOrders();
-    showToast(`${d.order_no} ${status === 'CONFIRMED' ? 'confirmed' : 'saved as draft'}`);
+    showToast(`${d.order_no} ${prev?.status === 'CONFIRMED' ? 'updated' : (status === 'CONFIRMED' ? 'confirmed' : 'saved as draft')}`);
 }
 
 // ── Customer organization (SA V2 4.4.3) ──
@@ -6942,8 +7002,10 @@ function orderCustomerChoices(d) {
         .sort((a, b) => a.name.localeCompare(b.name));
 }
 function orderCustomerLabel(org) {
-    return `${org.name} · ${org.customer_type === 'INDIVIDUAL' ? 'Individual' : 'Enterprise'}${org.status === 'active' ? '' : ' (Inactive)'}`;
+    const kind = org.customer_type === 'INDIVIDUAL' ? `Individual${org.contact_email ? ` · ${org.contact_email}` : ''}` : 'Enterprise';
+    return `${org.name} · ${kind}${org.status === 'active' ? '' : ' (Inactive)'}`;
 }
+
 function orderCustomerField(d) {
     return `<div>
         <label class="field-label" for="ord-customer">Customer <span class="req">*</span></label>
@@ -6993,7 +7055,7 @@ function showOrderDetail(id) {
                 ${row('SW supplier', esc(o.sw_supplier_name || '—'))}
                 ${row('System integrator', esc(o.si_name || '—'))}
                 ${row('Sales contact', esc(o.sales_contact || '—'))}
-                ${row('Created by', esc(USERS.find(u => u.id === o.created_by)?.name || 'Unknown'))}
+                ${isCustomerView() ? '' : row('Created by', esc(USERS.find(u => u.id === o.created_by)?.name || 'System'))}
                 ${o.notes ? row('Notes', esc(o.notes)) : ''}
             </div>
 
@@ -7001,10 +7063,10 @@ function showOrderDetail(id) {
 
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b;margin:20px 0 8px">Order Lines</div>
             ${lines.map(l => {
-                const parent = l.parent_line_id ? lines.find(x => x.id === l.parent_line_id) : null;
+                // Tickets on the line, counted only for a reader who can see tickets (SA V2 4.5.5).
+                const lineTickets = canViewTickets() ? getLineTickets(l.id).filter(canSeeTicket) : [];
                 return `
             <div style="border:1px solid var(--border-light);border-radius:10px;padding:12px 14px;margin-bottom:10px">
-                ${parent ? `<div style="font-size:11.5px;color:#86868b;margin-bottom:6px"><i class="ph ph-arrow-elbow-down-right"></i> Bundled with line ${parent.line_no} · ${esc(parent.product_name)}</div>` : ''}
                 <div style="display:flex;align-items:center;gap:10px">
                     <span class="badge ${l.scope === 'HW' ? 'badge-hw' : 'badge-sw'}">${l.scope}</span>
                     <span style="font-size:13px;font-weight:600;color:#1d1d1f">${esc(l.product_name)}</span>
@@ -7015,7 +7077,7 @@ function showOrderDetail(id) {
                         ${o.status === 'CONFIRMED' && canCreateTickets() ? `<button onclick="closeModal();showTicketCreateModal({ lineId: '${l.id}' })" class="btn-secondary text-xs" style="padding:4px 10px" title="Open a service ticket on this line"><i class="ph ph-headset"></i> Open ticket</button>` : ''}
                     </span>
                 </div>
-                ${getLineTickets(l.id).length ? `<div style="font-size:12px;color:#86868b;margin-top:6px"><i class="ph ph-ticket"></i> ${getLineTickets(l.id).length} ticket${getLineTickets(l.id).length === 1 ? '' : 's'} on this line · <a href="#" onclick="event.preventDefault();closeModal();openServiceDeskForOrder('${o.id}')" style="color:#1432E6;font-weight:600">view</a></div>` : ''}
+                ${lineTickets.length ? `<div style="font-size:12px;color:#86868b;margin-top:6px"><i class="ph ph-ticket"></i> ${lineTickets.length} ticket${lineTickets.length === 1 ? '' : 's'} on this line · <a href="#" onclick="event.preventDefault();closeModal();openServiceDeskForOrder('${o.id}')" style="color:#1432E6;font-weight:600">view</a></div>` : ''}
                 ${l.scope === 'SW' && (l.license_start || l.license_end || l.supplier_name) ? `
                 <div style="font-size:12.5px;color:#86868b;margin-top:6px">${l.license_start || l.license_end ? `License ${esc(l.license_start || '?')} → ${esc(l.license_end || '?')}` : ''}${l.supplier_name ? `${l.license_start || l.license_end ? ' · ' : ''}Supplier ${esc(l.supplier_name)}` : ''}</div>` : ''}
                 ${l.scope === 'HW' && l.warranty_months ? `
@@ -7024,7 +7086,7 @@ function showOrderDetail(id) {
                 <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
                     ${l.license_keys.map(lk => `<span style="display:inline-flex;align-items:center;gap:6px">${lk.key
                         ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(lk.key)}</span>`
-                        : '<span class="badge badge-amber">Key missing</span>'}${parent ? `<span style="font-size:11.5px;color:#86868b">→ ${esc(licenseUnitLabel(parent, lk.unit))}</span>` : ''}</span>`).join('')}
+                        : '<span class="badge badge-amber">Key missing</span>'}</span>`).join('')}
                 </div>` : ''}
                 ${l.scope === 'SW' && o.status === 'CONFIRMED' && canUpdateOrders() ? `
                 <div style="margin-top:8px"><button onclick="showLicenseAdjustModal('${l.id}')" class="btn-secondary text-xs" style="padding:4px 10px"><i class="ph ph-key"></i> Adjust license</button></div>` : ''}
@@ -7038,7 +7100,7 @@ function showOrderDetail(id) {
                                 ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(sn)}</span>`
                                 : '<span class="badge badge-amber">Serial missing</span>'}</td>
                             <td style="font-size:12.5px;padding:3px 10px 3px 0">${esc(l.delivered_dates?.[u] || '—')}</td>
-                            <td style="font-size:12.5px;padding:3px 0">${l.warranty_starts?.[u] ? `${esc(l.warranty_starts[u])} → ${esc(unitWarrantyEnd(l, u) || '?')}` : '<span style="color:#86868b">Not set</span>'}</td>
+                            <td style="font-size:12.5px;padding:3px 0">${l.warranty_starts?.[u] ? `${esc(l.warranty_starts[u])} → ${unitWarrantyEnd(l, u) ? esc(unitWarrantyEnd(l, u)) : '<span style="color:#86868b">Not set</span>'}` : '<span style="color:#86868b">Not set</span>'}</td>
                         </tr>`).join('')}</tbody>
                 </table>
                 ${o.status === 'CONFIRMED' && canUpdateOrders() ? `<div style="margin-top:8px"><button onclick="showDeliveryModal('${l.id}')" class="btn-secondary text-xs" style="padding:4px 10px"><i class="ph ph-truck"></i> Delivery &amp; warranty</button></div>` : ''}` : ''}
@@ -7066,7 +7128,7 @@ function showOrderDetail(id) {
             }).join('')}
 
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px;flex-wrap:wrap">
-                ${o.status === 'DRAFT' && canUpdateOrders() ? `<button onclick="closeModal();showOrderModal('${o.id}')" class="btn-secondary text-xs"><i class="ph ph-pencil-simple"></i> Edit</button>` : ''}
+                ${orderEditable(o) && canUpdateOrders() ? `<button onclick="closeModal();showOrderModal('${o.id}')" class="btn-secondary text-xs"><i class="ph ph-pencil-simple"></i> Edit</button>` : ''}
                 ${o.status !== 'CANCELLED' && canUpdateOrders() ? `<button onclick="confirmCancelOrder('${o.id}')" class="btn-secondary text-xs"><i class="ph ph-x-circle"></i> Cancel order</button>` : ''}
                 <button onclick="closeModal()" class="btn-primary text-xs">Close</button>
             </div>
@@ -8941,47 +9003,18 @@ function ticketEntitlementCard(snap, serialNo) {
             ${snap.sla_plan ? `<span class="badge badge-blue">SLA ${esc(snap.sla_plan)}</span>` : ''}
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:8px;font-size:12.5px">
-            <div><span style="color:#86868b">${snap.coverage_kind === 'license' ? 'License key' : 'Serial'}</span><div style="margin-top:2px"><span class="tk-mono">${esc(serialNo || snap.license_key || '—')}</span></div>
-                ${snap.license_units ? `<div style="font-size:11.5px;color:#86868b;margin-top:2px">${esc(snap.license_units)}</div>` : ''}</div>
+            <div><span style="color:#86868b">${snap.coverage_kind === 'license' ? 'License key' : 'Serial'}</span><div style="margin-top:2px"><span class="tk-mono">${esc(serialNo || snap.license_key || '—')}</span></div></div>
             <div><span style="color:#86868b">Expires</span><div style="margin-top:2px;font-weight:600">${esc(snap.coverage_end || '—')}</div></div>
             <div><span style="color:#86868b">Supplier</span><div style="margin-top:2px;font-weight:600">${esc(snap.supplier_name || '—')}</div></div>
             <div><span style="color:#86868b">System integrator</span><div style="margin-top:2px;font-weight:600">${esc(snap.si_name || '—')}</div></div>
         </div>
-        ${(snap.licenses || []).length ? `
-        <div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.06);font-size:12.5px">
-            <span style="color:#86868b">Licenses on this unit</span>
-            ${snap.licenses.map(lc => `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px">
-                <span style="font-weight:600">${esc(lc.product_name)}</span><span class="tk-mono">${esc(lc.license_key)}</span>
-                <span style="color:#86868b">${lc.all_units ? 'all units · ' : ''}to ${esc(lc.license_end || '—')}</span>
-            </div>`).join('')}
-        </div>` : ''}
     </div>`;
 }
 
-// Licenses bundled with a hardware unit: keys bound to that unit plus keys
-// bound to all units of the line.
-function unitLicenses(hwLine, serialNo) {
-    const unit = (hwLine.serial_nos || []).indexOf(serialNo);
-    if (unit < 0) return [];
-    return ORDER_LINES.filter(l => l.parent_line_id === hwLine.id).flatMap(l => (l.license_keys || [])
-        .filter(lk => lk.key && (lk.unit === null || lk.unit === unit))
-        .map(lk => ({
-            product_name: l.product_name + (l.version ? ` v${l.version}` : ''),
-            license_key: lk.key, all_units: lk.unit === null, license_end: l.license_end || '',
-        })));
-}
 
-// The distinct keys on a SW line, each with the units it is bound to, so a
-// ticket can name the key it is about. A key shared by several units is one
-// choice; "All units" and unbundled lines carry no unit label.
+// The distinct keys on a SW line, so a ticket can name the key it is about.
 function lineLicenseChoices(line) {
-    const parent = line.parent_line_id ? ORDER_LINES.find(l => l.id === line.parent_line_id) : null;
-    const byKey = new Map();
-    (line.license_keys || []).filter(lk => lk.key).forEach(lk => {
-        if (!byKey.has(lk.key)) byKey.set(lk.key, []);
-        if (parent) byKey.get(lk.key).push(licenseUnitLabel(parent, lk.unit));
-    });
-    return [...byKey].map(([key, units]) => ({ key, units: units.join(', ') }));
+    return [...new Set((line.license_keys || []).map(lk => lk.key).filter(Boolean))].map(key => ({ key, units: '' }));
 }
 
 // Build the snapshot a ticket keeps from the order + line (+ serial or key) it points at.
@@ -8999,8 +9032,6 @@ function buildTicketSnapshot(order, line, serialNo = '', licenseKey = '') {
         supplier_name: isSw ? (line.supplier_name || order.sw_supplier_name || '') : (order.hw_supplier_name || ''),
         si_name: order.si_name || '',
         license_key: keyChoice?.key || '',
-        license_units: keyChoice?.units || '',
-        licenses: !isSw && serialNo ? unitLicenses(line, serialNo) : [],
     };
 }
 
@@ -9573,21 +9604,22 @@ function readFileAsDataUrl(file) {
 // Validate and read a FileList; returns what could be added plus the first error.
 async function readTicketAttachments(fileList, existing, maxCount = TICKET_ATTACHMENT_MAX_COUNT) {
     const added = [];
-    let error = '';
+    const errors = [];
     for (const file of Array.from(fileList || [])) {
-        if (existing.length + added.length >= maxCount) { error = `You can attach up to ${maxCount} files.`; break; }
+        if (existing.length + added.length >= maxCount) { errors.push(`You can attach up to ${maxCount} files.`); break; }
         const kind = ticketAttachmentKind(file);
-        if (!kind) { error = `${file.name}: unsupported file type.`; continue; }
-        if (file.size > TICKET_ATTACHMENT_MAX_BYTES) { error = `${file.name} exceeds the 5 MB limit.`; continue; }
-        if (kind === 'file' && file.size > TICKET_ATTACHMENT_STORE_BYTES) { error = `${file.name}: files other than images must be under 500 KB in this prototype.`; continue; }
+        if (!kind) { errors.push(`${file.name}: unsupported file type.`); continue; }
+        if (file.size > TICKET_ATTACHMENT_MAX_BYTES) { errors.push(`${file.name} exceeds the 5 MB limit.`); continue; }
+        if (kind === 'file' && file.size > TICKET_ATTACHMENT_STORE_BYTES) { errors.push(`${file.name}: files other than images must be under 500 KB in this prototype.`); continue; }
         try {
             const data_url = kind === 'image' ? await Store.compressImage(file) : await readFileAsDataUrl(file);
             added.push({ id: `att-${Date.now()}-${added.length}`, name: file.name, type: file.type || '', size: file.size, is_image: kind === 'image', data_url });
         } catch (e) {
-            error = `${file.name} could not be read.`;
+            errors.push(`${file.name} could not be read.`);
         }
     }
-    return { added, error };
+    // Callers that show one line take the last; order documents list them all.
+    return { added, error: errors[errors.length - 1] || '', errors };
 }
 
 function setTicketAttachmentError(msg) {

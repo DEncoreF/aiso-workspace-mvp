@@ -560,7 +560,7 @@ let ORDERS = [
         attachments: [{ id: 'att-seed-ord-0001', name: 'PO-2026-0001-signed.txt', type: 'text/plain', size: 42, is_image: false, doc_type: 'PO',
             data_url: 'data:text/plain;base64,UE8tMjAyNi0wMDAxIC0gc2lnbmVkIHB1cmNoYXNlIG9yZGVyIChkZW1vKQ==' }],
         created_by: 'u-root',
-        created_at: '2026-07-30T09:00:00.000Z', updated_at: '2026-08-02T10:00:00.000Z',
+        created_at: '2026-07-30T09:00:00.000Z', updated_at: '2026-08-02T10:00:00.000Z', confirmed_at: '2026-08-02T10:00:00.000Z',
     },
     {
         id: 'ord-0002',
@@ -592,7 +592,7 @@ let ORDERS = [
         notes: '',
         attachments: [],
         created_by: 'u-root',
-        created_at: '2025-09-01T09:00:00.000Z', updated_at: '2025-09-10T10:00:00.000Z',
+        created_at: '2025-09-01T09:00:00.000Z', updated_at: '2025-09-10T10:00:00.000Z', confirmed_at: '2025-09-10T10:00:00.000Z',
     },
     {
         id: 'ord-0004', order_no: 'PO-2026-0004', contract_no: '',
@@ -606,7 +606,7 @@ let ORDERS = [
         notes: 'Single-seat purchase by an individual customer.',
         attachments: [],
         created_by: 'u-root',
-        created_at: '2026-05-04T09:00:00.000Z', updated_at: '2026-05-04T09:00:00.000Z',
+        created_at: '2026-05-04T09:00:00.000Z', updated_at: '2026-05-04T09:00:00.000Z', confirmed_at: '2026-05-04T09:00:00.000Z',
     },
 ];
 
@@ -632,9 +632,8 @@ const ORDER_SLA_PLAN_OPTIONS = ['5x8', '7x24', 'On-site'];
 // One serial per unit: serial_nos.length tracks qty, and a CONFIRMED order
 // requires every HW serial filled in. The BOM applies to every unit in the
 // line — a different configuration is a separate line.
-// A SW line with parent_line_id is bundled with that HW line; each license
-// key binds to one of its units by index (unit: null = all units), so the
-// binding survives serials that are still blank or get corrected later.
+// A SW line stands on its own: Qty is the number of licenses and each
+// license key is one row (SA V2.48 dropped binding keys to HW units).
 let ORDER_LINES = [
     {
         id: 'ol-0001', order_id: 'ord-0001', line_no: 1, scope: 'HW',
@@ -654,12 +653,12 @@ let ORDER_LINES = [
     },
     {
         id: 'ol-0002', order_id: 'ord-0001', line_no: 2, scope: 'SW',
-        parent_line_id: 'ol-0001', supplier_name: '',
+        supplier_name: '',
         product_id: 'sw1', product_name: 'digiRunner', qty: 2, sla_plan: '5x8',
         serial_nos: [], bom: [],
         license_keys: [
-            { key: 'DGRN-4A7K-92MF-XT01', unit: 0 },
-            { key: 'DGRN-4A7K-92MF-XT02', unit: 1 },
+            { key: 'DGRN-4A7K-92MF-XT01' },
+            { key: 'DGRN-4A7K-92MF-XT02' },
         ], version: '3.8.2',
         license_start: '2026-08-01', license_end: '2027-07-31',
         notes: '',
@@ -690,8 +689,8 @@ let ORDER_LINES = [
         id: 'ol-0005', order_id: 'ord-0004', line_no: 1, scope: 'SW',
         product_id: null, product_name: 'digiRunner Lite', qty: 1, sla_plan: '5x8',
         warranty_months: null, delivered_dates: [], warranty_starts: [],
-        parent_line_id: null, supplier_name: '',
-        license_keys: [{ key: 'DGRL-7722-QW18-MK04', unit: null }], version: '3.8.2', license_start: '2026-05-04', license_end: '2027-05-03',
+        supplier_name: '',
+        license_keys: [{ key: 'DGRL-7722-QW18-MK04' }], version: '3.8.2', license_start: '2026-05-04', license_end: '2027-05-03',
         serial_nos: [],
         bom: [],
         notes: '',
@@ -768,7 +767,7 @@ let TICKETS = [
         channel: 'Workspace', reported_by: 'Tom Baker · tom@megabank.com',
         snapshot: { order_no: 'PO-2026-0001', line_no: 2, product_name: 'digiRunner', sla_plan: '5x8',
                     coverage_kind: 'license', coverage_end: '2027-07-31', supplier_name: 'TPIsoftware Corporation', si_name: 'Systex Corporation',
-                    license_key: 'DGRN-4A7K-92MF-XT02', license_units: 'Unit 2 · GBT-2026-0772' },
+                    license_key: 'DGRN-4A7K-92MF-XT02' },
         created_at: '2026-09-04T03:20:00.000Z', updated_at: '2026-09-07T01:05:00.000Z',
         first_response_at: '2026-09-04T05:10:00.000Z', resolved_at: null,
     },
@@ -781,8 +780,7 @@ let TICKETS = [
         category: 'Hardware Failure', priority: 'LOW', status: 'OPEN',
         channel: 'Phone', reported_by: 'Amy Zhang · amy@megabank.com',
         snapshot: { order_no: 'PO-2026-0001', line_no: 1, product_name: 'GIGABYTE Workstation', sla_plan: '7x24',
-                    coverage_kind: 'warranty', coverage_end: '2029-08-04', supplier_name: 'Phison Electronics', si_name: 'Systex Corporation', license_key: '',
-                    licenses: [{ product_name: 'digiRunner v3.8.2', license_key: 'DGRN-4A7K-92MF-XT02', all_units: false, license_end: '2027-07-31' }] },
+                    coverage_kind: 'warranty', coverage_end: '2029-08-04', supplier_name: 'Phison Electronics', si_name: 'Systex Corporation', license_key: '' },
         created_at: '2026-09-07T08:00:00.000Z', updated_at: '2026-09-07T08:00:00.000Z',
         first_response_at: null, resolved_at: null,
     },
