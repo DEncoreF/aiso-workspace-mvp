@@ -5817,6 +5817,14 @@ function ordInput({ attrs = '', oninput = '', value = '', max = ORDER_TEXT_MAX, 
     </div>`;
 }
 
+function ordTextArea({ attrs = '', oninput = '', value = '', max = 4000 }) {
+    const v = String(value ?? '');
+    return `<div>
+        <textarea class="input-field" maxlength="${max}" ${attrs} oninput="this.parentElement.querySelector('.ord-count').textContent=this.value.length+'/${max}';${oninput}">${esc(v)}</textarea>
+        <div class="ord-count field-hint" style="text-align:right;margin-top:2px">${v.length}/${max}</div>
+    </div>`;
+}
+
 // A confirm stacked over an open form, so the form keeps what was typed.
 let stackedConfirmAction = null;
 function showStackedConfirm({ title, body, cancelLabel = 'Cancel', confirmLabel, onConfirm, onCancel = null }) {
@@ -6304,7 +6312,7 @@ const ORDER_DOC_TYPES = [
     { key: 'OTHER', label: 'Other' },
 ];
 const ORDER_DOC_MAX_COUNT = 10;
-const ORDER_DOC_HINT = 'Pick a type for each file. PNG, JPG, PDF, TXT, LOG, CSV or JSON; up to 10 files; images up to 5 MB, other files up to 500 KB.';
+const ORDER_DOC_HINT = 'Pick a type for each file. PNG, JPG, PDF, TXT, LOG, CSV or JSON; up to 10 files, 5 MB each.';
 
 function orderDocTypeLabel(key) { return ORDER_DOC_TYPES.find(t => t.key === key)?.label || 'Unclassified'; }
 
@@ -8844,7 +8852,7 @@ function showReferInternalModal(ticketId) {
                 ${staff.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}
             </select>
             <label class="field-label" for="refer-note" style="margin-top:12px">What to confirm</label>
-            <textarea id="refer-note" class="input-field" style="min-height:72px" maxlength="4000" placeholder="e.g. Check the replacement part before shipping"></textarea>
+            ${ordTextArea({ attrs: 'id="refer-note" style="min-height:72px" placeholder="e.g. Check the replacement part before shipping"' })}
             <div class="field-hint">Goes into the internal note.</div>
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
                 <button onclick="showTicketDetail('${t.id}')" class="btn-secondary text-xs">Cancel</button>
@@ -9326,14 +9334,14 @@ function renderTicketCreateModal() {
                         ${TICKET_CATEGORIES.map(c => `<button class="tk-chip ${c === d.category ? 'active' : ''}" onclick="tkSet('category', '${esc(c)}')">${esc(c)}</button>`).join('')}
                     </div></div>
                 <div style="margin-top:12px"><label class="field-label" for="tk-subject">Subject <span class="req">*</span></label>
-                    <input id="tk-subject" class="input-field" maxlength="120" placeholder="One line the customer would recognise" value="${esc(d.subject)}" oninput="tkSetText('subject', this.value)"></div>
+                    ${ordInput({ attrs: 'id="tk-subject" placeholder="One line the customer would recognise"', oninput: "tkSetText('subject', this.value)", value: d.subject, max: 120 })}</div>
                 <div style="margin-top:12px"><label class="field-label" for="tk-description">Description <span class="req">*</span></label>
-                    <textarea id="tk-description" class="input-field" style="min-height:96px" maxlength="4000" placeholder="What happened, when, what was tried" oninput="tkSetText('description', this.value)">${esc(d.description)}</textarea></div>
+                    ${ordTextArea({ attrs: 'id="tk-description" style="min-height:96px" placeholder="What happened, when, what was tried"', oninput: "tkSetText('description', this.value)", value: d.description })}</div>
                 <div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
                     <div><label class="field-label" for="tk-reported">Reported by: Name</label>
-                        <input id="tk-reported" class="input-field" maxlength="100" placeholder="Customer contact name" value="${esc(d.reported_by)}" ${isCustomerView() ? 'readonly' : `oninput="tkSetText('reported_by', this.value)"`}></div>
+                        ${ordInput({ attrs: `id="tk-reported" placeholder="e.g. Jane Wang" ${isCustomerView() ? 'readonly' : ''}`, oninput: isCustomerView() ? '' : "tkSetText('reported_by', this.value)", value: d.reported_by })}</div>
                     <div><label class="field-label" for="tk-reported-email">Reported by: Email</label>
-                        <input id="tk-reported-email" class="input-field" type="email" maxlength="100" placeholder="name@company.com" value="${esc(d.reported_by_email)}" ${isCustomerView() ? 'readonly' : `oninput="tkSetText('reported_by_email', this.value)"`}></div>
+                        ${ordInput({ attrs: `id="tk-reported-email" placeholder="e.g. name@company.com" ${isCustomerView() ? 'readonly' : ''}`, oninput: isCustomerView() ? '' : "tkSetText('reported_by_email', this.value)", value: d.reported_by_email })}</div>
                 </div>
                 <div style="margin-top:12px"><label class="field-label">Attachments</label>
                     ${ticketAttachmentDropZone('tk-draft-files', "onTicketDraftFiles(this.files)")}
@@ -9487,7 +9495,7 @@ function showTicketDetail(id) {
                         <button class="filter-tab ${ticketReplyMode === 'reply' ? 'active' : ''}" onclick="ticketReplyMode='reply';showTicketDetail('${t.id}')">Reply to customer</button>
                         <button class="filter-tab ${ticketReplyMode === 'note' ? 'active' : ''}" onclick="ticketReplyMode='note';showTicketDetail('${t.id}')">Internal note</button>
                     </div>` : ''}
-                    <textarea id="tk-reply" class="input-field" maxlength="4000" style="min-height:64px;${ticketReplyMode === 'note' ? 'background:#fffbeb;border-color:#fde68a' : ''}" placeholder="${ticketReplyMode === 'note' ? 'Note for the desk only. The customer never sees this.' : (manage ? 'Write a reply to the customer…' : 'Write a message to AISO…')}" oninput="ticketReplyDraft.text=this.value">${esc(reply.text)}</textarea>
+                    ${ordTextArea({ attrs: `id="tk-reply" style="min-height:64px;${ticketReplyMode === 'note' ? 'background:#fffbeb;border-color:#fde68a' : ''}" placeholder="${ticketReplyMode === 'note' ? 'Note for the desk only. The customer never sees this.' : (manage ? 'Write a reply to the customer…' : 'Write a message to AISO…')}"`, oninput: 'ticketReplyDraft.text=this.value', value: reply.text })}
                     ${reply.attachments.length ? `<div class="tk-att-list" style="margin-top:8px">${ticketAttachmentChips(reply.attachments, 'removeTicketReplyAttachment')}</div>` : ''}
                     ${ticketReplyMode === 'note' ? `<div id="tk-notify" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px">
                         <span style="font-size:11.5px;font-weight:600;color:#86868b"><i class="ph ph-bell"></i> Notify</span>
@@ -9658,14 +9666,14 @@ function setTicketStatus(ticketId, status) {
 
 // ── Attachments ──
 // Files live inside the message as data URLs so a ticket survives a reload
-// with no backend. Images are resized by Store.compressImage; other files
-// are kept only while small, since everything has to fit in localStorage.
+// with no backend. Every file may be up to 5 MB (SA V2.50); images are
+// resized by Store.compressImage, and a save that outgrows localStorage
+// fails like any other save.
 
 const TICKET_ATTACHMENT_MAX_COUNT = 5;
 const TICKET_ATTACHMENT_MAX_BYTES = 5 * 1000 * 1000;
-const TICKET_ATTACHMENT_STORE_BYTES = 500 * 1000;
 const TICKET_ATTACHMENT_ACCEPT = '.png,.jpg,.jpeg,.pdf,.txt,.log,.csv,.json';
-const TICKET_ATTACHMENT_HINT = 'PNG, JPG, PDF, TXT, LOG, CSV or JSON. Up to 5 files; images up to 5 MB, other files up to 500 KB.';
+const TICKET_ATTACHMENT_HINT = 'PNG, JPG, PDF, TXT, LOG, CSV or JSON. Up to 5 files, 5 MB each.';
 
 let ticketReplyDraft = { ticketId: null, text: '', attachments: [] };
 
@@ -9705,7 +9713,6 @@ async function readTicketAttachments(fileList, existing, maxCount = TICKET_ATTAC
         const kind = ticketAttachmentKind(file);
         if (!kind) { errors.push({ rank: 1, msg: `${file.name}: unsupported file type.` }); continue; }
         if (file.size > TICKET_ATTACHMENT_MAX_BYTES) { errors.push({ rank: 2, msg: `${file.name} exceeds the 5 MB limit.` }); continue; }
-        if (kind === 'file' && file.size > TICKET_ATTACHMENT_STORE_BYTES) { errors.push({ rank: 2, msg: `${file.name}: files other than images must be under 500 KB in this prototype.` }); continue; }
         try {
             const data_url = kind === 'image' ? await Store.compressImage(file) : await readFileAsDataUrl(file);
             added.push({ id: `att-${Date.now()}-${added.length}`, name: file.name, type: file.type || '', size: file.size, is_image: kind === 'image', data_url });
