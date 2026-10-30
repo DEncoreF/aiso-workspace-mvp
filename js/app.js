@@ -3941,6 +3941,8 @@ const SYSTEM_PARAM_FIELDS = [
       hint: 'Sets the expiry of invitations sent or resent from now on.' },
     { key: 'service_desk_mailbox', label: 'Service desk mailbox', email: true,
       hint: 'Desk emails go here. Leave empty to stop sending them.' },
+    { key: 'auto_close_resolved_days', label: 'Auto-close resolved tickets after', unit: 'days', min: 1, max: 90,
+      hint: 'A ticket still Resolved this long after it last became Resolved closes on its own.' },
     { key: 'first_response_7x24', label: 'First response target (7x24)', unit: 'hours', min: 1, max: 999, sla: '7x24' },
     { key: 'first_response_onsite', label: 'First response target (On-site)', unit: 'hours', min: 1, max: 999, sla: 'On-site' },
     { key: 'first_response_5x8', label: 'First response target (5x8)', unit: 'hours', min: 1, max: 999, sla: '5x8' },
@@ -4240,7 +4242,7 @@ function renderSystemParams() {
             <label class="field-label" for="param-${f.key}">${esc(f.label)}</label>
             ${input(f)}
             ${f.hint ? `<div class="field-hint">${esc(f.hint)}</div>` : ''}
-            ${f.email && !SYSTEM_PARAMETERS.service_desk_mailbox ? '<div class="field-hint" style="color:#b45309"><i class="ph ph-warning"></i> Service desk mailbox is not set. Desk emails are not being sent.</div>' : ''}
+            ${f.email && !SYSTEM_PARAMETERS.service_desk_mailbox ? '<div class="field-hint" style="color:#b45309"><i class="ph ph-warning"></i> Service desk mailbox is not set. Emails to the service desk mailbox are not being sent.</div>' : ''}
         </div>`;
     const fields = key => SYSTEM_PARAM_FIELDS.filter(f => key(f)).map(row).join('');
     host.innerHTML = `
@@ -5824,6 +5826,21 @@ const ORDER_TEXT_MAX = 100;
 const ORDER_VERSION_MAX = 50;
 const ORDER_QTY_MAX = 999;
 const ORD_CLEAR_LINE_BODY = 'The serial numbers, BOM and dates entered for this line will be removed.';
+const ORD_CLEAR_SW_LINE_BODY = 'The license keys, dates and supplier entered for this line will be removed.';
+const ORDER_WARRANTY_MAX = 600;
+const ORDER_LINE_LOCKED = 'Locked because this line has tickets.';
+// A saved line a ticket points at: it stays, with its Scope and Product, and
+// the serials and keys the tickets were opened on are read-only (SA V2 4.5.3).
+function ticketedLine(l) { return !!(orderDraft?.id && l?.id && getLineTickets(l.id).length); }
+function ticketsOnValue(lineId, field, value) {
+    const v = String(value || '').trim().toUpperCase();
+    return v ? (groupTicketsBy(lineId, field).find(g => g.value.toUpperCase() === v)?.tickets || []) : [];
+}
+function orderChangedByOther(orderId, openedAt) {
+    const o = getOrderById(orderId);
+    return !!(o && openedAt !== undefined && (o.updated_at || '') !== (openedAt || ''));
+}
+function orderChangedMessage(o) { return `${o.order_no} was changed by someone else. Reload to see the latest.`; }
 
 // Draft and confirmed orders open in the editor; a confirmed one can only be
 // saved as confirmed again (SA V2 4.5.1).
@@ -5918,6 +5935,7 @@ function showOrderModal(orderId = null, { resume = false } = {}) {
             attachments: [],
         };
         orderDraft._openedStatus = existing?.status || null;
+        orderDraft._openedUpdatedAt = existing ? (existing.updated_at || '') : undefined;
         orderDraft._fingerprint = orderDraftFingerprint(orderDraft);
     }
 
@@ -5986,30 +6004,35 @@ function ordLineCard(l, i) {
     const lines = orderDraft.lines;
     const products = getVisibleProducts(l.scope === 'HW' ? 'hardware' : 'software').filter(p => p.status === 'published');
     const removable = lines.length > 1;
+    const locked = ticketedLine(l);
     const mono = 'font-family:ui-monospace,SFMono-Regular,Menlo,monospace';
     return `
         <div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
                 <span style="font-size:12.5px;font-weight:700;color:#86868b">Line ${i + 1}</span>
                 <span class="badge ${l.scope === 'HW' ? 'badge-hw' : 'badge-sw'}">${l.scope}</span>
-                ${removable ? `<button onclick="ordRemoveLine(${i})" class="btn-ghost" style="margin-left:auto" title="Remove line"><i class="ph ph-trash"></i></button>` : ''}
+                ${removable ? (locked
+                    ? `<button class="btn-ghost" style="margin-left:auto;opacity:.4;cursor:not-allowed" disabled title="${esc(`This line has tickets (${ticketNos(getLineTickets(l.id))}). It cannot be removed.`)}"><i class="ph ph-trash"></i></button>`
+                    : `<button onclick="ordRemoveLine(${i})" class="btn-ghost" style="margin-left:auto" title="Remove line"><i class="ph ph-trash"></i></button>`) : ''}
             </div>
             <div style="display:grid;grid-template-columns:100px 1fr 120px 80px;gap:12px">
                 <div>
                     <label class="field-label">Scope</label>
-                    <select class="input-field" onchange="ordSetScope(${i}, this.value)">
+                    <select class="input-field" onchange="ordSetScope(${i}, this.value)" ${locked ? 'disabled' : ''}>
                         <option value="HW" ${l.scope === 'HW' ? 'selected' : ''}>HW</option>
                         <option value="SW" ${l.scope === 'SW' ? 'selected' : ''}>SW</option>
                     </select>
+                    ${locked ? `<div class="field-hint">${ORDER_LINE_LOCKED}</div>` : ''}
                 </div>
                 <div>
                     <label class="field-label">Product</label>
+                    ${locked ? `<input class="input-field" value="${esc(l.product_name)}" disabled><div class="field-hint">${ORDER_LINE_LOCKED}</div>` : `
                     <select class="input-field" data-err="${i}-product" onchange="ordSetProduct(${i}, this.value)">
                         <option value="">— Select a published product —</option>
                         ${products.map(p => `<option value="${p.id}" ${l.product_id === p.id ? 'selected' : ''}>${esc(p.name)}${p.model ? ` (${esc(p.model)})` : ''}</option>`).join('')}
                         <option value="__custom" ${l.custom_product ? 'selected' : ''}>Other (type a name)</option>
                     </select>
-                    ${l.custom_product ? `<div style="margin-top:8px">${ordInput({ attrs: `data-err="${i}-product-name" placeholder="Product name"`, oninput: `orderDraft.lines[${i}].product_name=this.value.trim()`, value: l.product_name })}</div>` : ''}
+                    ${l.custom_product ? `<div style="margin-top:8px">${ordInput({ attrs: `data-err="${i}-product-name" placeholder="Product name"`, oninput: `orderDraft.lines[${i}].product_name=this.value.trim()`, value: l.product_name })}</div>` : ''}`}
                 </div>
                 <div>
                     <label class="field-label">SLA</label>
@@ -6020,15 +6043,15 @@ function ordLineCard(l, i) {
                 </div>
                 <div>
                     <label class="field-label">Qty</label>
-                    <input type="number" class="input-field" min="1" max="${ORDER_QTY_MAX}" step="1" value="${l.qty}" onchange="ordSetQty(${i}, this.value)">
+                    <input type="number" class="input-field" data-err="${i}-qty" min="1" max="${ORDER_QTY_MAX}" step="1" value="${l.qty}" onchange="ordSetQty(${i}, this.value)">
                 </div>
             </div>
             ${l.scope === 'HW' ? `
             <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-top:12px">
                 <div>
                     <label class="field-label">Warranty (months)</label>
-                    <input type="number" class="input-field" data-err="${i}-warranty" min="1" step="1" placeholder="e.g. 36" value="${esc(l.warranty_months)}"
-                           oninput="orderDraft.lines[${i}].warranty_months=this.value;unitDatesRefreshEnds('${i}')">
+                    <input type="number" class="input-field" data-err="${i}-warranty" min="1" max="${ORDER_WARRANTY_MAX}" step="1" placeholder="e.g. 36" value="${esc(l.warranty_months)}"
+                           oninput="orderDraft.lines[${i}].warranty_months=this.value;unitDatesRefreshEnds('${i}')" onchange="ordFitWarranty(${i}, this)">
                 </div>
                 <div class="field-hint" style="align-self:end">The term is per line. Delivery and warranty start are recorded per unit below, as they actually happen.</div>
             </div>
@@ -6043,7 +6066,10 @@ function ordLineCard(l, i) {
                         return (collapsed ? l.serial_nos.slice(0, BULK_COLLAPSED_ROWS) : l.serial_nos).map((sn, si) => `
                     <div style="display:flex;align-items:flex-start;gap:10px">
                         <span style="font-size:11.5px;font-weight:600;color:#86868b;width:56px;flex-shrink:0;padding-top:12px">Unit ${si + 1}</span>
-                        ${ordInput({ attrs: `data-req data-sn="${i}-${si}" placeholder="Serial number" onkeydown="ordSerialKeydown(event, ${i}, ${si})"`, oninput: `orderDraft.lines[${i}].serial_nos[${si}]=this.value.trim()`, value: sn, style: mono })}
+                        ${(() => { const used = locked ? ticketsOnValue(l.id, 'serial_no', sn) : [];
+                            return used.length
+                                ? `<input class="input-field" style="${mono}" value="${esc(sn)}" readonly data-sn="${i}-${si}" title="${esc(`Serial ${sn} is used by ${ticketNos(used)}. It cannot be changed.`)}">`
+                                : ordInput({ attrs: `data-req data-sn="${i}-${si}" placeholder="Serial number" onkeydown="ordSerialKeydown(event, ${i}, ${si})"`, oninput: `orderDraft.lines[${i}].serial_nos[${si}]=this.value.trim()`, value: sn, style: mono }); })()}
                     </div>`).join('') + (collapsed ? bulkMoreButton(l.serial_nos.length, BULK_COLLAPSED_ROWS, `orderDraft.lines[${i}]._snShowAll=true;renderOrderDraftLines()`) : ''); })()}
                 </div>
                 <div class="field-hint">One serial per unit — the row count follows Qty. Enter moves to the next unit, so a barcode scanner can scan them in a row. Required before the order is confirmed.</div>
@@ -6097,7 +6123,7 @@ function ordLineCard(l, i) {
             </div>
             <div style="margin-top:12px">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-                    <label class="field-label" style="margin:0">License Keys (${l.license_keys.filter(k => k.key).length} of ${l.qty})</label>
+                    <label class="field-label" style="margin:0">License Keys (${l.license_keys.filter(k => k.key.trim()).length} of ${l.qty})</label>
                     ${l._kp?.open ? '' : `<button class="btn-link" style="font-size:12px" onclick="openLicensePaste('${i}')"><i class="ph ph-clipboard-text"></i> Paste keys</button>`}
                 </div>
                 ${licensePastePanel(String(i))}
@@ -6106,10 +6132,11 @@ function ordLineCard(l, i) {
                         return (collapsed ? l.license_keys.slice(0, BULK_COLLAPSED_ROWS) : l.license_keys).map((lk, ki) => `
                     <div style="display:flex;align-items:flex-start;gap:10px">
                         <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0;padding-top:12px">Key ${ki + 1}</span>
-                        ${ordInput({ attrs: `data-req data-key="${i}-${ki}" placeholder="License key"`, oninput: `orderDraft.lines[${i}].license_keys[${ki}].key=this.value.trim()`, value: lk.key, style: mono })}
+                        ${licenseKeyCell(locked ? l.id : null, lk, `data-key="${i}-${ki}"`, `orderDraft.lines[${i}].license_keys[${ki}].key=this.value.trim()`, `ordRemoveKey(${i}, ${ki})`)}
                     </div>`).join('') + (collapsed ? bulkMoreButton(l.license_keys.length, BULK_COLLAPSED_ROWS, `orderDraft.lines[${i}]._keysShowAll=true;renderOrderDraftLines()`) : ''); })()}
                 </div>
-                <div class="field-hint">One key per license — the row count follows Qty. Leave blank when the software has no key.</div>
+                <button onclick="ordAddKey(${i})" class="btn-secondary text-xs" style="margin-top:8px" ${l.license_keys.length >= l.qty ? `disabled title="All ${l.qty} licenses have a key. Raise Qty to add more."` : ''}><i class="ph ph-plus"></i> Add Key</button>
+                <div class="field-hint">Qty is the number of licenses. Add a key per license that has one; leave none when the software has no key.</div>
             </div>`}
         </div>`;
 }
@@ -6120,9 +6147,11 @@ function ordAddLine() {
 }
 
 function ordRemoveLine(i) {
+    const l = orderDraft.lines[i];
+    if (ticketedLine(l)) return;
     const drop = () => { orderDraft.lines.splice(i, 1); renderOrderDraftLines(); };
-    if (!ordLineHasUnitData(orderDraft.lines[i])) { drop(); return; }
-    showStackedConfirm({ title: 'Clear this line?', body: ORD_CLEAR_LINE_BODY, confirmLabel: 'Remove', onConfirm: drop });
+    if (!ordLineHasUnitData(l) && !ordSwLineHasData(l)) { drop(); return; }
+    showStackedConfirm({ title: `Remove line ${i + 1}?`, body: 'The data entered for this line will be removed.', confirmLabel: 'Remove', onConfirm: drop });
 }
 
 // A HW line holding typed serials, BOM or dates asks before it is cleared.
@@ -6130,6 +6159,11 @@ function ordLineHasUnitData(l) {
     return l.scope === 'HW' && ((l.serial_nos || []).some(s => s.trim())
         || (l.bom || []).some(b => b.component_type || b.brand || b.model)
         || (l.delivered_dates || []).some(Boolean) || (l.warranty_starts || []).some(Boolean));
+}
+// Same for a SW line holding keys, license dates, a supplier or a version.
+function ordSwLineHasData(l) {
+    return l.scope === 'SW' && ((l.license_keys || []).some(k => (k.key || '').trim())
+        || !!(l.license_start || l.license_end || l.supplier_name || l.version));
 }
 
 function ordSetScope(i, scope) {
@@ -6143,7 +6177,7 @@ function ordSetScope(i, scope) {
         if (scope === 'SW') {
             l.serial_nos = []; l.bom = [];
             l.warranty_months = ''; l.delivered_dates = []; l.warranty_starts = [];
-            l.license_keys = Array.from({ length: l.qty }, () => ({ key: '' }));
+            l.license_keys = [];
         } else {
             l.supplier_name = '';
             l.serial_nos = Array.from({ length: l.qty }, () => '');
@@ -6152,8 +6186,13 @@ function ordSetScope(i, scope) {
         }
         renderOrderDraftLines();
     };
+    if (ticketedLine(l)) { renderOrderDraftLines(); return; }
     if (scope === 'SW' && ordLineHasUnitData(l)) {
         showStackedConfirm({ title: 'Clear this line?', body: ORD_CLEAR_LINE_BODY, confirmLabel: 'Clear', onConfirm: apply, onCancel: renderOrderDraftLines });
+        return;
+    }
+    if (scope === 'HW' && ordSwLineHasData(l)) {
+        showStackedConfirm({ title: 'Clear this line?', body: ORD_CLEAR_SW_LINE_BODY, confirmLabel: 'Clear', onConfirm: apply, onCancel: renderOrderDraftLines });
         return;
     }
     apply();
@@ -6176,23 +6215,72 @@ function markCustomProductLines(lines) {
     lines.forEach(l => {
         const published = l.product_id && getVisibleProducts(l.scope === 'HW' ? 'hardware' : 'software')
             .some(p => p.id === l.product_id && p.status === 'published');
+        // A line with tickets keeps its product even once it is unpublished.
+        if (getLineTickets(l.id).length) { l.custom_product = false; return; }
         l.custom_product = !published && !!l.product_name;
         if (l.custom_product) l.product_id = '';
     });
     return lines;
 }
 
+// HW: Qty is the unit count and sizes the serial rows. SW: Qty is the license
+// count; keys are added on their own and never outnumber it (SA V2 4.5.3 編號 17).
 function ordSetQty(i, value) {
     const l = orderDraft.lines[i];
-    l.qty = Math.min(ORDER_QTY_MAX, Math.max(1, parseInt(value, 10) || 1));
-    // Keep what's typed; only grow or shrink the array to match qty.
-    if (l.scope === 'HW') {
-        l.serial_nos = Array.from({ length: l.qty }, (_, si) => l.serial_nos[si] || '');
-        fitUnitArrays(l);
-    } else {
-        l.license_keys = Array.from({ length: l.qty }, (_, ki) => l.license_keys[ki] || { key: '' });
+    const next = Math.min(ORDER_QTY_MAX, Math.max(1, parseInt(value, 10) || 1));
+    if (l.scope !== 'HW' || next >= l.qty) {
+        l.qty = next;
+        if (l.scope === 'HW') { l.serial_nos = Array.from({ length: l.qty }, (_, si) => l.serial_nos[si] || ''); fitUnitArrays(l); }
+        renderOrderDraftLines();
+        return;
     }
+    // Shrinking drops the tail units: never one a ticket uses, and ask first
+    // when the dropped units hold a serial or a date.
+    const from = next, to = l.qty;
+    if (ticketedLine(l)) {
+        const used = l.serial_nos.slice(from).map(sn => [sn, ticketsOnValue(l.id, 'serial_no', sn)]).find(([, t]) => t.length);
+        if (used) { showToast(`Serial ${used[0]} is used by ${ticketNos(used[1])}. It cannot be removed.`, 'error'); renderOrderDraftLines(); return; }
+    }
+    const apply = () => {
+        l.qty = next;
+        l.serial_nos = l.serial_nos.slice(0, next);
+        fitUnitArrays(l);
+        renderOrderDraftLines();
+    };
+    const filled = u => (l.serial_nos[u] || '').trim() || l.delivered_dates?.[u] || l.warranty_starts?.[u];
+    if (!Array.from({ length: to - from }, (_, k) => from + k).some(filled)) { apply(); return; }
+    const n = to - from;
+    showStackedConfirm({ title: `Remove ${n} unit${n === 1 ? '' : 's'}?`, body: `The serial numbers and dates entered for unit ${from + 1}–${to} will be removed.`,
+        confirmLabel: 'Remove', onConfirm: apply, onCancel: renderOrderDraftLines });
+}
+function ordFitWarranty(i, el) {
+    const n = parseInt(el.value, 10);
+    const v = Number.isInteger(n) && n >= 1 && String(n) === String(el.value).trim() ? Math.min(n, ORDER_WARRANTY_MAX) : '';
+    orderDraft.lines[i].warranty_months = v === '' ? '' : String(v);
+    el.value = orderDraft.lines[i].warranty_months;
+    unitDatesRefreshEnds(String(i));
+}
+function ordAddKey(i) {
+    const l = orderDraft.lines[i];
+    if (l.license_keys.length >= l.qty) return;
+    l.license_keys.push({ key: '' });
     renderOrderDraftLines();
+}
+function ordRemoveKey(i, ki) {
+    const l = orderDraft.lines[i];
+    const used = ticketedLine(l) ? ticketsOnValue(l.id, 'license_key', l.license_keys[ki]?.key) : [];
+    if (used.length) return;
+    l.license_keys.splice(ki, 1);
+    renderOrderDraftLines();
+}
+// One key row: read-only, with no delete, when a ticket was opened on it.
+// `lineId` is the saved line whose tickets count, or null for a new line.
+function licenseKeyCell(lineId, lk, dataAttr, oninput, onremove) {
+    const mono = 'font-family:ui-monospace,SFMono-Regular,Menlo,monospace';
+    const used = lineId ? ticketsOnValue(lineId, 'license_key', lk.key) : [];
+    if (used.length) return `<input class="input-field" style="${mono}" value="${esc(lk.key)}" readonly ${dataAttr} title="${esc(`License key ${lk.key} is used by ${ticketNos(used)}. It cannot be changed.`)}">`;
+    return `${ordInput({ attrs: `data-req ${dataAttr} placeholder="License key"`, oninput, value: lk.key, style: mono })}
+                        <button onclick="${onremove}" class="btn-ghost" style="margin-top:6px" title="Remove key"><i class="ph ph-x"></i></button>`;
 }
 
 // ── Delivery & warranty per unit (SA V2 D39) ──
@@ -6497,6 +6585,7 @@ function validateOrderDraft(status) {
     if (d.id) {
         const now = getOrderById(d.id);
         if (now && now.status !== d._openedStatus) return [formErr(`${now.order_no} is now ${orderStatusWord(now.status)}. Reload to see the latest.`)];
+        if (now && orderChangedByOther(d.id, d._openedUpdatedAt)) return [formErr(orderChangedMessage(now))];
     }
     if (!d.order_no) errors.push(fieldErr('#ord-no', 'Please enter Order No.'));
     if (!d.order_date) errors.push(fieldErr('#ord-date', 'Please select Order Date.'));
@@ -6510,7 +6599,11 @@ function validateOrderDraft(status) {
         if (l.custom_product && !l.product_name) errors.push(fieldErr(at(i, 'product-name'), 'Please enter Product name.'));
         else if (!l.product_name) errors.push(fieldErr(at(i, 'product'), 'Please select Product.'));
         if (l.scope === 'HW' && l.bom.some(b => !b.component_type || !b.model)) errors.push(fieldErr(at(i, 'bom'), 'Every BOM row needs a component and a model.'));
-        if (l.scope === 'SW') errors.push(...licenseLineErrors(l, String(i)));
+        if (l.scope === 'SW') {
+            errors.push(...licenseLineErrors(l, String(i)));
+            const keys = l.license_keys.filter(k => k.key.trim()).length;
+            if (keys > l.qty) errors.push(fieldErr(at(i, 'qty'), `This line has ${keys} license keys but ${l.qty} licenses. Remove keys or raise Qty.`));
+        }
     });
     if (status === 'CONFIRMED') {
         // Every cell holding a repeated serial is flagged, not just the later ones.
@@ -6540,7 +6633,7 @@ function validateOrderDraft(status) {
     ORDER_LINES.forEach(l => {
         const o = getOrderById(l.order_id);
         if (!o || o.id === d.id || o.status === 'CANCELLED' || l.scope !== 'HW') return;
-        (l.serial_nos || []).forEach(x => { const k = x.trim().toUpperCase(); if (k) taken.set(k, o.order_no); });
+        (l.serial_nos || []).forEach(x => { const k = x.trim().toUpperCase(); if (k) taken.set(k, `${o.order_no} (${o.customer_name})`); });
     });
     d.lines.forEach((l, i) => {
         if (l.scope !== 'HW') return;
@@ -6652,10 +6745,11 @@ function ordSerialPreview(l, i) {
     const seen = new Set();
     const dupes = [...new Set(values.filter(v => { const k = v.toUpperCase(); if (seen.has(k)) return true; seen.add(k); return false; }))];
     const tooLong = values.filter(v => v.length > ORDER_TEXT_MAX);
-    const blocked = dupes.length || tooLong.length;
+    const err = ordSerialPasteError(l, values, dupes);
+    const blocked = err || tooLong.length;
     return `
         <div style="font-size:12.5px;color:#1d1d1f">${values.length} serial${values.length === 1 ? '' : 's'} → Qty becomes ${values.length}, filled in order.</div>
-        ${dupes.length ? `<div style="font-size:12px;color:#dc2626;margin-top:4px">Appears more than once: ${esc(dupes.slice(0, 5).join(', '))}${dupes.length > 5 ? ` and ${dupes.length - 5} more` : ''}. Remove the duplicates to apply.</div>` : ''}
+        ${err ? `<div style="font-size:12px;color:#dc2626;margin-top:4px">${esc(err)}</div>` : ''}
         ${tooLong.length ? `<div style="font-size:12px;color:#dc2626;margin-top:4px">Each serial can be up to 100 characters. Shorten the marked rows to apply.</div>
             ${tooLong.map(v => `<div class="tk-mono" style="font-size:11.5px;background:#fef2f2;color:#b91c1c;border-radius:6px;padding:3px 8px;margin-top:4px;word-break:break-all">${esc(v)}</div>`).join('')}` : ''}
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
@@ -6664,22 +6758,56 @@ function ordSerialPreview(l, i) {
         </div>`;
 }
 
+// The first problem that stops a serial paste, in the SA's order (4.5.3 Paste serials 編號 2).
+function ordSerialPasteError(l, values, dupes) {
+    if (values.length > ORDER_QTY_MAX) return `Up to ${ORDER_QTY_MAX} serials per line. Split the list across lines.`;
+    if (dupes.length) return `Appears more than once: ${dupes.slice(0, 5).join(', ')}${dupes.length > 5 ? ` and ${dupes.length - 5} more` : ''}. Remove the duplicates to apply.`;
+    if (ticketedLine(l)) {
+        const have = new Set(values.map(v => v.toUpperCase()));
+        const lost = groupTicketsBy(l.id, 'serial_no').find(g => !have.has(g.value.toUpperCase()));
+        if (lost) return `Serial ${lost.value} is used by ${ticketNos(lost.tickets)}. Keep it in the list to apply.`;
+    }
+    return '';
+}
+
 function ordRenderSerialPreview(i) {
     const host = document.getElementById(`ord-sn-preview-${i}`);
     if (host) host.innerHTML = ordSerialPreview(orderDraft.lines[i], i);
 }
 
+// Dates follow the serial: a serial still in the list keeps its dates, a new
+// one starts blank. Dropping filled units asks first, like lowering Qty.
 function ordApplySerialPaste(i) {
     const l = orderDraft.lines[i];
     const values = splitPastedValues(l._snText);
     if (!values.length || values.some(v => v.length > ORDER_TEXT_MAX)) return;
-    l.qty = values.length;
-    l.serial_nos = values;
-    fitUnitArrays(l);
-    l._snPaste = false;
-    l._snText = '';
-    renderOrderDraftLines();
-    showToast(`${values.length} serial${values.length === 1 ? '' : 's'} filled`);
+    const seen = new Set();
+    const dupes = values.filter(v => { const k = v.toUpperCase(); if (seen.has(k)) return true; seen.add(k); return false; });
+    if (ordSerialPasteError(l, values, dupes)) return;
+    const datesBy = new Map(l.serial_nos.map((sn, u) => [sn.trim().toUpperCase(), [l.delivered_dates?.[u] || '', l.warranty_starts?.[u] || '']]).filter(([k]) => k));
+    const kept = new Set(values.map(v => v.toUpperCase()));
+    const lost = l.serial_nos.map((sn, u) => u).filter(u => {
+        const k = (l.serial_nos[u] || '').trim().toUpperCase();
+        return (k && !kept.has(k)) || (!k && (l.delivered_dates?.[u] || l.warranty_starts?.[u]));
+    });
+    const apply = () => {
+        l.qty = values.length;
+        l.serial_nos = values;
+        l.delivered_dates = values.map(v => datesBy.get(v.toUpperCase())?.[0] || '');
+        l.warranty_starts = values.map(v => datesBy.get(v.toUpperCase())?.[1] || '');
+        fitUnitArrays(l);
+        l._snPaste = false;
+        l._snText = '';
+        renderOrderDraftLines();
+        showToast(`${values.length} serial${values.length === 1 ? '' : 's'} filled`);
+    };
+    if (values.length < l.serial_nos.length && lost.length) {
+        const n = l.serial_nos.length - values.length;
+        showStackedConfirm({ title: `Remove ${n} unit${n === 1 ? '' : 's'}?`, body: `The serial numbers and dates entered for unit ${values.length + 1}–${l.serial_nos.length} will be removed.`,
+            confirmLabel: 'Remove', onConfirm: apply });
+        return;
+    }
+    apply();
 }
 
 // A barcode scanner types the code and presses Enter: move to the next unit
@@ -6698,20 +6826,29 @@ function ordSerialKeydown(e, i, si) {
 // and Adjust license ('adjust'). One column of keys, filled in order.
 function licensePasteTarget(ref) {
     if (ref === 'adjust') {
-        return { state: licenseDraft, rerender: renderLicenseAdjustModal, apply: keys => { licenseDraft.license_keys = keys; } };
+        const line = ORDER_LINES.find(x => x.id === licenseDraft.lineId);
+        return { state: licenseDraft, qty: line?.qty || 1, lineId: licenseDraft.lineId, rerender: renderLicenseAdjustModal, apply: keys => { licenseDraft.license_keys = keys; } };
     }
     const l = orderDraft.lines[Number(ref)];
-    return { state: l, rerender: renderOrderDraftLines, apply: keys => { l.license_keys = keys; l.qty = Math.max(1, keys.length); } };
+    return { state: l, qty: l.qty, lineId: ticketedLine(l) ? l.id : null, rerender: renderOrderDraftLines, apply: keys => { l.license_keys = keys; } };
 }
 
 // Turn pasted text into keys. Nothing is applied while `errors` is non-empty.
-function planLicensePaste(text) {
+// Checks follow SA V2 4.5.3 Paste keys 編號 2: count, duplicates, then keys a
+// ticket uses; Qty never changes from a paste.
+function planLicensePaste(text, t = null) {
     const keys = splitPastedValues(text);
     const tooLong = keys.filter(k => k.length > ORDER_TEXT_MAX);
-    return {
-        keys: keys.map(key => ({ key })),
-        errors: tooLong.length ? ['Each key can be up to 100 characters. Shorten the marked rows to apply.'] : [],
-    };
+    const errors = tooLong.length ? ['Each key can be up to 100 characters. Shorten the marked rows to apply.'] : [];
+    if (t) {
+        const seen = new Set();
+        const dupes = [...new Set(keys.filter(k => { const u = k.toUpperCase(); if (seen.has(u)) return true; seen.add(u); return false; }))];
+        const lost = t.lineId ? groupTicketsBy(t.lineId, 'license_key').find(g => !seen.has(g.value.toUpperCase())) : null;
+        if (keys.length > t.qty) errors.push(`${keys.length} keys but ${t.qty} licenses on this line. Raise Qty first.`);
+        else if (dupes.length) errors.push(`Appears more than once: ${dupes.slice(0, 5).join(', ')}${dupes.length > 5 ? ` and ${dupes.length - 5} more` : ''}. Remove the duplicates to apply.`);
+        else if (lost) errors.push(`License key ${lost.value} is used by ${ticketNos(lost.tickets)}. Keep it in the list to apply.`);
+    }
+    return { keys: keys.map(key => ({ key })), errors };
 }
 
 function licensePastePanel(ref) {
@@ -6729,7 +6866,7 @@ function licensePastePanel(ref) {
 
 function licensePastePreview(ref) {
     const t = licensePasteTarget(ref);
-    const plan = planLicensePaste(t.state._kp.text);
+    const plan = planLicensePaste(t.state._kp.text, t);
     const cancel = `<button class="btn-secondary text-xs" onclick="licensePasteTarget('${ref}').state._kp={open:false};licensePasteTarget('${ref}').rerender()">Cancel</button>`;
     if (!plan.keys.length) return `<div style="display:flex;justify-content:flex-end">${cancel}</div>`;
     const shown = plan.keys.slice(0, BULK_PREVIEW_ROWS);
@@ -6761,7 +6898,7 @@ function openLicensePaste(ref) {
 
 function applyLicensePaste(ref) {
     const t = licensePasteTarget(ref);
-    const plan = planLicensePaste(t.state._kp.text);
+    const plan = planLicensePaste(t.state._kp.text, t);
     if (plan.errors.length || !plan.keys.length) return;
     t.apply(plan.keys);
     t.state._kp = { open: false };
@@ -6785,6 +6922,7 @@ function showLicenseAdjustModal(lineId) {
         supplier_name: line.supplier_name || '', version: line.version || '',
         license_start: line.license_start || '', license_end: line.license_end || '',
         license_keys: (line.license_keys || []).map(lk => ({ key: lk.key })),
+        openedUpdatedAt: order.updated_at || '',
     };
     renderLicenseAdjustModal();
 }
@@ -6814,7 +6952,7 @@ function renderLicenseAdjustModal() {
                 ${date('License End', 'license_end', 'le')}
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:14px">
-                <label class="field-label" style="margin:0">License Keys (${d.license_keys.length})</label>
+                <label class="field-label" style="margin:0">License Keys (${d.license_keys.filter(k => k.key.trim()).length} of ${line.qty})</label>
                 ${d._kp?.open ? '' : `<button class="btn-link" style="font-size:12px" onclick="openLicensePaste('adjust')"><i class="ph ph-clipboard-text"></i> Paste keys</button>`}
             </div>
             ${licensePastePanel('adjust')}
@@ -6822,12 +6960,11 @@ function renderLicenseAdjustModal() {
                 ${(d.license_keys.length > BULK_COLLAPSE_AT && !d._keysShowAll ? d.license_keys.slice(0, BULK_COLLAPSED_ROWS) : d.license_keys).map((lk, ki) => `
                 <div style="display:flex;align-items:flex-start;gap:10px">
                     <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0;padding-top:12px">Key ${ki + 1}</span>
-                    ${ordInput({ attrs: `data-req data-key="la-${ki}" placeholder="License key"`, oninput: `licenseDraft.license_keys[${ki}].key=this.value`, value: lk.key, style: 'font-family:ui-monospace,SFMono-Regular,Menlo,monospace' })}
-                    ${d.license_keys.length > 1 ? `<button onclick="adjustRemoveKey(${ki})" class="btn-ghost" style="margin-top:6px" title="Remove key"><i class="ph ph-x"></i></button>` : ''}
+                    ${licenseKeyCell(line.id, lk, `data-key="la-${ki}"`, `licenseDraft.license_keys[${ki}].key=this.value`, `adjustRemoveKey(${ki})`)}
                 </div>`).join('')}
                 ${d.license_keys.length > BULK_COLLAPSE_AT && !d._keysShowAll ? bulkMoreButton(d.license_keys.length, BULK_COLLAPSED_ROWS, 'licenseDraft._keysShowAll=true;renderLicenseAdjustModal()') : ''}
             </div>
-            <button onclick="licenseDraft.license_keys.push({ key: '' });renderLicenseAdjustModal()" class="btn-secondary text-xs" style="margin-top:10px"><i class="ph ph-plus"></i> Add Key</button>
+            <button onclick="licenseDraft.license_keys.push({ key: '' });renderLicenseAdjustModal()" class="btn-secondary text-xs" style="margin-top:10px" ${d.license_keys.length >= line.qty ? `disabled title="All ${line.qty} licenses have a key. Raise Qty from Edit to add more."` : ''}><i class="ph ph-plus"></i> Add Key</button>
             <p id="la-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin-top:12px"></p>
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
                 <button onclick="licenseDraft=null;showOrderDetail('${order.id}')" class="btn-secondary text-xs">Cancel</button>
@@ -6853,10 +6990,11 @@ function saveLicenseAdjustment() {
         showFormErrors([formErr(`${order.order_no} is now ${orderStatusWord(order.status)}. Reload to see the latest.`)], 'la-error');
         return;
     }
+    if (orderChangedByOther(order.id, d.openedUpdatedAt)) { showFormErrors([formErr(orderChangedMessage(order))], 'la-error'); return; }
     const next = {
         supplier_name: d.supplier_name.trim(), version: d.version.trim(),
         license_start: d.license_start, license_end: d.license_end,
-        license_keys: d.license_keys.map(lk => ({ key: lk.key.trim() })),
+        license_keys: d.license_keys.map(lk => ({ key: lk.key.trim() })).filter(lk => lk.key),
     };
     const errors = [];
     if (!next.supplier_name && !order.sw_supplier_name) errors.push(fieldErr('[data-err="la-supplier_name"]', 'Supplier is required because the order has no SW supplier.'));
@@ -6882,7 +7020,7 @@ function saveLicenseAdjustment() {
         return;
     }
     const ok = commitPortalMutation(() => {
-        Object.assign(line, next, { qty: next.license_keys.length });
+        Object.assign(line, next);
         order.updated_at = new Date().toISOString();
         logActivity('License adjusted', order.order_no, `Line ${line.line_no} ${line.product_name}: ${changes.join('; ')}`);
     });
@@ -6892,7 +7030,7 @@ function saveLicenseAdjustment() {
     showToast(`License updated on ${order.order_no}`);
 }
 
-function saveOrder(status) {
+function saveOrder(status, { moveConfirmedFor = null } = {}) {
     const errEl = document.getElementById('ord-att-error');
     if (errEl) errEl.textContent = '';
     if (showFormErrors(validateOrderDraft(status), 'ord-error')) return;
@@ -6900,6 +7038,16 @@ function saveOrder(status) {
     const d = orderDraft;
     const isNew = !d.id;
     const prev = isNew ? null : getOrderById(d.id);
+    // A confirmed order moving to another customer takes its tickets along;
+    // say so first, and count again on the way out (SA V2 4.5.3 編號 6).
+    const moving = prev && prev.customer_org_id !== d.customer_org_id ? getOrderTickets(prev.id) : [];
+    if (moving.length && moveConfirmedFor !== moving.length) {
+        const to = getOrgById(d.customer_org_id)?.name || '';
+        showStackedConfirm({ title: `Move ${moving.length} ticket${moving.length === 1 ? '' : 's'} to ${to}?`,
+            body: `${prev.customer_name} will no longer see this order or its tickets. Reported by and the messages stay as they are.`,
+            confirmLabel: 'Move and save', onConfirm: () => saveOrder(status, { moveConfirmedFor: moving.length }) });
+        return;
+    }
     // An untouched form closes without a log entry or a toast (SA V2 4.5.3).
     if (!isNew && status === prev.status && orderDraftFingerprint(d) === d._fingerprint) {
         closeModal();
@@ -6950,7 +7098,7 @@ function saveOrder(status) {
             delivered_dates: l.scope === 'HW' ? l.serial_nos.map((_, u) => l.delivered_dates?.[u] || '') : [],
             warranty_starts: l.scope === 'HW' ? l.serial_nos.map((_, u) => l.warranty_starts?.[u] || '') : [],
             supplier_name: l.scope === 'SW' ? (l.supplier_name || '') : '',
-            license_keys: l.scope === 'SW' ? l.license_keys.map(lk => ({ key: lk.key.trim() })) : [],
+            license_keys: l.scope === 'SW' ? l.license_keys.map(lk => ({ key: lk.key.trim() })).filter(lk => lk.key) : [],
             version: l.scope === 'SW' ? l.version : '',
             license_start: l.scope === 'SW' ? l.license_start : '',
             license_end: l.scope === 'SW' ? l.license_end : '',
@@ -6966,8 +7114,9 @@ function saveOrder(status) {
             });
         }
 
+        const moved = moving.length ? ` · Customer ${prev.customer_name} → ${record.customer_name} · ${moving.length} ticket${moving.length === 1 ? '' : 's'} moved` : '';
         logActivity(isNew ? 'Order created' : 'Order updated', record.order_no,
-            `${record.customer_name} · ${d.lines.length} line${d.lines.length === 1 ? '' : 's'} · ${status}`);
+            `${record.customer_name} · ${d.lines.length} line${d.lines.length === 1 ? '' : 's'} · ${status}${moved}`);
     });
     if (!ok) return;
 
@@ -7082,12 +7231,12 @@ function showOrderDetail(id) {
             <div style="margin-top:16px">
                 ${row('Contract No', esc(o.contract_no || '—'))}
                 ${row('Order date', esc(o.order_date || '—'))}
-                ${row('HW supplier', esc(o.hw_supplier_name || '—'))}
+                ${isCustomerView() ? '' : `${row('HW supplier', esc(o.hw_supplier_name || '—'))}
                 ${row('SW supplier', esc(o.sw_supplier_name || '—'))}
-                ${row('System integrator', esc(o.si_name || '—'))}
+                ${row('System integrator', esc(o.si_name || '—'))}`}
                 ${row('Sales contact', esc(o.sales_contact || '—'))}
                 ${isCustomerView() ? '' : row('Created by', esc(USERS.find(u => u.id === o.created_by)?.name || 'System'))}
-                ${o.notes ? row('Notes', esc(o.notes)) : ''}
+                ${o.notes && !isCustomerView() ? row('Notes', esc(o.notes)) : ''}
             </div>
 
             ${orderDocSection(o)}
@@ -7105,12 +7254,12 @@ function showOrderDetail(id) {
                     <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
                         ${l.sla_plan ? `<span class="badge badge-blue">${esc(slaLabel(l.sla_plan))}</span>` : ''}
                         <span style="font-size:12.5px;color:#86868b">Qty ${l.qty}</span>
-                        ${o.status === 'CONFIRMED' && canCreateTickets() ? `<button onclick="closeModal();showTicketCreateModal({ lineId: '${l.id}' })" class="btn-secondary text-xs" style="padding:4px 10px" title="Open a service ticket on this line"><i class="ph ph-headset"></i> Open ticket</button>` : ''}
+                        ${o.status === 'CONFIRMED' && canCreateTickets() && getOrgById(o.customer_org_id)?.status === 'active' ? `<button onclick="closeModal();showTicketCreateModal({ lineId: '${l.id}' })" class="btn-secondary text-xs" style="padding:4px 10px" title="Open a service ticket on this line"><i class="ph ph-headset"></i> Open ticket</button>` : ''}
                     </span>
                 </div>
-                ${lineTickets.length ? `<div style="font-size:12px;color:#86868b;margin-top:6px"><i class="ph ph-ticket"></i> ${lineTickets.length} ticket${lineTickets.length === 1 ? '' : 's'} on this line · <a href="#" onclick="event.preventDefault();closeModal();openServiceDeskForOrder('${o.id}')" style="color:#1432E6;font-weight:600">view</a></div>` : ''}
-                ${l.scope === 'SW' && (l.license_start || l.license_end || l.supplier_name) ? `
-                <div style="font-size:12.5px;color:#86868b;margin-top:6px">${l.license_start || l.license_end ? `License ${esc(l.license_start || '?')} → ${esc(l.license_end || '?')}` : ''}${l.supplier_name ? `${l.license_start || l.license_end ? ' · ' : ''}Supplier ${esc(l.supplier_name)}` : ''}</div>` : ''}
+                ${lineTickets.length ? `<div style="font-size:12px;color:#86868b;margin-top:6px"><i class="ph ph-ticket"></i> ${lineTickets.length} ticket${lineTickets.length === 1 ? '' : 's'} on this line · <a href="#" onclick="event.preventDefault();closeModal();openServiceDeskForOrder('${o.id}', '${l.id}')" style="color:#1432E6;font-weight:600">view</a></div>` : ''}
+                ${l.scope === 'SW' && (l.license_start || l.license_end || (l.supplier_name && !isCustomerView())) ? `
+                <div style="font-size:12.5px;color:#86868b;margin-top:6px">${l.license_start || l.license_end ? `License ${esc(l.license_start || '?')} → ${esc(l.license_end || '?')}` : ''}${l.supplier_name && !isCustomerView() ? `${l.license_start || l.license_end ? ' · ' : ''}Supplier ${esc(l.supplier_name)}` : ''}</div>` : ''}
                 ${l.scope === 'HW' && l.warranty_months ? `
                 <div style="font-size:12.5px;color:#86868b;margin-top:6px">Warranty ${l.warranty_months} months per unit</div>` : ''}
                 ${(l.license_keys || []).some(lk => lk.key) ? `
@@ -7178,6 +7327,7 @@ function showDeliveryModal(lineId) {
     deliveryDraft = {
         lineId, serial_nos: [...line.serial_nos], warranty_months: line.warranty_months,
         delivered_dates: [...(line.delivered_dates || [])], warranty_starts: [...(line.warranty_starts || [])], _picked: [],
+        openedUpdatedAt: order.updated_at || '',
     };
     fitUnitArrays(deliveryDraft);
     renderDeliveryModal();
@@ -7203,7 +7353,9 @@ function saveDelivery() {
     const d = deliveryDraft;
     const line = ORDER_LINES.find(l => l.id === d.lineId);
     const order = getOrderById(line.order_id);
-    if (!canUpdateOrders() || order.status !== 'CONFIRMED') return;
+    if (!canUpdateOrders()) return;
+    if (order.status !== 'CONFIRMED') { showToast(`${order.order_no} is now ${orderStatusWord(order.status)}. Reload to see the latest.`, 'error'); return; }
+    if (orderChangedByOther(order.id, d.openedUpdatedAt)) { showToast(orderChangedMessage(order), 'error'); return; }
     const changes = [];
     line.serial_nos.forEach((sn, u) => {
         const parts = [];
@@ -7232,6 +7384,13 @@ function saveDelivery() {
 // (SA V2 D41/D45). The Super Admin passes every check (D10).
 function openTicketsForOrder(o) { return TICKETS.filter(t => t.order_id === o.id && t.status !== 'CLOSED'); }
 function isOrderInitiator(o) { return isSuperAdminContext() || (!!o.created_by && actingUser()?.id === o.created_by); }
+// The creator can still cancel only while their account is active and holds
+// order.u somewhere; otherwise it falls to the Super Admin (SA V2 4.5.5).
+function orderCreatorCanCancel(o) {
+    const u = USERS.find(x => x.id === o.created_by);
+    if (!u || u.status !== 'active') return false;
+    return ROLE_BINDINGS.some(b => b.user_id === u.id && b.status === 'active' && effectivePermissions(ROLES.find(r => r.id === b.role_id)).includes('order.u'));
+}
 function cancelBlockedByTickets(o) { return openTicketsForOrder(o).length > 0 && !isOrderInitiator(o); }
 
 function confirmCancelOrder(id) {
@@ -7245,7 +7404,8 @@ function confirmCancelOrder(id) {
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">${esc(o.order_no)} cannot be cancelled yet</h3>
             <p style="font-size:13px;color:#86868b;line-height:1.6;margin:0 0 18px">
                 ${open.length} ticket${open.length === 1 ? ' is' : 's are'} still open (${esc(open.map(t => t.ticket_no).join(', '))}).
-                While tickets are open, only the person who created this order${initiator ? `, ${esc(initiator)},` : ''} can cancel it.
+                ${initiator && !orderCreatorCanCancel(o) ? 'While tickets are open, only a Super Admin can cancel it.'
+                    : `While tickets are open, only the person who created this order${initiator ? `, ${esc(initiator)},` : ''} can cancel it.`}
             </p>
             <div style="display:flex;justify-content:flex-end"><button onclick="showOrderDetail('${o.id}')" class="btn-primary text-xs">Back to order</button></div>
         </div>`);
@@ -7260,15 +7420,20 @@ function confirmCancelOrder(id) {
             </p>
             <div style="display:flex;gap:8px;justify-content:flex-end">
                 <button onclick="showOrderDetail('${o.id}')" class="btn-secondary text-xs">Keep order</button>
-                <button onclick="cancelOrder('${o.id}')" class="btn-primary text-xs">Cancel order</button>
+                <button onclick="cancelOrder('${o.id}', '${esc(o.updated_at || '')}', ${open.length})" class="btn-primary text-xs">Cancel order</button>
             </div>
         </div>
     `);
 }
 
-function cancelOrder(id) {
+function cancelOrder(id, openedAt = null, openedTickets = null) {
     const o = getOrderById(id);
-    if (!o || o.status === 'CANCELLED' || !canUpdateOrders() || cancelBlockedByTickets(o)) return;
+    if (!o || !canUpdateOrders()) return;
+    // Someone changed the order, or a ticket opened, while the dialog was up.
+    if (o.status === 'CANCELLED') { closeModal(); showToast(`${o.order_no} is now cancelled. Reload to see the latest.`, 'error'); return; }
+    if (openedAt !== null && (o.updated_at || '') !== openedAt) { closeModal(); showToast(orderChangedMessage(o), 'error'); return; }
+    if (openedTickets !== null && openTicketsForOrder(o).length !== openedTickets) { confirmCancelOrder(id); return; }
+    if (cancelBlockedByTickets(o)) return;
     const prevStatus = o.status;
     const ok = commitPortalMutation(() => {
         o.status = 'CANCELLED';
@@ -7326,6 +7491,36 @@ function leavesNoManager(org, change) {
     return guardsOrgManagers(org) && orgManagerIds(org).size > 0 && orgManagerIds(org, change).size === 0;
 }
 const LAST_MANAGER_MESSAGE = 'This would leave nobody here who can manage members. Give another member that access first.';
+
+// A change that would take a ticket's confirmer out of the Confirm by pool is
+// held back until those tickets have another confirmer (SA V2 4.6.4). The
+// change is tried on a copy of the account data and rolled back.
+function confirmersLostBy(mutate) {
+    const pending = TICKETS.filter(t => ticketInternalState(t) === 'AISO_INTERNAL' && t.internal_assignee_id);
+    if (!pending.length) return [];
+    const before = new Set(deskStaff().map(u => u.id));
+    // Work on copies so the real records (and references to them) never change.
+    const orig = { USERS, ROLES, ROLE_BINDINGS };
+    const copy = JSON.parse(JSON.stringify(orig));
+    let after;
+    try { USERS = copy.USERS; ROLES = copy.ROLES; ROLE_BINDINGS = copy.ROLE_BINDINGS; mutate(); after = new Set(deskStaff().map(u => u.id)); }
+    finally { USERS = orig.USERS; ROLES = orig.ROLES; ROLE_BINDINGS = orig.ROLE_BINDINGS; }
+    const byUser = new Map();
+    pending.filter(t => before.has(t.internal_assignee_id) && !after.has(t.internal_assignee_id)).forEach(t => {
+        if (!byUser.has(t.internal_assignee_id)) byUser.set(t.internal_assignee_id, []);
+        byUser.get(t.internal_assignee_id).push(t);
+    });
+    return [...byUser].map(([userId, tickets]) => ({ name: userNameById(userId), tickets }));
+}
+function showConfirmerBlock(lost, backTo) {
+    showModal(`
+        <div style="padding:26px 28px">
+            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">Change the confirmer first</h3>
+            ${lost.map(x => `<p style="font-size:13px;color:#86868b;margin:0 0 8px;line-height:1.6">${esc(x.name)} is the confirmer on ${x.tickets.length} open ticket${x.tickets.length === 1 ? '' : 's'}: ${esc(ticketNos(x.tickets))}.</p>`).join('')}
+            <p style="font-size:13px;color:#86868b;margin:0;line-height:1.6">Change the confirmer on these tickets, then try again.</p>
+            <div style="display:flex;justify-content:flex-end;margin-top:20px"><button onclick="${backTo}" class="btn-primary">Close</button></div>
+        </div>`);
+}
 function orgNeedsManager(org) { return guardsOrgManagers(org) && orgManagerIds(org).size === 0 && !hasPendingManagerInvite(org); }
 function orgStatusBadge(org) {
     return org.status === 'active' ? '<span class="badge badge-green">Active</span>' : '<span class="badge badge-zinc">Inactive</span>';
@@ -7660,6 +7855,10 @@ function confirmToggleAccount(userId) {
     if (!viewAsBindingId && user.id === currentUser?.id) { showToast('You cannot disable the account you are signed in with.', 'error'); return; }
     const disabling = user.status === 'active';
     const held = getUserBindings(user.id);
+    if (disabling) {
+        const lost = confirmersLostBy(() => { USERS.find(u => u.id === userId).status = 'disabled'; });
+        if (lost.length) { showConfirmerBlock(lost, 'closeModal()'); return; }
+    }
     showModal(`
         <div style="padding:26px 28px">
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">${disabling ? 'Disable' : 'Re-enable'} ${esc(user.name)}?</h3>
@@ -8203,6 +8402,10 @@ function toggleBindingStatus(orgId, bindingId) {
         return;
     }
     if (suspending && leavesNoManager(org, { drop: [b.id] })) { showToast(LAST_MANAGER_MESSAGE, 'error'); return; }
+    if (suspending) {
+        const lost = confirmersLostBy(() => { ROLE_BINDINGS.find(x => x.id === bindingId).status = 'suspended'; });
+        if (lost.length) { showConfirmerBlock(lost, `showOrgDetail('${org.id}', 'members')`); return; }
+    }
     const user = USERS.find(u => u.id === b.user_id);
     const role = ROLES.find(r => r.id === b.role_id);
     const ok = commitPortalMutation(() => {
@@ -8327,6 +8530,8 @@ function saveRole(orgId, roleId = null) {
     if (holdsIt) errors.push(formErr('You hold this role here. Ask another admin to change it.'));
     else if (role && permissions.length && leavesNoManager(org, { rolePerms: { roleId: role.id, permissions } })) errors.push(formErr(LAST_MANAGER_MESSAGE));
     if (showFormErrors(errors, 'role-error')) return;
+    const lost = role ? confirmersLostBy(() => { ROLES.find(r => r.id === role.id).permissions = permissions; }) : [];
+    if (lost.length) { showConfirmerBlock(lost, `showOrgDetail('${orgId}', 'roles')`); return; }
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
         if (role) Object.assign(role, { name, description, permissions, updated_at: now });
@@ -8567,6 +8772,9 @@ function saveMemberRoles(orgId, userId) {
     if (wouldDropActiveBinding(userId, dropped.map(b => b.id)) && showFormErrors([formErr(SELF_ROLE_MESSAGE)], 'member-error')) return;
     if (!dropped.length && !addedRoleIds.length) { showOrgDetail(org.id, 'members'); return; }
     if (leavesNoManager(org, { drop: dropped.map(b => b.id) }) && showFormErrors([formErr(LAST_MANAGER_MESSAGE)], 'member-error')) return;
+    const droppedSet = new Set(dropped.map(b => b.id));
+    const lost = dropped.length ? confirmersLostBy(() => { ROLE_BINDINGS = ROLE_BINDINGS.filter(b => !droppedSet.has(b.id)); }) : [];
+    if (lost.length) { showConfirmerBlock(lost, `showOrgDetail('${org.id}', 'members')`); return; }
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
         const droppedIds = new Set(dropped.map(b => b.id));
@@ -8590,6 +8798,9 @@ function confirmRemoveMember(orgId, userId) {
         return;
     }
     if (leavesNoManager(org, { drop: here.map(b => b.id) })) { showToast(LAST_MANAGER_MESSAGE, 'error'); return; }
+    const hereIds = new Set(here.map(b => b.id));
+    const lost = confirmersLostBy(() => { ROLE_BINDINGS = ROLE_BINDINGS.filter(b => !hereIds.has(b.id)); });
+    if (lost.length) { showConfirmerBlock(lost, `showOrgDetail('${org.id}', 'members')`); return; }
     const remaining = ROLE_BINDINGS.filter(b => b.user_id === userId).length - here.length;
     showModal(`
         <div style="padding:26px 28px">
@@ -8795,6 +9006,7 @@ function ticketPriorityBadge(p) {
 function ticketTimeAgo(iso) {
     if (!iso) return '';
     const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+    if (mins < 1) return 'Just now';
     if (mins < 60) return `${mins}m ago`;
     const hours = Math.floor(mins / 60);
     if (hours < 48) return `${hours}h ago`;
@@ -8880,7 +9092,15 @@ function ticketInternalChip(t, { compact = false } = {}) {
 
 function setTicketInternalState(ticketId, state, { assigneeId = null, note = '' } = {}) {
     const t = getTicketById(ticketId);
-    if (!t || !canManageTickets() || !TICKET_INTERNAL_STATES.includes(state) || ticketInternalState(t) === state) return;
+    if (!t || !canManageTickets() || !TICKET_INTERNAL_STATES.includes(state)) return;
+    // Picking AISO internal work again changes (or first names) the confirmer.
+    const changing = state === 'AISO_INTERNAL' && ticketInternalState(t) === 'AISO_INTERNAL';
+    if (ticketInternalState(t) === state && !changing) return;
+    if (changing && !assigneeId) {
+        if (deskStaff().some(u => u.id !== actingUser()?.id && u.id !== t.internal_assignee_id)) showReferInternalModal(t.id);
+        else showTicketDetail(t.id);
+        return;
+    }
     // A resolved or closed ticket waits on nobody; reopen it first.
     if (state !== 'NONE' && (t.status === 'RESOLVED' || t.status === 'CLOSED')) {
         showToast(`${t.ticket_no} is ${TICKET_STATUS_LABEL[t.status].toLowerCase()}. Reopen it before referring.`, 'error');
@@ -8906,13 +9126,17 @@ function setTicketInternalState(ticketId, state, { assigneeId = null, note = '' 
     }
     const now = new Date().toISOString();
     const from = ticketInternalState(t);
+    const prevConfirmer = changing ? t.internal_assignee_id : null;
     const ok = commitPortalMutation(() => {
         t.internal_state = state;
         t.internal_party = state === 'NONE' ? '' : party;
         t.internal_since = state === 'NONE' ? null : now;
         if (from === 'AISO_INTERNAL') settlePendingConfirmations(t);
         t.internal_assignee_id = state === 'AISO_INTERNAL' ? (assigneeId || null) : null;
-        t.internal_referred_by = state === 'AISO_INTERNAL' && assigneeId ? (actingUser()?.id || null) : null;
+        // The referrer is whoever first named a confirmer; changing the
+        // confirmer keeps them (SA V2 4.6.4 轉出者).
+        t.internal_referred_by = state === 'AISO_INTERNAL' && assigneeId
+            ? (changing && t.internal_referred_by ? t.internal_referred_by : (actingUser()?.id || null)) : null;
         t.updated_at = now;
         // The thread is the audit trail, and an internal note never reaches
         // the customer — so the referral is recorded there too.
@@ -8923,13 +9147,17 @@ function setTicketInternalState(ticketId, state, { assigneeId = null, note = '' 
             body: state === 'NONE'
                 ? `Back with the desk (was ${TICKET_INTERNAL_STATE_LABEL[from]}).`
                 : state === 'AISO_INTERNAL' && assigneeId
-                    ? `Referred to ${party} for confirmation.${note ? ` ${note}` : ''}`
+                    ? `Referred to ${party} for confirmation${prevConfirmer ? ` (was ${userNameById(prevConfirmer)})` : ''}.${note ? ` ${note}` : ''}`
                     : `Referred to ${party} — ${TICKET_INTERNAL_STATE_LABEL[state]}.`,
             attachments: [],
             notify_user_ids: t.internal_assignee_id ? [t.internal_assignee_id] : [],
         });
         if (t.internal_assignee_id) notifyUsers([t.internal_assignee_id], t, 'CONFIRM', msgId);
-        logActivity('Ticket handling changed', t.ticket_no, `${TICKET_INTERNAL_STATE_LABEL[from]} → ${TICKET_INTERNAL_STATE_LABEL[state]}${party ? ` (${party})` : ''}`);
+        logActivity('Ticket handling changed', t.ticket_no, prevConfirmer
+            ? `AISO internal work · ${userNameById(prevConfirmer)} → AISO internal work · ${party}`
+            : state === 'AISO_INTERNAL' && assigneeId
+                ? `${TICKET_INTERNAL_STATE_LABEL[from]} → AISO internal work · ${party}`
+                : `${TICKET_INTERNAL_STATE_LABEL[from]} → ${TICKET_INTERNAL_STATE_LABEL[state]}${party ? ` (${party})` : ''}`);
     });
     if (!ok) return;
     renderServiceDesk();
@@ -8951,7 +9179,7 @@ function ticketFirstResponse(t) {
 // "answered in" rounds down; "waiting" and "overdue" round up, and overdue
 // counts the hours past the target (SA V2 4.6.4).
 function ticketFirstResponseText(t, fr) {
-    if (fr.answered) return `answered in ${fr.elapsedHours < 1 ? `${Math.floor(fr.elapsedHours * 60)}m` : `${Math.floor(fr.elapsedHours)}h`}`;
+    if (fr.answered) return `answered in ${fr.elapsedHours < 1 ? `${Math.max(1, Math.floor(fr.elapsedHours * 60))}m` : `${Math.floor(fr.elapsedHours)}h`}`;
     if (t.status === 'RESOLVED' || t.status === 'CLOSED') return 'Not answered';
     if (fr.overdue) return `${Math.ceil(fr.elapsedHours - fr.targetHours)}h · overdue`;
     return `${Math.ceil(fr.elapsedHours)}h · waiting`;
@@ -8989,7 +9217,7 @@ function userNameById(id) { return USERS.find(u => u.id === id)?.name || ''; }
 function notifyUsers(userIds, ticket, kind, messageId = null) {
     const me = actingUser()?.id;
     const now = new Date().toISOString();
-    [...new Set(userIds)].filter(id => id && id !== me).forEach((id, i) => NOTIFICATIONS.unshift({
+    [...new Set(userIds)].filter(id => id && id !== me && !USERS.find(u => u.id === id)?.is_super_admin).forEach((id, i) => NOTIFICATIONS.unshift({
         id: `nt-${Date.now()}-${i}`, user_id: id, ticket_id: ticket.id, message_id: messageId, kind,
         actor_name: actingName(), created_at: now, read_at: null,
     }));
@@ -9005,11 +9233,31 @@ function myNotifications() {
 function ticketNeedsMe(t) {
     const me = actingUser();
     if (!me || !isOperatorView()) return false;
-    return isWaitingOnMe(t) || NOTIFICATIONS.some(n => n.user_id === me.id && n.ticket_id === t.id && !n.read_at);
+    return isWaitingOnMe(t) || needsNewConfirmerFromMe(t) || NOTIFICATIONS.some(n => n.user_id === me.id && n.ticket_id === t.id && !n.read_at);
 }
+// A confirmer who no longer qualifies is not waiting on anything (SA V2 4.6.6).
 function isWaitingOnMe(t) {
     const me = actingUser();
-    return !!me && ticketInternalState(t) === 'AISO_INTERNAL' && t.internal_assignee_id === me.id;
+    return !!me && ticketInternalState(t) === 'AISO_INTERNAL' && t.internal_assignee_id === me.id && deskStaff().some(u => u.id === me.id);
+}
+function confirmerLapsed(t) {
+    return ticketInternalState(t) === 'AISO_INTERNAL' && !!t.internal_assignee_id && !deskStaff().some(u => u.id === t.internal_assignee_id);
+}
+// When the confirmer lapses the referrer picks someone else; a referrer who
+// lapsed too, or is the Super Admin, hands it to the whole desk (SA V2 4.6.4).
+function needsNewConfirmerFromMe(t) {
+    const me = actingUser();
+    if (!me || !confirmerLapsed(t)) return false;
+    const staff = deskStaff();
+    const referrerOk = staff.some(u => u.id === t.internal_referred_by);
+    return referrerOk ? t.internal_referred_by === me.id : staff.some(u => u.id === me.id);
+}
+function needsMeTooltip(t) {
+    if (isWaitingOnMe(t)) return 'Waiting for your confirmation';
+    if (needsNewConfirmerFromMe(t)) return 'The confirmer can no longer confirm this ticket';
+    const me = actingUser();
+    const confirmed = NOTIFICATIONS.find(n => n.user_id === me?.id && n.ticket_id === t.id && !n.read_at && n.kind === 'CONFIRMED');
+    return confirmed ? `${confirmed.actor_name} confirmed this ticket` : 'You were flagged on this ticket';
 }
 
 // Opening a ticket reads my notifications on it. A confirmation request stays
@@ -9096,7 +9344,8 @@ function markAllNotificationsRead() {
 // Picking "AISO internal work" asks who has to confirm before referring.
 function showReferInternalModal(ticketId) {
     const t = getTicketById(ticketId);
-    const staff = deskStaff().filter(u => u.id !== actingUser()?.id);
+    const changing = ticketInternalState(t) === 'AISO_INTERNAL';
+    const staff = deskStaff().filter(u => u.id !== actingUser()?.id && !(changing && u.id === t.internal_assignee_id));
     showModal(`
         <div style="padding:26px 28px">
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Who needs to confirm ${esc(t.ticket_no)}?</h3>
@@ -9196,18 +9445,22 @@ function getScopedTickets() {
     return TICKETS.filter(t => !customer || t.customer_name === customer);
 }
 
+// Set from an order line's "view" link; cleared with the × in the list.
+let ticketLineFilter = null;
+function ticketOrderNo(t) { return getOrderById(t.order_id)?.order_no || t.snapshot?.order_no || ''; }
 function getFilteredTickets() {
     const status = document.getElementById('ticket-filter-status')?.value || '';
     const q = (document.getElementById('ticket-search')?.value || '').trim().toLowerCase();
     const handling = isOperatorView() ? (document.getElementById('ticket-handling')?.value || '') : '';
     const acceptance = isOperatorView() ? (document.getElementById('ticket-acceptance')?.value || '') : '';
     return getScopedTickets().filter(t => {
+        if (ticketLineFilter && t.order_line_id !== ticketLineFilter) return false;
         if (status === 'NEEDS_ME') { if (!ticketNeedsMe(t)) return false; }
         else if (status && t.status !== status) return false;
         if (handling === 'REFERRED' && !isTicketReferred(t)) return false;
         if (handling && handling !== 'REFERRED' && ticketInternalState(t) !== handling) return false;
         if (acceptance && ticketAcceptance(t) !== acceptance) return false;
-        if (q && ![t.ticket_no, t.subject, t.customer_name, t.snapshot?.order_no, t.snapshot?.product_name, ticketDeviceLabel(t)]
+        if (q && ![t.ticket_no, t.subject, t.customer_name, ticketOrderNo(t), t.snapshot?.product_name, ticketDeviceLabel(t), t.license_key]
             .some(v => (v || '').toLowerCase().includes(q))) return false;
         return true;
     }).sort((a, b) => (ticketUpdatedAtFor(b) || '').localeCompare(ticketUpdatedAtFor(a) || ''));
@@ -9245,8 +9498,10 @@ function renderServiceDesk() {
         if (show) needsTab.innerHTML = `Needs me${(() => { const n = getScopedTickets().filter(ticketNeedsMe).length; return n ? ` <span class="badge badge-red" style="margin-left:4px;padding:1px 6px">${n}</span>` : ''; })()}`;
         if (!show && document.getElementById('ticket-filter-status')?.value === 'NEEDS_ME') setTicketFilter('');
     }
+    autoCloseResolvedTickets();
     renderNotificationBell();
     renderTicketStats();
+    renderTicketLineFilter();
     const list = getFilteredTickets();
     const searching = !!(document.getElementById('ticket-search')?.value || '').trim();
     const tbody = document.getElementById('tickets-tbody');
@@ -9264,12 +9519,12 @@ function renderServiceDesk() {
         const fr = ticketFirstResponse(t);
         return `
         <tr class="cursor-pointer" onclick="if(!event.target.closest('button'))showTicketDetail('${t.id}')">
-            <td>${ticketNeedsMe(t) ? `<span class="tk-needs-dot" title="${isWaitingOnMe(t) ? 'Waiting for your confirmation' : 'You were flagged on this ticket'}"></span>` : ''}<span style="font-weight:600;font-size:13px;color:#1d1d1f">${esc(t.ticket_no)}</span>
+            <td>${ticketNeedsMe(t) ? `<span class="tk-needs-dot" title="${esc(needsMeTooltip(t))}"></span>` : ''}<span style="font-weight:600;font-size:13px;color:#1d1d1f">${esc(t.ticket_no)}</span>
                 <div style="font-size:11px;color:#86868b;margin-top:1px">${ticketTimeAgo(ticketUpdatedAtFor(t))}</div></td>
             <td><span style="font-size:13px;color:#1d1d1f">${esc(t.subject)}</span>
                 <div style="font-size:11.5px;color:#86868b;margin-top:1px">${esc(t.category)} · via ${esc(t.channel || '—')}</div></td>
             <td><span style="font-size:13px;color:#1d1d1f">${esc(t.customer_name)}</span></td>
-            <td><span style="font-size:13px;font-weight:600;color:#1d1d1f">${esc(t.snapshot?.order_no || '—')}</span>
+            <td><span style="font-size:13px;font-weight:600;color:#1d1d1f">${esc(ticketOrderNo(t) || '—')}</span>
                 <div style="font-size:11.5px;color:#86868b;margin-top:1px">${esc(t.scope)} · ${esc(t.snapshot?.product_name || '')}${ticketDeviceLabel(t) ? ` · <span style="font-family:ui-monospace,Menlo,monospace;white-space:nowrap">${esc(ticketDeviceLabel(t))}</span>` : ''}</div></td>
             <td style="white-space:nowrap">${ticketPriorityBadge(t.priority)}</td>
             <td style="white-space:nowrap">${ticketStatusBadge(t.status)}${isOperatorView() && fr.overdue ? ' <span class="badge badge-red" style="margin-left:4px" title="No AISO reply within the first-response target">Overdue</span>' : ''}
@@ -9284,15 +9539,41 @@ function renderServiceDesk() {
     )}</td></tr>`;
 }
 
-// Jump from an order to its tickets.
-function openServiceDeskForOrder(orderId) {
-    const o = getOrderById(orderId);
+// Jump from an order line to its tickets: filtered by the line itself, not
+// by Order No text, since order numbers can repeat (SA V2 4.5.5 編號 6).
+function openServiceDeskForOrder(orderId, lineId = null) {
+    ticketLineFilter = lineId;
     navigate('service-desk');
-    const sel = document.getElementById('ticket-customer');
-    if (sel && o && !isCustomerView()) sel.value = o.customer_name;
     const search = document.getElementById('ticket-search');
-    if (search && o) search.value = o.order_no;
+    if (search) search.value = '';
     renderServiceDesk();
+}
+function renderTicketLineFilter() {
+    let bar = document.getElementById('tk-line-filter');
+    const line = ticketLineFilter ? ORDER_LINES.find(l => l.id === ticketLineFilter) : null;
+    if (!line) { ticketLineFilter = null; bar?.remove(); return; }
+    const host = document.getElementById('tk-stats-bar');
+    if (!host) return;
+    if (!bar) { bar = document.createElement('div'); bar.id = 'tk-line-filter'; host.insertAdjacentElement('afterend', bar); }
+    const o = getOrderById(line.order_id);
+    bar.innerHTML = `<div style="display:inline-flex;align-items:center;gap:8px;font-size:12.5px;background:#eef1ff;color:#1432E6;border-radius:999px;padding:4px 6px 4px 12px;margin:8px 0">
+        Tickets on ${esc(o?.order_no || '')} · line ${line.line_no}
+        <button class="btn-ghost" style="padding:0 6px" title="Clear filter" onclick="ticketLineFilter=null;renderServiceDesk()">×</button></div>`;
+}
+
+// Resolved tickets close on their own after the Parameter Center number of
+// days, counted from the last time they became Resolved (SA V2 4.6.1).
+function autoCloseResolvedTickets() {
+    const days = parseInt(SYSTEM_PARAMETERS.auto_close_resolved_days, 10) || 7;
+    const due = TICKETS.filter(t => t.status === 'RESOLVED'
+        && Date.now() - new Date(t.resolved_entered_at || t.resolved_at || t.updated_at).getTime() >= days * 86400000);
+    if (!due.length) return;
+    commitPortalMutation(() => due.forEach(t => {
+        t.status = 'CLOSED';
+        t.updated_at = t.customer_updated_at = new Date().toISOString();
+        logActivity('Ticket status changed', t.ticket_no, `${TICKET_STATUS_LABEL.RESOLVED} → ${TICKET_STATUS_LABEL.CLOSED} · auto-closed after ${days} days`, null,
+            { name: 'System', org_id: null, role: '' });
+    }));
 }
 
 // ── Entitlement card (shared by create + detail) ──
@@ -9310,8 +9591,8 @@ function ticketEntitlementCard(snap, serialNo) {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:8px;font-size:12.5px">
             <div><span style="color:#86868b">${snap.coverage_kind === 'license' ? 'License key' : 'Serial'}</span><div style="margin-top:2px"><span class="tk-mono">${esc(serialNo || snap.license_key || '—')}</span></div></div>
             <div><span style="color:#86868b">Expires</span><div style="margin-top:2px;font-weight:600">${esc(snap.coverage_end || '—')}</div></div>
-            <div><span style="color:#86868b">Supplier</span><div style="margin-top:2px;font-weight:600">${esc(snap.supplier_name || '—')}</div></div>
-            <div><span style="color:#86868b">System integrator</span><div style="margin-top:2px;font-weight:600">${esc(snap.si_name || '—')}</div></div>
+            ${isCustomerView() ? '' : `<div><span style="color:#86868b">Supplier</span><div style="margin-top:2px;font-weight:600">${esc(snap.supplier_name || '—')}</div></div>
+            <div><span style="color:#86868b">System integrator</span><div style="margin-top:2px;font-weight:600">${esc(snap.si_name || '—')}</div></div>`}
         </div>
     </div>`;
 }
@@ -9346,11 +9627,13 @@ function buildTicketSnapshot(order, line, unitIndex = -1, licenseKey = '') {
 
 // How a ticket names its device: the unit's serial as the order has it now
 // (SA V2.52: it follows the order), or the license key on a SW line.
+// Tickets point at the serial or key by value (SA V2.54); the order keeps a
+// ticketed serial and key read-only, so the value is also the live one.
 function ticketDeviceLabel(t) {
-    if (t.scope !== 'HW') return t.snapshot?.license_key || '';
+    if (t.scope !== 'HW') return t.license_key || t.snapshot?.license_key || '';
+    if (t.serial_no) return t.serial_no;
     const line = ORDER_LINES.find(l => l.id === t.order_line_id);
-    const live = Number.isInteger(t.unit_index) ? (line?.serial_nos?.[t.unit_index] || '').trim() : '';
-    return live || t.serial_no || '';
+    return Number.isInteger(t.unit_index) ? (line?.serial_nos?.[t.unit_index] || '').trim() : '';
 }
 function lineUnitLabel(line, u) {
     return `Unit ${u + 1} · ${(line.serial_nos[u] || '').trim() || 'serial pending'}`;
@@ -9395,7 +9678,12 @@ function showTicketCreateModal({ lineId = null } = {}) {
 function tkSet(key, value) {
     ticketDraft[key] = value;
     if (key === 'customer_org_id') { ticketDraft.order_id = ''; ticketDraft.order_line_id = ''; ticketDraft.unit_index = -1; ticketDraft.license_key = ''; }
-    if (key === 'order_id') { ticketDraft.order_line_id = ''; ticketDraft.unit_index = -1; ticketDraft.license_key = ''; }
+    if (key === 'order_id') {
+        ticketDraft.order_line_id = ''; ticketDraft.unit_index = -1; ticketDraft.license_key = '';
+        // An order with one line picks it (SA V2 4.6.3 編號 4).
+        const only = getOrderLines(value);
+        if (only.length === 1) { tkSet('order_line_id', only[0].id); return; }
+    }
     if (key === 'order_line_id') {
         const line = ORDER_LINES.find(l => l.id === value);
         ticketDraft.unit_index = line?.scope === 'HW' && line.qty === 1 ? 0 : -1;
@@ -9440,7 +9728,7 @@ function ticketFindResults(query) {
             <i class="ph ${icon[m.kind]}" style="color:#1432E6"></i>
             <div style="flex:1;min-width:0">
                 <div style="font-size:13px;font-weight:600">${m.kind === 'order' ? esc(m.order.order_no) : `<span class="tk-mono" style="background:transparent;padding:0">${esc(m.value)}</span>`}</div>
-                <div style="font-size:11.5px;color:#86868b">${m.kind === 'order' ? 'Order' : `${esc(m.line.product_name)} · ${esc(m.order.order_no)}${m.kind === 'serial' ? ` · Unit ${m.unit + 1}` : ''}`}${isCustomerView() ? '' : ` · ${esc(m.order.customer_name)}`}</div>
+                <div style="font-size:11.5px;color:#86868b">${m.kind === 'order' ? `Order · ${esc(m.order.order_date || '')}` : `${esc(m.line.product_name)} · ${esc(m.order.order_no)}${m.kind === 'serial' ? ` · Unit ${m.unit + 1}` : ''}`}${isCustomerView() ? '' : ` · ${esc(m.order.customer_name)}`}</div>
             </div>
         </button>`).join('')}
         ${all.length > TICKET_FIND_LIMIT ? `<div style="font-size:11.5px;color:#86868b">Showing ${TICKET_FIND_LIMIT} of ${all.length}. Type more to narrow it down.</div>` : ''}
@@ -9473,6 +9761,10 @@ function tkPickFound(idx) {
 }
 
 function tkSetText(key, value) { ticketDraft[key] = value; }
+function tkReporterHintText(d) {
+    return (d.reported_by || '').trim() && !(d.reported_by_email || '').trim() ? 'No email: the customer will not be emailed about this ticket.' : '';
+}
+function tkReporterHint() { const el = document.getElementById('tk-reporter-hint'); if (el) el.textContent = tkReporterHintText(ticketDraft); }
 
 function ticketDraftReady() {
     const d = ticketDraft;
@@ -9536,7 +9828,7 @@ function renderTicketCreateModal() {
                     const eligible = o.status === 'CONFIRMED';
                     return `<button class="tk-pick ${o.id === d.order_id ? 'sel' : ''} ${eligible ? '' : 'disabled'}" ${eligible ? `onclick="tkSet('order_id', '${o.id}')"` : 'disabled'} style="margin-bottom:6px">
                         <i class="ph ph-shopping-cart" style="color:#86868b"></i>
-                        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${esc(o.order_no)}</div><div style="font-size:11.5px;color:#86868b">${esc(o.order_date || '')}${o.hw_supplier_name ? ` · HW ${esc(o.hw_supplier_name)}` : ''}${o.sw_supplier_name ? ` · SW ${esc(o.sw_supplier_name)}` : ''}</div></div>
+                        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${esc(o.order_no)} · ${esc(o.order_date || '')}${o.contract_no ? ` · ${esc(o.contract_no)}` : ''}</div>${isCustomerView() ? '' : `<div style="font-size:11.5px;color:#86868b">${o.hw_supplier_name ? `HW ${esc(o.hw_supplier_name)}` : ''}${o.hw_supplier_name && o.sw_supplier_name ? ' · ' : ''}${o.sw_supplier_name ? `SW ${esc(o.sw_supplier_name)}` : ''}</div>`}</div>
                         ${eligible ? orderStatusBadge(o.status) : '<span class="badge badge-draft">Not eligible</span>'}
                     </button>`;
                 }).join('') : '<div style="font-size:12.5px;color:#86868b;padding:8px 0">This customer has no confirmed order.</div>')
@@ -9571,7 +9863,7 @@ function renderTicketCreateModal() {
             <div style="min-height:0;padding:26px 28px;overflow-y:auto;background:var(--bg-subtle)">
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin-bottom:8px">Entitlement</div>
                 ${ready ? ticketEntitlementCard(snap, pickedSerial || (d.unit_index >= 0 ? lineUnitLabel(line, d.unit_index) : '')) : `<div style="border:1px dashed var(--border);border-radius:12px;padding:22px;text-align:center;font-size:12.5px;color:#86868b"><i class="ph ph-shield-check" style="font-size:22px;display:block;margin-bottom:6px"></i>Warranty / license and SLA appear here once a line${line && line.scope === 'HW' ? ' and serial' : ''}${keyChoices.length > 1 ? ' and license key' : ''} is selected.</div>`}
-                ${ready ? '<div style="font-size:11px;color:#86868b;margin-top:6px"><i class="ph ph-camera"></i> Copied onto the ticket at creation; later order edits do not change it.</div>' : ''}
+                ${ready ? '<div style="font-size:11px;color:#86868b;margin-top:6px"><i class="ph ph-camera"></i> Dates and SLA are copied onto the ticket at creation; later order edits do not change them.</div>' : ''}
 
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:20px 0 8px">Request</div>
                 <div class="form-grid-two">
@@ -9594,9 +9886,10 @@ function renderTicketCreateModal() {
                     ${ordTextArea({ attrs: 'id="tk-description" style="min-height:96px" placeholder="What happened, when, what was tried"', oninput: "tkSetText('description', this.value)", value: d.description })}</div>
                 <div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
                     <div><label class="field-label" for="tk-reported">Reported by: Name</label>
-                        ${ordInput({ attrs: `id="tk-reported" placeholder="e.g. Jane Wang" ${isCustomerView() ? 'readonly' : ''}`, oninput: isCustomerView() ? '' : "tkSetText('reported_by', this.value)", value: d.reported_by })}</div>
+                        ${ordInput({ attrs: `id="tk-reported" placeholder="e.g. Jane Wang" ${isCustomerView() ? 'readonly' : ''}`, oninput: isCustomerView() ? '' : "tkSetText('reported_by', this.value);tkReporterHint()", value: d.reported_by })}</div>
                     <div><label class="field-label" for="tk-reported-email">Reported by: Email</label>
-                        ${ordInput({ attrs: `id="tk-reported-email" placeholder="e.g. name@company.com" ${isCustomerView() ? 'readonly' : ''}`, oninput: isCustomerView() ? '' : "tkSetText('reported_by_email', this.value)", value: d.reported_by_email })}</div>
+                        ${ordInput({ attrs: `id="tk-reported-email" placeholder="e.g. name@company.com" ${isCustomerView() ? 'readonly' : ''}`, oninput: isCustomerView() ? '' : "tkSetText('reported_by_email', this.value);tkReporterHint()", value: d.reported_by_email })}
+                        <div id="tk-reporter-hint" class="field-hint">${tkReporterHintText(d)}</div></div>
                 </div>
                 <div style="margin-top:12px"><label class="field-label">Attachments</label>
                     ${ticketAttachmentDropZone('tk-draft-files', "onTicketDraftFiles(this.files)")}
@@ -9637,8 +9930,20 @@ function saveTicket() {
         if (errEl) { errEl.textContent = `${order?.order_no || 'That order'} is ${orderStatusLabel(order?.status)}. Only confirmed orders can take a ticket.`; errEl.style.display = 'block'; }
         return;
     }
+    // The customer or the device may have changed while the form was open.
+    const customerOrg = getOrgById(order.customer_org_id);
+    const deviceGone = line.scope === 'HW' ? !(line.serial_nos[d.unit_index] || '').trim()
+        : (d.license_key && !lineLicenseChoices(line).some(c => c.key === d.license_key));
+    if (customerOrg?.status !== 'active' || deviceGone) {
+        if (errEl) {
+            errEl.textContent = customerOrg?.status !== 'active' ? `${order.customer_name} is inactive. Reactivate it before opening a ticket.`
+                : `The selected line, serial or key is no longer on ${order.order_no}. Pick it again.`;
+            errEl.style.display = 'block';
+        }
+        return;
+    }
     const now = new Date().toISOString();
-    const authorName = d.reported_by.trim() || (isCustomerView() ? actingName() : order.customer_name);
+    const authorName = d.reported_by.trim() || (d.reported_by_email || '').trim() || (isCustomerView() ? actingName() : order.customer_name);
     const ticket = {
         id: `tk-${Date.now()}`, ticket_no: nextTicketNo(),
         customer_name: order.customer_name, customer_org_id: order.customer_org_id ?? null,
@@ -9715,7 +10020,7 @@ function showTicketDetail(id) {
                             ${desk && fr.overdue ? '<span class="badge badge-red">Overdue</span>' : ''}
                         </div>
                         <div style="font-size:15px;font-weight:600;color:#1d1d1f;margin-top:6px">${esc(t.subject)}</div>
-                        <div style="font-size:12.5px;color:#86868b;margin-top:2px">${esc(t.customer_name)} · opened ${esc(ticketDateTime(t.created_at))} via ${esc(t.channel || '—')}${t.reported_by ? ` by ${esc(t.reported_by)}` : ''} · ${esc(t.category)}</div>
+                        <div style="font-size:12.5px;color:#86868b;margin-top:2px">${esc(t.customer_name)} · opened ${esc(ticketDateTime(t.created_at))} via ${esc(t.channel || '—')}${t.reported_by || t.reported_by_email ? ` by ${esc(t.reported_by || t.reported_by_email)}` : ''} · ${esc(t.category)}</div>
                     </div>
                     <button class="btn-ghost" onclick="closeModal()" title="Close"><i class="ph ph-x"></i></button>
                 </div>
@@ -9781,6 +10086,7 @@ function showTicketDetail(id) {
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:16px 0 8px">Internal handling</div>
                 <select class="input-field" onchange="setTicketInternalState('${t.id}', this.value)" ${!manage ? 'disabled' : t.status === 'RESOLVED' || t.status === 'CLOSED' ? 'disabled title="Reopen the ticket to refer it"' : ''}>
                     ${TICKET_INTERNAL_STATES.map(st => `<option value="${st}" ${st === ticketInternalState(t) ? 'selected' : ''}>${TICKET_INTERNAL_STATE_LABEL[st]}</option>`).join('')}
+                    ${ticketInternalState(t) === 'AISO_INTERNAL' ? `<option value="AISO_INTERNAL">${t.internal_assignee_id ? 'AISO internal work · change confirmer…' : 'AISO internal work · name a confirmer…'}</option>` : ''}
                 </select>
                 ${isTicketReferred(t) ? `<div style="margin-top:8px">${ticketInternalChip(t)}</div>
                 ${t.internal_note ? `<div style="font-size:11.5px;color:#86868b;margin-top:6px">${esc(t.internal_note)}</div>` : ''}` : ''}
@@ -9803,7 +10109,7 @@ function showTicketDetail(id) {
                 ${ticketEntitlementCard(t.snapshot || {}, ticketDeviceLabel(t))}
 
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:20px 0 8px">Order</div>
-                ${kv('Order', order ? `<a href="#" onclick="event.preventDefault();closeModal();showOrderDetail('${order.id}')" style="color:#1432E6;font-weight:600">${esc(t.snapshot?.order_no || order.order_no)}</a>` : esc(t.snapshot?.order_no || '—'))}
+                ${kv('Order', order ? `<a href="#" onclick="event.preventDefault();closeModal();showOrderDetail('${order.id}')" style="color:#1432E6;font-weight:600">${esc(order.order_no)}</a>` : esc(t.snapshot?.order_no || '—'))}
                 ${kv('Line', `${t.snapshot?.line_no ?? '—'} · ${esc(t.scope)} · ${esc(t.snapshot?.product_name || '—')}`)}
                 ${t.scope === 'HW' && ticketDeviceLabel(t) ? kv('Serial', `<span class="tk-mono">${esc(ticketDeviceLabel(t))}</span>`) : ''}
                 ${bomSummary ? kv('BOM', esc(bomSummary)) : ''}
@@ -9837,6 +10143,13 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
         ticketReplyDraft.text = body;
         showTicketDetail(t.id);
         showFormErrors([fieldErr('#tk-notify', `${gone.map(userNameById).join(', ')} can no longer be notified. Remove them to add this note.`)]);
+        return;
+    }
+    // The ticket may have changed under the open reply box (SA V2 4.6.1).
+    if (t.status === 'CLOSED' || (thenStatus && !['OPEN', 'IN_PROGRESS'].includes(t.status))) {
+        ticketReplyDraft.text = body;
+        showTicketDetail(t.id);
+        showFormErrors([fieldErr('#tk-reply', `${t.ticket_no} is now ${TICKET_STATUS_LABEL[t.status].toLowerCase()}. Reload to see the latest.`)]);
         return;
     }
     const fromStatus = t.status;
@@ -9892,6 +10205,7 @@ function setTicketStatus(ticketId, status) {
         t.updated_at = now;
         t.customer_updated_at = now;
         let handlingNote = '';
+        if (status === 'RESOLVED') t.resolved_entered_at = now;
         if (status === 'RESOLVED' || status === 'CLOSED') {
             t.resolved_at = t.resolved_at || now;
             // Nobody is being waited on once the ticket is done; the thread

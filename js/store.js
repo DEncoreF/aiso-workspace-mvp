@@ -17,8 +17,9 @@ const Store = (function () {
     //       out) and persisted, plus USERS / ROLES / ROLE_BINDINGS.
     // v4.6: account split out of organization (new grant in the type registry).
     // v4.7: roles in one organization merge; seed gives Tom a second role.
+    // v15: SW keys apart from Qty, ticket line filter, auto-close (SA V2.54–V2.58).
     // v14: invitations (Pending / Accepted / Revoked) and Not activated accounts.
-    const VERSION = 14;
+    const VERSION = 15;
     const IMG_MAX_WIDTH = 800;
     const IMG_JPEG_QUALITY = 0.8;
 

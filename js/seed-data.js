@@ -761,6 +761,7 @@ let SYSTEM_PARAMETERS = {
     signin_lock_minutes: 15,
     session_idle_minutes: 30,
     activity_log_retention_days: 365,
+    auto_close_resolved_days: 7,
 };
 
 let TICKETS = [
