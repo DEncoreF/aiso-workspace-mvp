@@ -3987,20 +3987,20 @@ function getParamPendingChanges() {
         const draftByLabel = new Map(draft.map(o => [o.label, o]));
         draft.forEach(item => {
             const before = liveByLabel.get(item.label);
-            if (!before) changes.push({ label: `${noun} "${item.label}" added` });
+            if (!before) changes.push({ label: `${noun} "${item.label}" added`, target: noun, detail: `"${item.label}" added` });
             else if (before.is_active !== item.is_active) {
-                changes.push({ label: `${noun} "${item.label}" ${item.is_active ? 'enabled' : 'disabled'}` });
+                changes.push({ label: `${noun} "${item.label}" ${item.is_active ? 'enabled' : 'disabled'}`, target: noun, detail: `"${item.label}" ${item.is_active ? 'enabled' : 'disabled'}` });
             }
         });
         live.forEach(item => {
-            if (!draftByLabel.has(item.label)) changes.push({ label: `${noun} "${item.label}" deleted` });
+            if (!draftByLabel.has(item.label)) changes.push({ label: `${noun} "${item.label}" deleted`, target: noun, detail: `"${item.label}" deleted` });
         });
     });
     ['software', 'hardware'].forEach(type => {
         const before = publishedOrderIds(type);
         const after = paramDraft.order[type];
         if (before.length !== after.length || before.some((id, i) => id !== after[i])) {
-            changes.push({ label: `${type === 'software' ? 'Software' : 'Hardware'} display order reordered` });
+            changes.push({ label: `${type === 'software' ? 'Software' : 'Hardware'} display order reordered`, target: `${type === 'software' ? 'Software' : 'Hardware'} display order`, detail: 'reordered' });
         }
     });
     SYSTEM_PARAM_FIELDS.forEach(f => {
@@ -4008,7 +4008,7 @@ function getParamPendingChanges() {
         const after = paramDraft.system[f.key].trim();
         if (after === before) return;
         const show = v => v ? `${v}${f.unit ? ` ${f.unit}` : ''}` : '(empty)';
-        changes.push({ label: `${f.label}: ${show(before)} → ${show(after)}` });
+        changes.push({ label: `${f.label}: ${show(before)} → ${show(after)}`, target: f.label, detail: `${show(before)} → ${show(after)}` });
     });
     return changes;
 }
@@ -4142,7 +4142,8 @@ function applyParamDraft(changes) {
             const v = draft.system[f.key].trim();
             SYSTEM_PARAMETERS[f.key] = f.unit ? parseInt(v, 10) : v;
         });
-        changes.forEach(change => logActivity('Parameter updated', 'Parameter Center', change.label));
+        // One entry per parameter changed; the target names the parameter (SA V2 4.8.1).
+        changes.forEach(change => logActivity('Parameter updated', change.target || 'Parameter Center', change.detail || change.label));
     });
 }
 
@@ -4270,7 +4271,7 @@ function renderSystemParams() {
                 <p class="text-xs text-[#86868b] mt-0.5">Where desk emails go, and how soon AISO must first reply. A ticket keeps the target in force when it was opened.</p>
             </div>
             <div class="border border-[#f1f3f5] rounded-lg overflow-hidden">
-                ${fields(f => f.email || f.key.startsWith('first_response_'))}
+                ${fields(f => f.email || f.key.startsWith('first_response_') || f.key === 'auto_close_resolved_days')}
             </div>
         </section>
         <section>
@@ -4856,13 +4857,17 @@ function getVisibleActivityLog() {
 function renderActivityLog() {
     const target = document.getElementById('activity-log-list');
     if (!target) return;
-    // The toolbar is built once so typing in the search box keeps focus.
-    if (!document.getElementById('al-search')) {
+    // The toolbar is built once so typing in the search box keeps focus;
+    // it is rebuilt when the viewer switches between desk and customer, since
+    // the module list differs (SA V2 4.8.3).
+    const scope = isOperatorView() ? 'desk' : 'customer';
+    if (!document.getElementById('al-search') || target.dataset.scope !== scope) {
+        target.dataset.scope = scope;
         target.innerHTML = `
             <div class="filter-bar" style="margin-bottom:12px">
                 <select id="al-module" class="select-field" onchange="renderActivityLogRows()">
                     <option value="">All modules</option>
-                    ${ACTIVITY_MODULES.map(m => `<option value="${m}">${m}</option>`).join('')}
+                    ${(isOperatorView() ? ACTIVITY_MODULES : ['Orders', 'Service Desk', 'Organizations']).map(m => `<option value="${m}">${m}</option>`).join('')}
                 </select>
                 <div class="filter-search">
                     <i class="ph ph-magnifying-glass"></i>
@@ -7880,7 +7885,8 @@ function toggleAccountStatus(userId) {
     const ok = commitPortalMutation(() => {
         user.status = next;
         user.updated_at = new Date().toISOString();
-        logActivity(next === 'active' ? 'Account re-enabled' : 'Account disabled', user.name, user.email);
+        logActivity(next === 'active' ? 'Account re-enabled' : 'Account disabled', user.email,
+            next === 'active' ? `${user.name} · ${isNotActivated(user) ? 'Not activated' : 'Active'}` : user.name);
     });
     if (!ok) return;
     closeModal();
@@ -8570,7 +8576,8 @@ function deleteRole(orgId, roleId) {
     if (ROLE_BINDINGS.some(b => b.role_id === roleId)) return;
     const ok = commitPortalMutation(() => {
         ROLES = ROLES.filter(r => r.id !== roleId);
-        logActivity('Role deleted', org.name, role.name);
+        const affected = getOrgInvitations(orgId).filter(inv => inv.role_ids.includes(roleId)).length;
+        logActivity('Role deleted', org.name, `${role.name}${affected ? ` · ${affected} invitation${affected === 1 ? '' : 's'} affected` : ''}`);
         // Open invitations drop the role; one left with none is revoked by
         // the system (SA V2 4.2.6).
         getOrgInvitations(orgId).filter(inv => inv.role_ids.includes(roleId)).forEach(inv => {
@@ -10181,7 +10188,8 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
             t.resolved_at = null;
         }
         // The detail carries what the reply did to the status, and who a note notified.
-        const detail = (body || `${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`).slice(0, 80)
+        const excerpt = body.replace(/\s*\n\s*/g, ' ');
+        const detail = (excerpt ? (excerpt.length > 80 ? `${excerpt.slice(0, 80)}…` : excerpt) : `${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`)
             + (fromStatus !== t.status ? ` · ${TICKET_STATUS_LABEL[fromStatus]} → ${TICKET_STATUS_LABEL[t.status]}` : '')
             + (notify.length ? ` · notified ${notify.map(userNameById).join(', ')}` : '');
         logActivity(isNote ? 'Ticket note added' : (manage ? 'Ticket replied' : 'Customer replied'), t.ticket_no, detail);
