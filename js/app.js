@@ -10071,7 +10071,8 @@ function showTicketDetail(id) {
                     <div style="margin-top:8px">${ticketAttachmentDropZone('tk-reply-files', 'onTicketReplyFiles(this.files)')}</div>
                     <div id="tk-att-error" class="field-error-text"></div>
                     <div class="field-hint">${TICKET_ATTACHMENT_HINT}</div>
-                    <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:8px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px">
+                        <div>${ticketEventAllowed(t, 'RESOLVE') ? `<button class="btn-secondary text-xs" onclick="runTicketStatusEvent('${t.id}', 'RESOLVE')">Resolve</button>` : ''}</div>
                         <div style="display:flex;gap:8px">
                             ${manage && ticketReplyMode === 'reply' && (t.status === 'OPEN' || t.status === 'IN_PROGRESS') ? `<button class="btn-secondary text-xs" onclick="postTicketMessage('${t.id}', { thenStatus: 'AWAITING_CUSTOMER_INFO' })">Send & mark awaiting customer</button>` : ''}
                             <button class="btn-primary text-xs" onclick="postTicketMessage('${t.id}')"><i class="ph ph-paper-plane-tilt"></i> ${ticketReplyMode === 'note' ? 'Add note' : 'Send'}</button>
@@ -10083,7 +10084,6 @@ function showTicketDetail(id) {
             <div style="min-height:0;padding:26px 24px;overflow-y:auto;background:var(--bg-subtle);border-left:1px solid var(--border-light)">
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin-bottom:8px">Status</div>
                 <div>${ticketStatusBadge(t.status)}</div>
-                ${ticketEventAllowed(t, 'RESOLVE') ? `<button class="btn-secondary text-xs" style="margin-top:8px" onclick="runTicketStatusEvent('${t.id}', 'RESOLVE')">Resolve</button>` : ''}
                 ${ticketEventAllowed(t, 'REOPEN') ? `<button class="btn-secondary text-xs" style="margin-top:8px" onclick="runTicketStatusEvent('${t.id}', 'REOPEN')">Reopen</button>` : ''}
                 ${ticketEventAllowed(t, 'CUSTOMER_CLOSE') ? `<button class="btn-secondary text-xs" style="margin-top:8px" onclick="confirmCustomerCloseTicket('${t.id}')">Close</button>` : ''}
                 ${desk ? `
