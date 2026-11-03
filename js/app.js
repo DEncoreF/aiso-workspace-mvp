@@ -9100,17 +9100,12 @@ function ticketInternalChip(t, { compact = false } = {}) {
 function setTicketInternalState(ticketId, state, { assigneeId = null, note = '' } = {}) {
     const t = getTicketById(ticketId);
     if (!t || !canManageTickets() || !TICKET_INTERNAL_STATES.includes(state)) return;
-    // Picking AISO internal work again changes (or first names) the confirmer.
+    // Change confirmer arrives with the new one; re-picking the same state does nothing.
     const changing = state === 'AISO_INTERNAL' && ticketInternalState(t) === 'AISO_INTERNAL';
-    if (ticketInternalState(t) === state && !changing) return;
-    if (changing && !assigneeId) {
-        if (deskStaff().some(u => u.id !== actingUser()?.id && u.id !== t.internal_assignee_id)) showReferInternalModal(t.id);
-        else showTicketDetail(t.id);
-        return;
-    }
-    // A resolved or closed ticket waits on nobody; reopen it first.
+    if (ticketInternalState(t) === state && !(changing && assigneeId)) return;
+    // A resolved or closed ticket waits on nobody (SA V2 4.6.4).
     if (state !== 'NONE' && (t.status === 'RESOLVED' || t.status === 'CLOSED')) {
-        showToast(`${t.ticket_no} is ${TICKET_STATUS_LABEL[t.status].toLowerCase()}. Reopen it before referring.`, 'error');
+        showToast(`${t.ticket_no} is now ${TICKET_STATUS_LABEL[t.status].toLowerCase()}. Reload to see the latest.`, 'error');
         showTicketDetail(t.id);
         return;
     }
@@ -9576,9 +9571,10 @@ function autoCloseResolvedTickets() {
         && Date.now() - new Date(t.resolved_entered_at || t.resolved_at || t.updated_at).getTime() >= days * 86400000);
     if (!due.length) return;
     commitPortalMutation(() => due.forEach(t => {
-        t.status = 'CLOSED';
-        t.updated_at = t.customer_updated_at = new Date().toISOString();
-        logActivity('Ticket status changed', t.ticket_no, `${TICKET_STATUS_LABEL.RESOLVED} → ${TICKET_STATUS_LABEL.CLOSED} · auto-closed after ${days} days`, null,
+        const now = new Date().toISOString();
+        applyTicketEvent(t, 'AUTO_CLOSE', now);
+        t.updated_at = t.customer_updated_at = now;
+        logActivity('Ticket status changed', t.ticket_no, `${TICKET_STATUS_LABEL.RESOLVED} → ${TICKET_STATUS_LABEL.CLOSED} · Auto-closed after ${days} days`, null,
             { name: 'System', org_id: null, role: '' });
     }));
 }
@@ -10056,7 +10052,7 @@ function showTicketDetail(id) {
                     </div>`; }).join('')}
                 </div>
 
-                ${!canReplyTickets() ? '' : closed ? `<div style="margin-top:14px;font-size:12.5px;color:#86868b;text-align:center">${isCustomerView() ? 'This ticket is closed. Open a new ticket if you need more help.' : 'This ticket is closed. Reopen it from the status control to continue the conversation.'}</div>` : `
+                ${!canReplyTickets() ? '' : closed ? `<div style="margin-top:14px;font-size:12.5px;color:#86868b;text-align:center">${isCustomerView() ? 'This ticket is closed. Open a new ticket if you need more help.' : 'This ticket is closed and cannot be reopened. Open a new ticket for any follow-up.'}</div>` : `
                 <div style="margin-top:14px;border:1px solid var(--border);border-radius:12px;padding:10px 12px;background:#fff">
                     ${manage ? `<div style="display:flex;gap:6px;margin-bottom:8px">
                         <button class="filter-tab ${ticketReplyMode === 'reply' ? 'active' : ''}" onclick="ticketReplyMode='reply';showTicketDetail('${t.id}')">Reply to customer</button>
@@ -10086,17 +10082,20 @@ function showTicketDetail(id) {
 
             <div style="min-height:0;padding:26px 24px;overflow-y:auto;background:var(--bg-subtle);border-left:1px solid var(--border-light)">
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin-bottom:8px">Status</div>
-                ${manage ? `<select class="input-field" onchange="setTicketStatus('${t.id}', this.value)">
-                    ${TICKET_STATUSES.map(s => `<option value="${s}" ${s === t.status ? 'selected' : ''}>${TICKET_STATUS_LABEL[s]}</option>`).join('')}
-                </select>` : `<div>${ticketStatusBadge(t.status)}</div>`}
+                <div>${ticketStatusBadge(t.status)}</div>
+                ${ticketEventAllowed(t, 'RESOLVE') ? `<button class="btn-secondary text-xs" style="margin-top:8px" onclick="runTicketStatusEvent('${t.id}', 'RESOLVE')">Resolve</button>` : ''}
+                ${ticketEventAllowed(t, 'REOPEN') ? `<button class="btn-secondary text-xs" style="margin-top:8px" onclick="runTicketStatusEvent('${t.id}', 'REOPEN')">Reopen</button>` : ''}
+                ${ticketEventAllowed(t, 'CUSTOMER_CLOSE') ? `<button class="btn-secondary text-xs" style="margin-top:8px" onclick="confirmCustomerCloseTicket('${t.id}')">Close</button>` : ''}
                 ${desk ? `
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:16px 0 8px">Internal handling</div>
-                <select class="input-field" onchange="setTicketInternalState('${t.id}', this.value)" ${!manage ? 'disabled' : t.status === 'RESOLVED' || t.status === 'CLOSED' ? 'disabled title="Reopen the ticket to refer it"' : ''}>
+                <select class="input-field" onchange="setTicketInternalState('${t.id}', this.value)" ${!manage ? 'disabled' : t.status === 'RESOLVED' ? 'disabled title="Reopen the ticket to refer it"' : t.status === 'CLOSED' ? 'disabled' : ''}>
                     ${TICKET_INTERNAL_STATES.map(st => `<option value="${st}" ${st === ticketInternalState(t) ? 'selected' : ''}>${TICKET_INTERNAL_STATE_LABEL[st]}</option>`).join('')}
-                    ${ticketInternalState(t) === 'AISO_INTERNAL' ? `<option value="AISO_INTERNAL">${t.internal_assignee_id ? 'AISO internal work · change confirmer…' : 'AISO internal work · name a confirmer…'}</option>` : ''}
                 </select>
                 ${isTicketReferred(t) ? `<div style="margin-top:8px">${ticketInternalChip(t)}</div>
                 ${t.internal_note ? `<div style="font-size:11.5px;color:#86868b;margin-top:6px">${esc(t.internal_note)}</div>` : ''}` : ''}
+                ${manage && ticketInternalState(t) === 'AISO_INTERNAL' && t.status !== 'RESOLVED' && t.status !== 'CLOSED'
+                    && deskStaff().some(u => u.id !== actingUser()?.id && u.id !== t.internal_assignee_id)
+                    ? `<button class="btn-secondary text-xs" style="margin-top:8px" onclick="showReferInternalModal('${t.id}')">${t.internal_assignee_id ? 'Change confirmer' : 'Name a confirmer'}</button>` : ''}
                 <div class="field-hint" style="margin-top:6px">Desk only. The customer keeps seeing ${esc(TICKET_STATUS_LABEL[t.status])}.</div>
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:16px 0 8px">Acceptance</div>
                 <select class="input-field" onchange="setTicketAcceptance('${t.id}', this.value)" ${manage ? '' : 'disabled'}>
@@ -10178,15 +10177,11 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
         if (!isNote) t.customer_updated_at = now;
         if (manage && !isNote) {
             if (!t.first_response_at) t.first_response_at = now;
-            if (thenStatus && (t.status === 'OPEN' || t.status === 'IN_PROGRESS')) t.status = thenStatus;
-            else if (t.status === 'OPEN') t.status = 'IN_PROGRESS';
+            applyTicketEvent(t, thenStatus === 'AWAITING_CUSTOMER_INFO' ? 'DESK_AWAIT' : 'DESK_REPLY', now);
         }
         // A customer answering an information request, or writing again after
         // resolution, puts the ball back with the desk.
-        if (!manage && (t.status === 'AWAITING_CUSTOMER_INFO' || t.status === 'RESOLVED')) {
-            t.status = 'IN_PROGRESS';
-            t.resolved_at = null;
-        }
+        if (!manage) applyTicketEvent(t, 'CUSTOMER_REPLY', now);
         // The detail carries what the reply did to the status, and who a note notified.
         const excerpt = body.replace(/\s*\n\s*/g, ' ');
         const detail = (excerpt ? (excerpt.length > 80 ? `${excerpt.slice(0, 80)}…` : excerpt) : `${attachments.length} attachment${attachments.length === 1 ? '' : 's'}`)
@@ -10202,43 +10197,89 @@ function postTicketMessage(ticketId, { thenStatus = null } = {}) {
     showTicketDetail(t.id);
 }
 
-function setTicketStatus(ticketId, status) {
+// The only ways a ticket's status may change (SA V2 4.6.1). Every change goes
+// through applyTicketEvent, which refuses an event the current status or the
+// actor does not allow; no screen sets a status directly.
+const TICKET_EVENTS = {
+    DESK_REPLY:     { by: 'desk',     from: ['OPEN'], to: 'IN_PROGRESS' },
+    DESK_AWAIT:     { by: 'desk',     from: ['OPEN', 'IN_PROGRESS'], to: 'AWAITING_CUSTOMER_INFO' },
+    RESOLVE:        { by: 'desk',     from: ['IN_PROGRESS', 'AWAITING_CUSTOMER_INFO'], to: 'RESOLVED', label: 'Resolve' },
+    REOPEN:         { by: 'desk',     from: ['RESOLVED'], to: 'IN_PROGRESS', label: 'Reopen' },
+    CUSTOMER_REPLY: { by: 'customer', from: ['AWAITING_CUSTOMER_INFO', 'RESOLVED'], to: 'IN_PROGRESS' },
+    CUSTOMER_CLOSE: { by: 'customer', from: ['RESOLVED'], to: 'CLOSED', label: 'Closed by customer' },
+    AUTO_CLOSE:     { by: 'system',   from: ['RESOLVED'], to: 'CLOSED' },
+};
+
+function ticketEventAllowed(t, event) {
+    const e = TICKET_EVENTS[event];
+    if (!e || !e.from.includes(t.status)) return false;
+    if (e.by === 'desk') return canManageTickets();
+    if (e.by === 'customer') return isCustomerView() && canReplyTickets();
+    return true;
+}
+
+// Moves the ticket and applies what the move brings with it. Returns the
+// handling change to add to the log detail, or null when the event is refused.
+function applyTicketEvent(t, event, now) {
+    if (!ticketEventAllowed(t, event)) return null;
+    const to = TICKET_EVENTS[event].to;
+    let handlingNote = '';
+    if (to === 'RESOLVED') {
+        t.resolved_at = t.resolved_entered_at = now;
+        // Nobody is being waited on once the ticket is done; the thread
+        // records who the desk had been waiting on (SA V2 4.6.1).
+        const fromHandling = ticketInternalState(t);
+        if (fromHandling !== 'NONE') {
+            TICKET_MESSAGES.push({
+                id: `tm-${Date.now()}`, ticket_id: t.id, author_type: 'INTERNAL', author_name: actingName(),
+                is_internal: true, created_at: now, attachments: [],
+                body: `Back with the desk (was ${TICKET_INTERNAL_STATE_LABEL[fromHandling]}).`,
+            });
+            handlingNote = ` · handling ${TICKET_INTERNAL_STATE_LABEL[fromHandling]} → ${TICKET_INTERNAL_STATE_LABEL.NONE}`;
+        }
+        t.internal_state = 'NONE';
+        t.internal_party = '';
+        t.internal_since = null;
+        t.internal_assignee_id = null;
+        t.internal_referred_by = null;
+        settlePendingConfirmations(t);
+    } else if (to === 'IN_PROGRESS' && t.status === 'RESOLVED') t.resolved_at = null;
+    t.status = to;
+    return handlingNote;
+}
+
+// Resolve, Reopen and the customer's Close.
+function runTicketStatusEvent(ticketId, event) {
     const t = getTicketById(ticketId);
-    if (!t || !canManageTickets() || !TICKET_STATUSES.includes(status) || t.status === status) return;
+    if (!t) return;
+    if (!TICKET_EVENTS[event].from.includes(t.status)) {
+        // The status moved since the button was drawn (SA V2 4.6.1).
+        showToast(`${t.ticket_no} is now ${TICKET_STATUS_LABEL[t.status].toLowerCase()}. Reload to see the latest.`, 'error');
+        return;
+    }
+    if (!ticketEventAllowed(t, event)) return;
     const now = new Date().toISOString();
     const ok = commitPortalMutation(() => {
         const from = t.status;
-        const fromHandling = ticketInternalState(t);
-        t.status = status;
-        t.updated_at = now;
-        t.customer_updated_at = now;
-        let handlingNote = '';
-        if (status === 'RESOLVED') t.resolved_entered_at = now;
-        if (status === 'RESOLVED' || status === 'CLOSED') {
-            t.resolved_at = t.resolved_at || now;
-            // Nobody is being waited on once the ticket is done; the thread
-            // records who the desk had been waiting on (SA V2 4.6.1).
-            if (fromHandling !== 'NONE') {
-                TICKET_MESSAGES.push({
-                    id: `tm-${Date.now()}`, ticket_id: t.id, author_type: 'INTERNAL', author_name: actingName(),
-                    is_internal: true, created_at: now, attachments: [],
-                    body: `Back with the desk (was ${TICKET_INTERNAL_STATE_LABEL[fromHandling]}).`,
-                });
-                handlingNote = ` · handling ${TICKET_INTERNAL_STATE_LABEL[fromHandling]} → ${TICKET_INTERNAL_STATE_LABEL.NONE}`;
-            }
-            t.internal_state = 'NONE';
-            t.internal_party = '';
-            t.internal_since = null;
-            t.internal_assignee_id = null;
-            t.internal_referred_by = null;
-            settlePendingConfirmations(t);
-        } else t.resolved_at = null;
-        logActivity('Ticket status changed', t.ticket_no, `${TICKET_STATUS_LABEL[from]} → ${TICKET_STATUS_LABEL[status]}${handlingNote}`);
+        const handlingNote = applyTicketEvent(t, event, now);
+        t.updated_at = t.customer_updated_at = now;
+        logActivity('Ticket status changed', t.ticket_no, `${TICKET_STATUS_LABEL[from]} → ${TICKET_STATUS_LABEL[t.status]} · ${TICKET_EVENTS[event].label}${handlingNote}`);
     });
     if (!ok) return;
     renderServiceDesk();
     showTicketDetail(t.id);
-    showToast(`${t.ticket_no} marked ${TICKET_STATUS_LABEL[status].toLowerCase()}`);
+    showToast(`${t.ticket_no} marked ${TICKET_STATUS_LABEL[t.status].toLowerCase()}`);
+}
+
+function confirmCustomerCloseTicket(ticketId) {
+    const t = getTicketById(ticketId);
+    if (!t) return;
+    showStackedConfirm({
+        title: `Close ${t.ticket_no}?`,
+        body: 'Closed tickets cannot be reopened. If you need more help later, open a new ticket.',
+        confirmLabel: 'Close ticket',
+        onConfirm: () => runTicketStatusEvent(ticketId, 'CUSTOMER_CLOSE'),
+    });
 }
 
 // ── Attachments ──

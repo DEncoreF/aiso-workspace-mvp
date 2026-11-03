@@ -722,7 +722,6 @@ let ORDER_LINES = [
 // the order later never rewrites history and rendering needs no join.
 // ═══════════════════════════════════════════════════════════════════
 
-const TICKET_STATUSES = ['OPEN', 'IN_PROGRESS', 'AWAITING_CUSTOMER_INFO', 'RESOLVED', 'CLOSED'];
 const TICKET_PRIORITIES = ['HIGH', 'MEDIUM', 'LOW'];
 const TICKET_CATEGORIES = ['Hardware Failure', 'Software / Model Anomaly', 'License / Activation', 'Other'];
 const TICKET_CHANNELS = ['Email', 'Phone', 'Workspace', 'On-site'];
