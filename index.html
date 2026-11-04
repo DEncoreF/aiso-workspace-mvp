@@ -718,16 +718,14 @@
         .tab-btn.active { background: #1d1d1f; color: #ffffff; }
 
         /* ── Service Desk ── */
-        .tk-stat { flex:1; border:1px solid var(--border-light); border-radius:12px; padding:12px 14px; background:var(--bg-subtle); min-width:0 }
-        .tk-stat .v { font-size:22px; font-weight:700; letter-spacing:-.02em; line-height:1.1 }
-        .tk-stat .l { font-size:11.5px; color:#86868b; margin-top:2px }
         .tk-kv { display:flex; justify-content:space-between; gap:16px; padding:8px 0; border-bottom:1px solid #f5f5f7 }
         .tk-kv span:first-child { font-size:12.5px; color:#86868b; flex-shrink:0 }
         .tk-kv span:last-child { font-size:13px; color:#1d1d1f; text-align:right; min-width:0; overflow-wrap:anywhere }
         .tk-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; background:#f5f5f7; border-radius:6px; padding:3px 8px; color:#1d1d1f }
         .tk-msg { display:flex; gap:12px; padding:14px 0; border-bottom:1px solid #f5f5f7 }
         .tk-msg .av { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; flex-shrink:0 }
-        .tk-msg .av-c { background:#eef1ff; color:#1432E6 } .tk-msg .av-i { background:#1d1d1f; color:#fff }
+        .tk-msg .av-aiso { background:#111936; color:#fff }
+        .badge-aiso { background:#111936; color:#fff }
         .tk-msg .who { font-size:12.5px; font-weight:600; color:#1d1d1f } .tk-msg .when { font-size:11.5px; color:#86868b; margin-left:8px }
         .tk-msg .body { font-size:13px; color:#1d1d1f; margin-top:4px; line-height:1.55; white-space:pre-wrap }
         .tk-msg.internal .body { background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:10px 12px }
@@ -769,6 +767,7 @@
         .tk-preview .cap { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); color:#fff; font-size:12.5px; background:rgba(0,0,0,0.45); padding:6px 12px; border-radius:980px }
 
         /* ── View-as switch (bottom-right) ── */
+        #top-bar:has(#notif-root:not(:empty)) { padding-right:50px }
         .notif-btn { position:relative; width:36px; height:36px; border-radius:50%; border:1px solid var(--border); background:#fff; color:#1d1d1f; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:17px }
         .notif-btn:hover { background:#f5f5f7 }
         .notif-count { position:absolute; top:-4px; right:-4px; min-width:18px; height:18px; padding:0 5px; border-radius:980px; background:#dc2626; color:#fff; font-size:10.5px; font-weight:700; display:flex; align-items:center; justify-content:center; border:2px solid #fff }
@@ -854,12 +853,13 @@
 
     <!-- ============== MAIN CONTENT ============== -->
     <main id="main-content" class="ml-[240px]" style="padding: 2.5rem 3rem">
-        <div id="top-bar" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        <div id="top-bar" style="position:relative;display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--border)">
             <div id="page-heading"></div>
             <div style="display:flex;align-items:center;gap:14px">
-                <div id="notif-root" style="position:relative"></div>
                 <div id="page-action"></div>
             </div>
+            <!-- The bell keeps one spot on every page, whatever the page action holds. -->
+            <div id="notif-root" style="position:absolute;top:0;right:0"></div>
         </div>
         <div id="view-container">
 

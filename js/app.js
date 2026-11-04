@@ -1206,7 +1206,7 @@ function renderSwProducts() {
             <td>${statusBadge(p.status)}</td>
             <td class="text-right" onclick="event.stopPropagation()">
                 <div class="flex items-center gap-0.5 justify-end">
-                    ${p.status !== 'archived' ? `<button onclick="showEditProductModal('${p.id}', 'list')" class="btn-ghost" title="Edit"><i class="ph ph-pencil-simple"></i></button>` : ''}
+                    ${p.status !== 'archived' && canManageProduct(p) ? `<button onclick="showEditProductModal('${p.id}', 'list')" class="btn-ghost" title="Edit"><i class="ph ph-pencil-simple"></i></button>` : ''}
                     ${productActionBtns(p)}
                 </div>
             </td>
@@ -1214,16 +1214,19 @@ function renderSwProducts() {
     `).join('') : `<tr><td colspan="5" class="text-center py-16">${emptyState(
         'ph-app-window',
         searchQ ? EMPTY_STATE_NO_RESULTS : EMPTY_STATE_NO_DATA,
-        !searchQ && !filterS ? '<button onclick="showCreateProductModal(\'software\')" class="btn-primary text-xs mt-1"><i class="ph ph-plus-circle"></i> Add Software</button>' : ''
+        !searchQ && !filterS && canCreateProduct('software') ? '<button onclick="showCreateProductModal(\'software\')" class="btn-primary text-xs mt-1"><i class="ph ph-plus-circle"></i> Add Software</button>' : ''
     )}</td></tr>`;
     renderProductPagination('software', list.length, page.currentPage, page.totalPages);
 }
 
+// Buttons follow the role's permissions (SA V2 2.4): U for status changes, D to delete.
 function productActionBtns(p) {
     let btns = '';
     if (p.status === 'archived') {
-        btns += `<button onclick="restoreProduct('${p.id}')" class="btn-ghost" style="color:#059669" title="Restore"><i class="ph ph-arrow-counter-clockwise"></i></button>`;
-        btns += `<button onclick="confirmDeleteProduct('${p.id}')" class="btn-ghost" style="color:#dc2626" title="Delete permanently"><i class="ph ph-trash"></i></button>`;
+        if (canManageProduct(p)) btns += `<button onclick="restoreProduct('${p.id}')" class="btn-ghost" style="color:#059669" title="Restore"><i class="ph ph-arrow-counter-clockwise"></i></button>`;
+        if (canDeleteProduct(p)) btns += `<button onclick="confirmDeleteProduct('${p.id}')" class="btn-ghost" style="color:#dc2626" title="Delete permanently"><i class="ph ph-trash"></i></button>`;
+    } else if (!canManageProduct(p)) {
+        return '';
     } else if (p.status === 'published') {
         // Published products must be unpublished first — no direct Archive.
         btns += `<button onclick="confirmUnpublish('${p.id}')" class="btn-ghost" style="color:#d97706" title="Unpublish"><i class="ph ph-arrow-line-down"></i></button>`;
@@ -1272,6 +1275,7 @@ function renderStatsBar(containerId, all) {
 function confirmUnpublish(pid) {
     const p = PRODUCTS.find(x => x.id === pid);
     if (!p) return;
+    if (!canManageProduct(p)) { showToast('Your role cannot change this product.', 'error'); return; }
     showModal(`
         <div style="text-align:center;padding:1rem 0">
             <div style="width:56px;height:56px;border-radius:16px;background:#fff7ed;display:inline-flex;align-items:center;justify-content:center;margin-bottom:16px"><i class="ph ph-warning-circle" style="font-size:28px;color:#d97706"></i></div>
@@ -1335,6 +1339,7 @@ function showHwCompatConflictModal(pid, actionLabel, confirmJs) {
 function doUnpublish(pid, force = false) {
     const p = PRODUCTS.find(x => x.id === pid);
     if (!p) return;
+    if (!canManageProduct(p)) { showToast('Your role cannot change this product.', 'error'); return; }
     if (p.product_type === 'hardware' && findCompatRefs(pid).length) {
         if (!force) { showHwCompatConflictModal(pid, 'Unpublish', `doUnpublish('${pid}', true)`); return; }
     }
@@ -1359,6 +1364,7 @@ function doUnpublish(pid, force = false) {
 function archiveProduct(pid, force = false, nav = '') {
     const p = PRODUCTS.find(x => x.id === pid);
     if (!p) return;
+    if (!canManageProduct(p)) { showToast('Your role cannot change this product.', 'error'); return; }
     if (p.product_type === 'hardware' && findCompatRefs(pid).length) {
         if (!force) { showHwCompatConflictModal(pid, 'Archive', `archiveProduct('${pid}', true, '${nav}')`); return; }
     }
@@ -1379,6 +1385,7 @@ function archiveProduct(pid, force = false, nav = '') {
 function restoreProduct(pid) {
     const p = PRODUCTS.find(x => x.id === pid);
     if (!p) return;
+    if (!canManageProduct(p)) { showToast('Your role cannot change this product.', 'error'); return; }
     const saved = commitPortalMutation(() => {
         p.status = 'draft';
         p.updated_at = new Date().toISOString().slice(0, 10);
@@ -1420,6 +1427,7 @@ function clearDeleteConfirmError() {
 function doDeleteProduct(pid, force = false) {
     const p = PRODUCTS.find(x => x.id === pid);
     if (!p) return;
+    if (!canDeleteProduct(p)) { showToast('Your role cannot delete products.', 'error'); return; }
     const detailView = document.getElementById(`view-${p.product_type === 'software' ? 'sw' : 'hw'}-detail`);
     const returnToList = detailView && !detailView.classList.contains('hidden')
         ? (p.product_type === 'software' ? 'sw-products' : 'hw-products')
@@ -1491,7 +1499,7 @@ function renderHwProducts() {
             <td>${statusBadge(p.status)}</td>
             <td class="text-right" onclick="event.stopPropagation()">
                 <div class="flex items-center gap-0.5 justify-end">
-                    ${p.status !== 'archived' ? `<button onclick="showEditProductModal('${p.id}', 'list')" class="btn-ghost" title="Edit"><i class="ph ph-pencil-simple"></i></button>` : ''}
+                    ${p.status !== 'archived' && canManageProduct(p) ? `<button onclick="showEditProductModal('${p.id}', 'list')" class="btn-ghost" title="Edit"><i class="ph ph-pencil-simple"></i></button>` : ''}
                     ${productActionBtns(p)}
                 </div>
             </td>
@@ -1499,7 +1507,7 @@ function renderHwProducts() {
     `).join('') : `<tr><td colspan="7" class="text-center py-16">${emptyState(
         'ph-hard-drives',
         searchQ ? EMPTY_STATE_NO_RESULTS : EMPTY_STATE_NO_DATA,
-        !searchQ && !filterS ? '<button onclick="showCreateProductModal(\'hardware\')" class="btn-primary text-xs mt-1"><i class="ph ph-plus-circle"></i> Add Hardware</button>' : ''
+        !searchQ && !filterS && canCreateProduct('hardware') ? '<button onclick="showCreateProductModal(\'hardware\')" class="btn-primary text-xs mt-1"><i class="ph ph-plus-circle"></i> Add Hardware</button>' : ''
     )}</td></tr>`;
     renderProductPagination('hardware', list.length, page.currentPage, page.totalPages);
 }
@@ -1641,7 +1649,7 @@ function showSwDetail(pid) {
                 ${canEdit && p.status !== 'published' && p.status !== 'archived' ? `<button onclick="togglePublish('${p.id}');showSwDetail('${p.id}')" class="btn-primary" style="background:#059669"><i class="ph ph-arrow-up"></i> Publish</button>` : ''}
                 ${canEdit && p.status !== 'published' && p.status !== 'archived' ? `<button onclick="confirmArchive('${p.id}', 'sw-products')" class="btn-secondary" style="color:#7c3aed"><i class="ph ph-archive"></i> Archive</button>` : ''}
                 ${canEdit && p.status === 'archived' ? `<button onclick="restoreProduct('${p.id}');showSwDetail('${p.id}')" class="btn-primary" style="background:#059669"><i class="ph ph-arrow-counter-clockwise"></i> Restore</button>` : ''}
-                ${canEdit && p.status === 'archived' ? `<button onclick="confirmDeleteProduct('${p.id}')" class="btn-secondary" style="color:#dc2626"><i class="ph ph-trash"></i> Delete</button>` : ''}
+                ${canDeleteProduct(p) && p.status === 'archived' ? `<button onclick="confirmDeleteProduct('${p.id}')" class="btn-secondary" style="color:#dc2626"><i class="ph ph-trash"></i> Delete</button>` : ''}
             </div>
         </div>
 
@@ -1719,7 +1727,7 @@ function showHwDetail(pid) {
                 ${canEdit && p.status !== 'published' && p.status !== 'archived' ? `<button onclick="togglePublish('${p.id}');showHwDetail('${p.id}')" class="btn-primary" style="background:#059669"><i class="ph ph-arrow-up"></i> Publish</button>` : ''}
                 ${canEdit && p.status !== 'published' && p.status !== 'archived' ? `<button onclick="confirmArchive('${p.id}', 'hw-products')" class="btn-secondary" style="color:#7c3aed"><i class="ph ph-archive"></i> Archive</button>` : ''}
                 ${canEdit && p.status === 'archived' ? `<button onclick="restoreProduct('${p.id}');showHwDetail('${p.id}')" class="btn-primary" style="background:#059669"><i class="ph ph-arrow-counter-clockwise"></i> Restore</button>` : ''}
-                ${canEdit && p.status === 'archived' ? `<button onclick="confirmDeleteProduct('${p.id}')" class="btn-secondary" style="color:#dc2626"><i class="ph ph-trash"></i> Delete</button>` : ''}
+                ${canDeleteProduct(p) && p.status === 'archived' ? `<button onclick="confirmDeleteProduct('${p.id}')" class="btn-secondary" style="color:#dc2626"><i class="ph ph-trash"></i> Delete</button>` : ''}
             </div>
         </div>
 
@@ -3102,6 +3110,7 @@ function showCreateProductModal(type) {
 }
 
 function createProduct(type) {
+    if (!canCreateProduct(type)) { showToast('Your role cannot create products.', 'error'); return; }
     if (!validateCreateProductForm(type)) {
         showToast('Please fix the highlighted fields', 'error');
         return;
@@ -3176,6 +3185,7 @@ function createProduct(type) {
 function showEditProductModal(pid, source) {
     const p = PRODUCTS.find(x => x.id === pid);
     if (!p) return;
+    if (!canManageProduct(p)) { showToast('Your role cannot change this product.', 'error'); return; }
     if (p.status === 'archived') { showToast('Archived products cannot be edited. Please restore the product as a draft before making changes.', 'error'); return; }
     // Remember where Edit was opened from so saveProduct can return there.
     editReturnView = source === 'list' ? 'list' : 'detail';
@@ -3676,6 +3686,7 @@ function handleEditHwImageUpload(input) {
 async function saveProduct(pid) {
     const p = PRODUCTS.find(x => x.id === pid);
     if (!p) return;
+    if (!canManageProduct(p)) { showToast('Your role cannot change this product.', 'error'); return; }
     const isSW = p.product_type === 'software';
     const val = id => (document.getElementById(id)?.value || '').trim();
 
@@ -6651,7 +6662,9 @@ function validateOrderDraft(status) {
 // Tickets opened on a line keep pointing at the serial or key they were
 // opened on, so an edit may not change that serial or drop that key
 // (SA V2 4.5.3 編號 19, 26; 4.5.5 Adjust license).
-function ticketNos(list) { return list.map(t => t.ticket_no).join(', '); }
+// Ticket numbers listed together run oldest first, which is ticket-number order (SA V2 4.6.1).
+function byTicketNo(a, b) { return (a.created_at || '').localeCompare(b.created_at || ''); }
+function ticketNos(list) { return [...list].sort(byTicketNo).map(t => t.ticket_no).join(', '); }
 function groupTicketsBy(lineId, field) {
     const by = new Map();
     // Older tickets keep the key only in their snapshot.
@@ -7408,7 +7421,7 @@ function confirmCancelOrder(id) {
         <div style="padding:26px 28px">
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">${esc(o.order_no)} cannot be cancelled yet</h3>
             <p style="font-size:13px;color:#86868b;line-height:1.6;margin:0 0 18px">
-                ${open.length} ticket${open.length === 1 ? ' is' : 's are'} still open (${esc(open.map(t => t.ticket_no).join(', '))}).
+                ${open.length} ticket${open.length === 1 ? ' is' : 's are'} still open (${esc(ticketNos(open))}).
                 ${initiator && !orderCreatorCanCancel(o) ? 'While tickets are open, only a Super Admin can cancel it.'
                     : `While tickets are open, only the person who created this order${initiator ? `, ${esc(initiator)},` : ''} can cancel it.`}
             </p>
@@ -9468,6 +9481,29 @@ function getFilteredTickets() {
     }).sort((a, b) => (ticketUpdatedAtFor(b) || '').localeCompare(ticketUpdatedAtFor(a) || ''));
 }
 
+// Ticket thread avatars tell the organizations apart (SA V2 4.6.4): AISO in
+// its navy, each customer organization in a colour of its own that stays the
+// same on every ticket.
+const TICKET_ORG_COLORS = [
+    { fg: '#1432E6', bg: '#eef1ff' }, { fg: '#0f766e', bg: '#e6f6f4' }, { fg: '#7c3aed', bg: '#f3edff' },
+    { fg: '#be123c', bg: '#ffe9ee' }, { fg: '#15803d', bg: '#e8f6ec' }, { fg: '#c2410c', bg: '#fff0e6' },
+];
+function ticketOrgColor(orgId) {
+    const key = String(orgId || '');
+    let h = 0;
+    for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return TICKET_ORG_COLORS[h % TICKET_ORG_COLORS.length];
+}
+function ticketMessageAvatar(m, t, who) {
+    if (m.author_type === 'CUSTOMER') {
+        const c = ticketOrgColor(t.customer_org_id);
+        return `<div class="av" style="background:${c.bg};color:${c.fg}">${esc(getUserInitials(who || t.customer_name))}</div>`;
+    }
+    // Customers see the desk, not the person.
+    if (isCustomerView()) return '<div class="av av-aiso" title="AISO Service Desk"><i class="ph ph-headset" style="font-size:16px"></i></div>';
+    return `<div class="av av-aiso">${esc(getUserInitials(who || 'AISO'))}</div>`;
+}
+
 function renderTicketStats() {
     const target = document.getElementById('tk-stats-bar');
     if (!target) return;
@@ -9477,10 +9513,15 @@ function renderTicketStats() {
     const awaiting = all.filter(t => t.status === 'AWAITING_CUSTOMER_INFO').length;
     const overdue = all.filter(t => ticketFirstResponse(t).overdue).length;
     const resolved = all.filter(t => t.resolved_at && toIsoDate(new Date(t.resolved_at)).slice(0, 7) === month).length;
-    const stat = (v, l, color = '#1d1d1f') => `<div class="tk-stat"><div class="v" style="color:${color}">${v}</div><div class="l">${l}</div></div>`;
+    // Same chips as the product lists' stats bar (renderStatsBar).
+    const stat = (v, l, color) => `<div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:12px;background:#fafbfc;border:1px solid var(--border-light);min-width:0">
+        <div style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></div>
+        <span style="font-size:12px;font-weight:600;color:#1d1d1f">${v}</span>
+        <span style="font-size:11px;color:#86868b;font-weight:500">${l}</span>
+    </div>`;
     // First-response timing is the desk's own measure; customers do not see it.
-    target.innerHTML = stat(open, 'Open') + stat(awaiting, 'Awaiting customer', awaiting ? '#b45309' : '#1d1d1f')
-        + (isOperatorView() ? stat(overdue, 'First response overdue', overdue ? '#dc2626' : '#1d1d1f') : '') + stat(resolved, 'Resolved this month');
+    target.innerHTML = stat(open, 'Open', '#1432E6') + stat(awaiting, 'Awaiting customer', '#b45309')
+        + (isOperatorView() ? stat(overdue, 'First response overdue', '#dc2626') : '') + stat(resolved, 'Resolved this month', '#059669');
 }
 
 // The ticket list pages like every list (SA V2 4.6.2: 10 per page).
@@ -9997,7 +10038,7 @@ function showTicketDetail(id) {
     const fr = ticketFirstResponse(t);
     const order = getOrderById(t.order_id);
     const line = ORDER_LINES.find(l => l.id === t.order_line_id);
-    const others = getOrderTickets(t.order_id).filter(x => x.id !== t.id);
+    const others = getOrderTickets(t.order_id).filter(x => x.id !== t.id).sort(byTicketNo);
     const closed = t.status === 'CLOSED';
     if (!manage) ticketReplyMode = 'reply';
     // Reply text, pending files and the reply/note mode survive re-renders of
@@ -10040,10 +10081,10 @@ function showTicketDetail(id) {
                         const who = m.author_type !== 'CUSTOMER' && isCustomerView() ? 'AISO Service Desk' : m.author_name;
                         return `
                     <div class="tk-msg ${m.is_internal ? 'internal' : ''}">
-                        <div class="av ${m.author_type === 'CUSTOMER' ? 'av-c' : 'av-i'}">${esc(getUserInitials(who || (m.author_type === 'CUSTOMER' ? t.customer_name : 'AISO')))}</div>
+                        ${ticketMessageAvatar(m, t, who)}
                         <div style="min-width:0;flex:1">
                             <span class="who">${esc(who || '—')}</span>
-                            <span class="badge ${m.is_internal ? 'badge-amber' : (m.author_type === 'CUSTOMER' ? 'badge-customer' : 'badge-zinc')}" style="margin-left:6px">${m.is_internal ? 'Internal note' : (m.author_type === 'CUSTOMER' ? 'Customer' : 'AISO')}</span>
+                            <span class="badge ${m.is_internal ? 'badge-amber' : (m.author_type === 'CUSTOMER' ? '' : 'badge-aiso')}" style="margin-left:6px;${!m.is_internal && m.author_type === 'CUSTOMER' ? `background:${ticketOrgColor(t.customer_org_id).bg};color:${ticketOrgColor(t.customer_org_id).fg}` : ''}">${m.is_internal ? 'Internal note' : (m.author_type === 'CUSTOMER' ? 'Customer' : 'AISO')}</span>
                             <span class="when">${esc(ticketDateTime(m.created_at))}</span>
                             <div class="body">${esc(m.body)}</div>
                             ${m.is_internal && (m.notify_user_ids || []).length ? `<div style="font-size:11.5px;color:#86868b;margin-top:4px"><i class="ph ph-bell"></i> Notified ${esc(m.notify_user_ids.map(userNameById).filter(Boolean).join(', '))}${m.email_notify ? ' · in-app and email' : ''}</div>` : ''}
@@ -10066,7 +10107,7 @@ function showTicketDetail(id) {
                         ${staff.length ? staff.map(u => `<button class="tk-chip ${(reply.notify || []).includes(u.id) ? 'active' : ''}" style="padding:4px 10px;font-size:12px" onclick="toggleReplyNotify('${u.id}')">${esc(u.name)}</button>`).join('')
                             : '<span style="font-size:11.5px;color:#86868b">No AISO colleagues with ticket access yet — add people to AISO under Organizations.</span>'}
                         ${staff.length ? `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#1d1d1f;margin-left:6px;cursor:pointer" title="Besides the in-app notification">
-                            <input type="checkbox" ${reply.email ? 'checked' : ''} ${(reply.notify || []).length ? '' : 'disabled'} onchange="ticketReplyDraft.email=this.checked"> Also email</label>` : ''}
+                            <input type="checkbox" ${reply.email ? 'checked' : ''} ${(reply.notify || []).length ? '' : 'disabled'} onchange="ticketReplyDraft.email=this.checked"> Also Email</label>` : ''}
                     </div>` : ''}
                     <div style="margin-top:8px">${ticketAttachmentDropZone('tk-reply-files', 'onTicketReplyFiles(this.files)')}</div>
                     <div id="tk-att-error" class="field-error-text"></div>
@@ -10083,8 +10124,7 @@ function showTicketDetail(id) {
 
             <div style="min-height:0;padding:26px 24px;overflow-y:auto;background:var(--bg-subtle);border-left:1px solid var(--border-light)">
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin-bottom:8px">Status</div>
-                <div>${ticketStatusBadge(t.status)}</div>
-                ${ticketEventAllowed(t, 'REOPEN') ? `<button class="btn-secondary text-xs" style="margin-top:8px" onclick="runTicketStatusEvent('${t.id}', 'REOPEN')">Reopen</button>` : ''}
+                <div style="display:flex;align-items:center;gap:8px">${ticketStatusBadge(t.status)}${ticketEventAllowed(t, 'REOPEN') ? `<button class="btn-secondary text-xs" onclick="runTicketStatusEvent('${t.id}', 'REOPEN')">Reopen</button>` : ''}</div>
                 ${ticketEventAllowed(t, 'CUSTOMER_CLOSE') ? `<button class="btn-secondary text-xs" style="margin-top:8px" onclick="confirmCustomerCloseTicket('${t.id}')">Close</button>` : ''}
                 ${desk ? `
                 <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#86868b;margin:16px 0 8px">Internal handling</div>
