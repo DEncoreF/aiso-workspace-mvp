@@ -82,7 +82,7 @@ let ORGS = [
     // AISO is the operator only. Its vendor side belongs in a separate org,
     // which waits until vendor orgs open (SA V2 D32).
     { id: 'v-aiso', customer_type: null, name: 'AISO', types: ['OPERATOR'], vendor_type: null, status: 'active',
-      contact_email: 'service.desk@aiso.com', note: '', created_at: '2025-01-01T00:00:00.000Z', updated_at: '2025-01-01T00:00:00.000Z' },
+      contact_email: 'service@aisoportal.com', note: '', created_at: '2025-01-01T00:00:00.000Z', updated_at: '2025-01-01T00:00:00.000Z' },
     { id: 'v-phison', customer_type: null, name: 'Phison Electronics', types: ['VENDOR'], vendor_type: 'HARDWARE', status: 'active',
       contact_email: '', note: '', created_at: '2025-01-01T00:00:00.000Z', updated_at: '2025-01-01T00:00:00.000Z' },
     { id: 'v-tpi', customer_type: null, name: 'TPIsoftware Corporation', types: ['VENDOR'], vendor_type: 'SOFTWARE', status: 'active',
@@ -750,7 +750,7 @@ const TICKET_INTERNAL_STATE_LABEL = {
 // plan; a ticket copies its target when it is opened.
 let SYSTEM_PARAMETERS = {
     invitation_link_days: 7,
-    service_desk_mailbox: 'service.desk@aiso.com',
+    service_desk_mailbox: 'service@aisoportal.com',
     first_response_7x24: 4,
     first_response_onsite: 8,
     first_response_5x8: 24,

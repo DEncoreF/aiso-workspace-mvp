@@ -9308,6 +9308,12 @@ function renderNotificationBell() {
     if (!me || !isOperatorView()) { root.innerHTML = ''; notifMenuOpen = false; return; }
     const list = myNotifications();
     const unread = list.filter(n => !n.read_at).length;
+    // Unread never expire; read ones stay 30 days, 30 at most (SA V2 4.6.6).
+    const cutoff = Date.now() - 30 * 86400000;
+    const read = list.filter(n => n.read_at && new Date(n.created_at).getTime() >= cutoff)
+        .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).slice(0, 30);
+    const shown = list.filter(n => !n.read_at).concat(read)
+        .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
     root.innerHTML = `
         <button class="notif-btn" onclick="toggleNotifMenu(event)" aria-label="Notifications${unread ? `, ${unread} unread` : ''}" title="Notifications">
             <i class="ph ph-bell"></i>${unread ? `<span class="notif-count">${unread > 99 ? '99+' : unread}</span>` : ''}
@@ -9318,7 +9324,7 @@ function renderNotificationBell() {
                 <span style="font-size:12.5px;font-weight:700">Notifications</span>
                 ${unread ? '<button class="btn-link" style="font-size:12px" onclick="markAllNotificationsRead()">Mark all read</button>' : ''}
             </div>
-            ${list.length ? list.slice(0, 30).map(n => {
+            ${shown.length ? shown.map(n => {
                 const t = getTicketById(n.ticket_id);
                 return `<button class="notif-item ${n.read_at ? '' : 'unread'}" onclick="openNotification('${n.id}')">
                     <span class="dot"></span>
@@ -9420,12 +9426,20 @@ function toggleReplyNotify(userId) {
 
 function serviceDeskPageAction() {
     const newBtn = canCreateTickets() ? `<button onclick="showTicketCreateModal()" class="btn-primary"><i class="ph ph-plus"></i> New Ticket</button>` : '';
-    if (isCustomerView()) return `<div style="white-space:nowrap">${newBtn}</div>`;
+    return `<div style="white-space:nowrap">${newBtn}</div>`;
+}
+
+// The desk's dropdown filters sit above the stats (SA V2 4.6.2); customers have none.
+function renderTicketDropdownFilters() {
+    const target = document.getElementById('tk-dropdown-filters');
+    if (!target) return;
+    if (!isOperatorView()) { target.innerHTML = ''; target.style.display = 'none'; return; }
+    target.style.display = 'flex';
     const names = [...new Set(TICKETS.map(t => t.customer_name).concat(ORDERS.filter(o => o.status === 'CONFIRMED').map(o => o.customer_name)))].filter(Boolean).sort();
     const current = document.getElementById('ticket-customer')?.value || '';
     const handling = document.getElementById('ticket-handling')?.value || '';
     const acceptance = document.getElementById('ticket-acceptance')?.value || '';
-    return `<div style="display:flex;align-items:center;gap:10px;white-space:nowrap">
+    target.innerHTML = `
         <select id="ticket-customer" class="select-field" onchange="renderServiceDesk()">
             <option value="">All customers</option>
             ${names.map(n => `<option value="${esc(n)}" ${n === current ? 'selected' : ''}>${esc(n)}</option>`).join('')}
@@ -9438,9 +9452,7 @@ function serviceDeskPageAction() {
         <select id="ticket-acceptance" class="select-field" onchange="renderServiceDesk()" title="Acceptance and charging">
             <option value="">All acceptance</option>
             ${TICKET_ACCEPTANCE.map(a => `<option value="${a}" ${a === acceptance ? 'selected' : ''}>${TICKET_ACCEPTANCE_LABEL[a]}</option>`).join('')}
-        </select>
-        ${newBtn}
-    </div>`;
+        </select>`;
 }
 
 function setTicketFilter(val) {
@@ -9508,20 +9520,15 @@ function renderTicketStats() {
     const target = document.getElementById('tk-stats-bar');
     if (!target) return;
     const all = getScopedTickets();
-    const month = todayIso().slice(0, 7);
-    const open = all.filter(t => t.status === 'OPEN' || t.status === 'IN_PROGRESS').length;
-    const awaiting = all.filter(t => t.status === 'AWAITING_CUSTOMER_INFO').length;
-    const overdue = all.filter(t => ticketFirstResponse(t).overdue).length;
-    const resolved = all.filter(t => t.resolved_at && toIsoDate(new Date(t.resolved_at)).slice(0, 7) === month).length;
+    const count = st => all.filter(t => t.status === st).length;
     // Same chips as the product lists' stats bar (renderStatsBar).
     const stat = (v, l, color) => `<div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:12px;background:#fafbfc;border:1px solid var(--border-light);min-width:0">
         <div style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></div>
         <span style="font-size:12px;font-weight:600;color:#1d1d1f">${v}</span>
         <span style="font-size:11px;color:#86868b;font-weight:500">${l}</span>
     </div>`;
-    // First-response timing is the desk's own measure; customers do not see it.
-    target.innerHTML = stat(open, 'Open', '#1432E6') + stat(awaiting, 'Awaiting customer', '#b45309')
-        + (isOperatorView() ? stat(overdue, 'First response overdue', '#dc2626') : '') + stat(resolved, 'Resolved this month', '#059669');
+    target.innerHTML = stat(count('OPEN'), 'Open', '#4338ca') + stat(count('IN_PROGRESS'), 'In Progress', '#d97706')
+        + stat(count('AWAITING_CUSTOMER_INFO'), 'Awaiting Customer', '#b45309') + stat(count('RESOLVED'), 'Resolved', '#059669');
 }
 
 // The ticket list pages like every list (SA V2 4.6.2: 10 per page).
@@ -9543,6 +9550,7 @@ function renderServiceDesk() {
     }
     autoCloseResolvedTickets();
     renderNotificationBell();
+    renderTicketDropdownFilters();
     renderTicketStats();
     renderTicketLineFilter();
     const list = getFilteredTickets();
@@ -10388,11 +10396,10 @@ function setTicketAttachmentError(msg) {
     if (el) el.textContent = msg || '';
 }
 
+// Click to choose only, like every other upload in the portal (SA V2 4.6.7).
 function ticketAttachmentDropZone(inputId, onFiles) {
-    return `<label class="tk-att-drop" for="${inputId}"
-        ondragover="event.preventDefault();this.classList.add('over')" ondragleave="this.classList.remove('over')"
-        ondrop="event.preventDefault();this.classList.remove('over');${onFiles.replace('this.files', 'event.dataTransfer.files')}">
-        <i class="ph ph-paperclip" style="font-size:16px"></i><span>Drop files here or click to choose</span>
+    return `<label class="tk-att-drop" for="${inputId}">
+        <i class="ph ph-paperclip" style="font-size:16px"></i><span>Choose Files</span>
         <input id="${inputId}" type="file" multiple accept="${TICKET_ATTACHMENT_ACCEPT}" onchange="${onFiles};this.value=''">
     </label>`;
 }
