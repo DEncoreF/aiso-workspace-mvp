@@ -4890,6 +4890,40 @@ function renderActivityLog() {
     renderActivityLogRows();
 }
 
+// Each kind of action shares one icon and one colour set (SA V2 4.8.3);
+// the first six reuse the production product history's tokens.
+const ACTIVITY_KINDS = {
+    create:  { icon: 'plus',              bg: '#ced7e4', color: '#000000', label: '#111119' },
+    update:  { icon: 'pencil',            bg: '#dfe6f2', color: '#7f94b2', label: '#5f6b7c' },
+    enable:  { icon: 'arrow-bar-to-up',   bg: '#e5e9ff', color: '#6076f6', label: '#3853f0' },
+    disable: { icon: 'arrow-bar-to-down', bg: '#ffede5', color: '#ffa680', label: '#e37b4f' },
+    archive: { icon: 'archive',           bg: '#ece5ff', color: '#9f80ff', label: '#6337e6' },
+    restore: { icon: 'restore',           bg: '#e5fff0', color: '#30cf72', label: '#19ae57' },
+    remove:  { icon: 'trash',             bg: '#ffe8e8', color: '#ff3d41', label: '#ef2125' },
+    cancel:  { icon: 'circle-x',          bg: '#ffe8e8', color: '#ff3d41', label: '#ef2125' },
+    message: { icon: 'message',           bg: '#eaeefe', color: '#7882a7', label: '#7882a7' },
+    invite:  { icon: 'mail-forward',      bg: '#e5e9ff', color: '#6076f6', label: '#3853f0' },
+    accept:  { icon: 'user-check',        bg: '#e5fff0', color: '#30cf72', label: '#19ae57' },
+    password:{ icon: 'lock-password',     bg: '#ffede5', color: '#ffa680', label: '#e37b4f' },
+};
+const ACTIVITY_ACTION_KIND = {
+    'Created': 'create', 'Order created': 'create', 'Ticket opened': 'create', 'Organization created': 'create', 'Role created': 'create',
+    'Added': 'create', 'Imported': 'create',
+    'Published': 'enable', 'Role resumed': 'enable', 'Account re-enabled': 'enable',
+    'Unpublished': 'disable', 'Role suspended': 'disable', 'Account disabled': 'disable',
+    'Archived': 'archive', 'Restored': 'restore',
+    'Deleted': 'remove', 'Compatibility removed': 'remove', 'Role deleted': 'remove', 'Member removed': 'remove', 'Released': 'remove',
+    'Order cancelled': 'cancel', 'Invitation revoked': 'cancel',
+    'Ticket replied': 'message', 'Customer replied': 'message', 'Ticket note added': 'message',
+    'Member invited': 'invite', 'Invitation resent': 'invite',
+    'Invitation accepted': 'accept', 'Account activated': 'accept',
+    'Password reset': 'password',
+};
+// Everything else is an update of some kind (Order updated, Role updated, ...).
+function activityActionStyle(action) {
+    return ACTIVITY_KINDS[ACTIVITY_ACTION_KIND[action] || 'update'];
+}
+
 function renderActivityLogRows() {
     const host = document.getElementById('al-rows');
     if (!host) return;
@@ -4904,23 +4938,14 @@ function renderActivityLogRows() {
         host.innerHTML = `<div style="padding:32px 0">${emptyState('ph-clock-counter-clockwise', q ? EMPTY_STATE_NO_RESULTS : EMPTY_STATE_NO_DATA, '')}</div>`;
         return;
     }
-    const actionIcons = {
-        'Published': { icon: 'ph-rocket-launch', color: '#059669', bg: '#ecfdf5' },
-        'Unpublished': { icon: 'ph-arrow-line-down', color: '#d97706', bg: '#fff7ed' },
-        'Archived': { icon: 'ph-archive', color: '#7c3aed', bg: '#f3f0ff' },
-        'Restored': { icon: 'ph-arrow-counter-clockwise', color: '#059669', bg: '#ecfdf5' },
-        'Deleted': { icon: 'ph-trash', color: '#dc2626', bg: '#fef2f2' },
-        'Created': { icon: 'ph-plus-circle', color: '#2563eb', bg: '#eff6ff' },
-        'Updated': { icon: 'ph-pencil-simple', color: '#1d1d1f', bg: '#f5f5f7' },
-    };
     host.innerHTML = `<div style="border:1px solid var(--border-light);border-radius:12px;overflow:hidden">${visibleLog.map((log, i) => {
-        const a = actionIcons[log.action] || { icon: 'ph-info', color: '#86868b', bg: '#f5f5f7' };
+        const a = activityActionStyle(log.action);
         const time = new Date(log.timestamp);
         const stamp = `${time.getFullYear()}-${String(time.getMonth() + 1).padStart(2, '0')}-${String(time.getDate()).padStart(2, '0')} ${time.toLocaleTimeString('en-GB')}`;
         return `<div style="display:flex;align-items:flex-start;gap:14px;padding:14px 18px;${i < visibleLog.length - 1 ? 'border-bottom:1px solid var(--border-light)' : ''};background:${i % 2 === 0 ? '#fff' : '#fafbfc'}">
-            <div style="width:34px;height:34px;border-radius:10px;background:${a.bg};display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ph ${a.icon}" style="font-size:16px;color:${a.color}"></i></div>
+            <div style="width:34px;height:34px;border-radius:10px;background:${a.bg};display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-${a.icon}" style="font-size:17px;color:${a.color}"></i></div>
             <div style="flex:1;min-width:0">
-                <div style="font-size:13.5px;font-weight:600;color:#1d1d1f"><span style="color:${a.color}">${esc(log.action)}</span> · ${esc(log.productName)}
+                <div style="font-size:13.5px;font-weight:600;color:#1d1d1f"><span style="color:${a.label}">${esc(log.action)}</span> · ${esc(log.productName)}
                     <span class="badge badge-zinc" style="margin-left:6px">${esc(log.module || activityModule(log.action))}</span></div>
                 ${log.detail ? `<div style="font-size:12px;color:#86868b;margin-top:1px">${esc(log.detail)}</div>` : ''}
                 <div style="font-size:11.5px;color:#86868b;margin-top:3px"><i class="ph ph-user"></i> ${esc(log.user || 'System')}${log.actor_role ? ` · ${esc(log.actor_role)}` : ''}</div>
