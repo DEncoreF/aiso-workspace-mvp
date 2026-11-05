@@ -4809,29 +4809,21 @@ const HISTORY_PAGE_SIZE = 5;
 
 function renderProductHistory(p) {
     if (!p.history || !p.history.length) return '';
-    const actionColors = {
-        'Created': '#2563eb', 'Updated': '#1d1d1f', 'Published': '#059669',
-        'Unpublished': '#d97706', 'Archived': '#7c3aed', 'Restored': '#059669', 'Deleted': '#dc2626',
-    };
-    const actionIcons = {
-        'Created': 'ph-plus-circle', 'Updated': 'ph-pencil-simple', 'Published': 'ph-rocket-launch',
-        'Unpublished': 'ph-arrow-line-down', 'Archived': 'ph-archive', 'Restored': 'ph-arrow-counter-clockwise', 'Deleted': 'ph-trash',
-    };
     return `
         <div class="product-history-section" style="border-top:1px solid var(--border-light);margin-top:32px;padding-top:32px">
             <div style="font-size:11px;font-weight:600;color:#86868b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:16px">History</div>
             <div style="display:flex;flex-direction:column;gap:0;position:relative;padding-left:20px">
                 <div style="position:absolute;left:7px;top:6px;bottom:6px;width:1px;background:var(--border-light)"></div>
                 ${p.history.map((h, i) => {
-                    const color = actionColors[h.action] || '#86868b';
-                    const icon = actionIcons[h.action] || 'ph-info';
+                    // Same icon and colours as the Activity Log (SA V2 4.8.3).
+                    const a = activityActionStyle(h.action);
                     const d = new Date(h.timestamp);
                     const timeStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' · ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
                     const hidden = i >= HISTORY_PAGE_SIZE;
                     return `<div class="history-entry${hidden ? ' history-entry-hidden' : ''}" style="display:${hidden ? 'none' : 'flex'};align-items:flex-start;gap:12px;padding:8px 0;position:relative">
-                        <div style="position:absolute;left:-20px;top:10px;width:15px;height:15px;border-radius:50%;background:#fff;border:2px solid ${color};display:flex;align-items:center;justify-content:center;z-index:1"><i class="ph ${icon}" style="font-size:8px;color:${color}"></i></div>
+                        <div style="position:absolute;left:-20px;top:10px;width:15px;height:15px;border-radius:50%;background:${a.bg};border:2px solid ${a.color};display:flex;align-items:center;justify-content:center;z-index:1"><i class="ti ti-${a.icon}" style="font-size:9px;color:${a.color}"></i></div>
                         <div style="flex:1;min-width:0">
-                            <div style="font-size:13px;font-weight:600;color:${color}">${esc(h.action)}${h.detail ? ' <span style="font-weight:400;color:#86868b">· ' + esc(h.detail) + '</span>' : ''}</div>
+                            <div style="font-size:13px;font-weight:600;color:${a.label}">${esc(h.action)}${h.detail ? ' <span style="font-weight:400;color:#86868b">· ' + esc(h.detail) + '</span>' : ''}</div>
                             <div style="font-size:11px;color:#c7c7cc;margin-top:2px">${esc(h.user || 'System')} · ${timeStr}</div>
                         </div>
                     </div>`;
