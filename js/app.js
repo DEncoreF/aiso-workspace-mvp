@@ -9325,9 +9325,9 @@ function renderNotificationBell() {
     if (!me || !isOperatorView()) { root.innerHTML = ''; notifMenuOpen = false; return; }
     const list = myNotifications();
     const unread = list.filter(n => !n.read_at).length;
-    // Unread never expire; read ones stay 30 days, 30 at most (SA V2 4.6.6).
+    // Unread never expire; read ones stay 30 days from being read, 30 at most (SA V2 4.6.6).
     const cutoff = Date.now() - 30 * 86400000;
-    const read = list.filter(n => n.read_at && new Date(n.created_at).getTime() >= cutoff)
+    const read = list.filter(n => n.read_at && new Date(n.read_at).getTime() >= cutoff)
         .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).slice(0, 30);
     const shown = list.filter(n => !n.read_at).concat(read)
         .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
@@ -9366,6 +9366,12 @@ function openNotification(id) {
     const n = NOTIFICATIONS.find(x => x.id === id);
     notifMenuOpen = false;
     if (!n) return;
+    // Without ticket access the bell stays but the ticket does not open, so it stays unread (SA V2 4.6.6).
+    if (!canViewTickets()) {
+        showToast('You do not have permission to view this page.', 'error');
+        renderNotificationBell();
+        return;
+    }
     if (currentView !== 'service-desk') navigate('service-desk');
     showTicketDetail(n.ticket_id); // marks it read
     renderServiceDesk();
@@ -10309,6 +10315,10 @@ function applyTicketEvent(t, event, now) {
         t.internal_referred_by = null;
         settlePendingConfirmations(t);
     } else if (to === 'IN_PROGRESS' && t.status === 'RESOLVED') t.resolved_at = null;
+    else if (to === 'CLOSED') {
+        // A closed ticket has nothing left to act on, so it leaves everyone's Needs me (SA V2 4.6.6).
+        NOTIFICATIONS.filter(n => n.ticket_id === t.id && !n.read_at).forEach(n => { n.read_at = now; });
+    }
     t.status = to;
     return handlingNote;
 }
