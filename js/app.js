@@ -10,7 +10,7 @@ let portalMutationDepth = 0;
 const ACTIVITY_MODULES = ['Products', 'Compatibility', 'Parameter Center', 'Orders', 'Service Desk', 'Organizations', 'Accounts', 'Asset Registry'];
 function activityModule(action) {
     if (/^(Ticket |Customer replied)/.test(action)) return 'Service Desk';
-    if (/^(Order |License adjusted|Delivery & warranty)/.test(action)) return 'Orders';
+    if (/^Order /.test(action)) return 'Orders';
     if (/^(Organization|Role |Member )/.test(action)) return 'Organizations';
     if (/^(Account |Invitation |Password )/.test(action)) return 'Accounts';
     if (/^Compatibility/.test(action)) return 'Compatibility';
@@ -18,6 +18,97 @@ function activityModule(action) {
     if (/^(Added|Imported|Released|Warranty adjusted)$/.test(action)) return 'Asset Registry';
     return 'Products';
 }
+// ── Activity Log detail (SA V2 4.8.1) ──
+// One line per changed field: "[Field]: [before] → [after]". Lists record
+// additions and removals, blank values read "—", and a change that leaves every
+// field as it was writes no entry (callers skip an empty result).
+function logValue(v, max = 80) {
+    const t = String(v ?? '').replace(/\s+/g, ' ').trim();
+    if (!t) return '—';
+    return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+function fieldChange(label, before, after, prefix = '') {
+    const b = String(before ?? '').trim(), a = String(after ?? '').trim();
+    return b === a ? '' : `${prefix}${label}: ${logValue(b)} → ${logValue(a)}`;
+}
+function cleanList(list) { return (list || []).map(x => String(x ?? '').trim()).filter(Boolean); }
+function listChange(label, before, after, prefix = '') {
+    const b = cleanList(before), a = cleanList(after);
+    const items = [...a.filter(x => !b.includes(x)).map(x => `+ ${x}`), ...b.filter(x => !a.includes(x)).map(x => `− ${x}`)];
+    return items.length ? `${prefix}${label}: ${items.join(', ')}` : '';
+}
+// License Keys are not logged as values: counts and the last four characters.
+function keyChange(label, before, after, prefix = '') {
+    const b = cleanList(before), a = cleanList(after);
+    const added = a.filter(x => !b.includes(x)), removed = b.filter(x => !a.includes(x));
+    const tail = ks => ks.map(k => `…${k.slice(-4)}`).join(', ');
+    const parts = [added.length ? `+ ${added.length} key(s) (${tail(added)})` : '', removed.length ? `− ${removed.length} key(s) (${tail(removed)})` : ''].filter(Boolean);
+    return parts.length ? `${prefix}${label}: ${parts.join(', ')}` : '';
+}
+const ORDER_STATUS_NAME = { DRAFT: 'Draft', CONFIRMED: 'Confirmed', CANCELLED: 'Cancelled' };
+function orderChangeLines(prev, prevLines, rec, newLines, moved) {
+    const out = [
+        fieldChange('Order No', prev.order_no, rec.order_no),
+        fieldChange('Contract No', prev.contract_no, rec.contract_no),
+        fieldChange('Order Date', prev.order_date, rec.order_date),
+        fieldChange('Sales Contact', prev.sales_contact, rec.sales_contact),
+        prev.customer_org_id !== rec.customer_org_id
+            ? `Customer: ${logValue(prev.customer_name)} → ${logValue(rec.customer_name)}${moved ? ` · ${moved} ticket${moved === 1 ? '' : 's'} moved` : ''}` : '',
+        fieldChange('System Integrator', prev.si_name, rec.si_name),
+        fieldChange('HW Supplier', prev.hw_supplier_name, rec.hw_supplier_name),
+        fieldChange('SW Supplier', prev.sw_supplier_name, rec.sw_supplier_name),
+        fieldChange('Status', ORDER_STATUS_NAME[prev.status], ORDER_STATUS_NAME[rec.status]),
+    ];
+    const docsBefore = new Map((prev.attachments || []).map(a => [a.id, a]));
+    const docsAfter = new Map((rec.attachments || []).map(a => [a.id, a]));
+    const docLabel = a => `${a.name} (${orderDocTypeLabel(a.doc_type)})`;
+    const addedDocs = [...docsAfter.values()].filter(a => !docsBefore.has(a.id)).map(a => `+ ${docLabel(a)}`);
+    const removedDocs = [...docsBefore.values()].filter(a => !docsAfter.has(a.id)).map(a => `− ${a.name}`);
+    if (addedDocs.length || removedDocs.length) out.push(`Documents: ${[...addedDocs, ...removedDocs].join(', ')}`);
+    [...docsAfter.values()].filter(a => docsBefore.has(a.id) && (docsBefore.get(a.id).doc_type || '') !== (a.doc_type || ''))
+        .forEach(a => out.push(`${a.name}: ${orderDocTypeLabel(docsBefore.get(a.id).doc_type)} → ${orderDocTypeLabel(a.doc_type)}`));
+    const prevById = new Map(prevLines.map(l => [l.id, l]));
+    const newIds = new Set(newLines.map(l => l.id));
+    prevLines.filter(l => !newIds.has(l.id)).forEach(l => out.push(`Line ${l.line_no} removed`));
+    const bomNames = bom => (bom || []).map(r => [r.component_type, r.brand, r.model].filter(Boolean).join(' '));
+    newLines.forEach(l => {
+        const o = prevById.get(l.id);
+        if (!o) { out.push(`Line ${l.line_no} added`); return; }
+        const p = `Line ${l.line_no} · `;
+        out.push(
+            fieldChange('Scope', o.scope, l.scope, p), fieldChange('Product', o.product_name, l.product_name, p),
+            fieldChange('SLA', o.sla_plan, l.sla_plan, p), fieldChange('Qty', o.qty, l.qty, p),
+            fieldChange('Warranty (months)', o.warranty_months, l.warranty_months, p),
+            listChange('Serial Numbers', o.serial_nos, l.serial_nos, p));
+        (l.serial_nos || []).forEach((sn, u) => {
+            const up = `${p}Unit ${u + 1} (${String(sn).trim() || 'serial pending'}) · `;
+            out.push(fieldChange('Delivered', o.delivered_dates?.[u], l.delivered_dates?.[u], up),
+                fieldChange('Warranty start', o.warranty_starts?.[u], l.warranty_starts?.[u], up));
+        });
+        out.push(
+            fieldChange('Supplier', o.supplier_name, l.supplier_name, p), fieldChange('Version', o.version, l.version, p),
+            fieldChange('License Start', o.license_start, l.license_start, p), fieldChange('License End', o.license_end, l.license_end, p),
+            keyChange('License Keys', (o.license_keys || []).map(k => k.key), (l.license_keys || []).map(k => k.key), p),
+            listChange('Custom BOM', bomNames(o.bom), bomNames(l.bom), p));
+    });
+    return out.filter(Boolean);
+}
+// Detail lines past the fifth fold into "+ n more"; Search still sees them all.
+function activityDetailHtml(detail, i) {
+    const lines = String(detail).split('\n');
+    const row = t => `<div>${esc(t)}</div>`;
+    const style = 'font-size:12px;color:#86868b;margin-top:1px';
+    if (lines.length <= 5) return `<div style="${style}">${lines.map(row).join('')}</div>`;
+    return `<div style="${style}">${lines.slice(0, 5).map(row).join('')}<div id="al-more-${i}" hidden>${lines.slice(5).map(row).join('')}</div>`
+        + `<button type="button" class="btn-link" style="font-size:12px;padding:0" onclick="toggleLogMore(${i}, ${lines.length - 5}, this)">+ ${lines.length - 5} more</button></div>`;
+}
+function toggleLogMore(i, n, btn) {
+    const el = document.getElementById(`al-more-${i}`);
+    if (!el) return;
+    el.hidden = !el.hidden;
+    btn.textContent = el.hidden ? `+ ${n} more` : 'Show less';
+}
+
 // `actor` overrides who did it, for steps the signed-in person did not take:
 // an invitee accepting, an account holder resetting their password.
 // { name, org_id, role } — org_id null keeps the entry to the OPERATOR view.
@@ -3783,7 +3874,7 @@ async function saveProduct(pid) {
     editSwImages = []; editSwIcon = null; editHwImage = null;
     closeModal();
     showToast(wasPublished
-        ? `${p.name} updated — moved to Draft${strippedRefs ? `, removed from ${strippedRefs} software` : ''}. Re-publish to make it live.`
+        ? `${p.name} updated — moved to Draft${strippedRefs ? `, removed from ${strippedRefs} software` : ''}`
         : `${p.name} updated`, 'success');
     // Return to wherever Edit was opened from: stay on the list when opened
     // from the list, or re-open the detail page when opened from the detail.
@@ -4939,7 +5030,7 @@ function renderActivityLogRows() {
             <div style="flex:1;min-width:0">
                 <div style="font-size:13.5px;font-weight:600;color:#1d1d1f"><span style="color:${a.label}">${esc(log.action)}</span> · ${esc(log.productName)}
                     <span class="badge badge-zinc" style="margin-left:6px">${esc(log.module || activityModule(log.action))}</span></div>
-                ${log.detail ? `<div style="font-size:12px;color:#86868b;margin-top:1px">${esc(log.detail)}</div>` : ''}
+                ${log.detail ? activityDetailHtml(log.detail, i) : ''}
                 <div style="font-size:11.5px;color:#86868b;margin-top:3px"><i class="ph ph-user"></i> ${esc(log.user || 'System')}${log.actor_role ? ` · ${esc(log.actor_role)}` : ''}</div>
             </div>
             <div style="font-size:11px;color:#86868b;font-weight:500;flex-shrink:0;font-variant-numeric:tabular-nums;white-space:nowrap">${stamp}</div>
@@ -6340,11 +6431,10 @@ function fitUnitArrays(l) {
     l._picked = (l._picked || []).filter(u => u < n);
 }
 
-// ns names the line being edited: an order-draft line index, or 'delivery'
-// for the post-confirmation window. Ticking units and applying a date sets
+// ns names the line being edited: an order-draft line index. Ticking units and applying a date sets
 // them together, which is how one delivery batch is recorded.
-function unitDatesTarget(ns) { return ns === 'delivery' ? deliveryDraft : orderDraft?.lines[Number(ns)]; }
-function unitDatesRerender(ns) { if (ns === 'delivery') renderDeliveryModal(); else renderOrderDraftLines(); }
+function unitDatesTarget(ns) { return orderDraft?.lines[Number(ns)]; }
+function unitDatesRerender() { renderOrderDraftLines(); }
 
 function unitDatesSection(l, ns) {
     const n = l.serial_nos.length;
@@ -6445,9 +6535,9 @@ function ordSetBomQty(i, bi, value) {
 // with a higher count since an order collects papers over its life.
 // Every file carries a doc_type so the detail view can filter by kind; files
 // saved before types existed read as Unclassified until someone picks one.
-// The editor (orderDraft, DRAFT orders) and the Manage documents modal
-// (orderDocDraft, confirmed orders — acceptance and delivery papers arrive
-// after confirmation) share one list renderer, addressed by `ns`.
+// The editor (orderDraft, Draft and Confirmed orders) renders the list;
+// acceptance and delivery papers that arrive after confirmation are added
+// from Edit too (SA V2 4.5.3 編號 10).
 
 const ORDER_DOC_TYPES = [
     { key: 'PO', label: 'Purchase order' },
@@ -6462,8 +6552,7 @@ const ORDER_DOC_HINT = 'Pick a type for each file. PNG, JPG, PDF, TXT, LOG, CSV 
 
 function orderDocTypeLabel(key) { return ORDER_DOC_TYPES.find(t => t.key === key)?.label || 'Unclassified'; }
 
-let orderDocDraft = null;
-function orderDocTarget(ns) { return ns === 'orderDraft' ? orderDraft : orderDocDraft; }
+function orderDocTarget() { return orderDraft; }
 
 function orderDocRows(ns) {
     const list = orderDocTarget(ns)?.attachments || [];
@@ -6501,9 +6590,9 @@ function removeOrderDoc(ns, i) {
     renderOrderDocRows(ns);
 }
 
-function untypedDocError(list) {
-    const a = list.find(x => !x.doc_type);
-    return a ? `Documents: choose a type for ${a.name}.` : '';
+// One message per file still missing a type, in file order (SA V2 4.5.3 編號 10).
+function untypedDocErrors(list) {
+    return list.filter(x => !x.doc_type).map(a => `Documents: choose a type for ${a.name}.`);
 }
 
 // Detail view: filter chips (only when there is more than one kind) above the
@@ -6527,13 +6616,12 @@ function orderDocSection(o) {
     return `
             <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 8px">
                 <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#86868b">Documents</span>
-                ${canManage ? `<button onclick="showOrderDocsModal('${o.id}')" class="btn-secondary text-xs" style="padding:4px 10px"><i class="ph ph-paperclip"></i> Manage documents</button>` : ''}
             </div>
             ${kinds.length > 1 ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
                 ${chip(null, 'All', docs.length)}${ordered.map(k => chip(k, orderDocTypeLabel(k), docs.filter(a => (a.doc_type || '') === k).length)).join('')}
             </div>` : ''}
             ${docs.length ? `<div class="tk-att-list">${orderAttachmentGallery(o, active)}</div>`
-                : '<div style="font-size:12.5px;color:#86868b">No documents yet — add acceptance or delivery papers as they arrive.</div>'}`;
+                : '<div style="font-size:12.5px;color:#86868b">No documents yet — use Edit to add acceptance or delivery papers as they arrive.</div>'}`;
 }
 
 function orderAttachmentGallery(o, type = null) {
@@ -6546,56 +6634,6 @@ function orderAttachmentGallery(o, type = null) {
                 <i class="ph ph-file-text"></i><span class="nm">${esc(a.name)}</span><span class="sz">${formatFileSize(a.size)}</span><i class="ph ph-download-simple"></i>
                </a>`}</span>`;
     }).join('');
-}
-
-// Manage documents on a confirmed order: add, retype or remove files without
-// reopening the rest of the order. Changes are logged as one entry.
-function showOrderDocsModal(orderId) {
-    const o = getOrderById(orderId);
-    if (!o || o.status !== 'CONFIRMED' || !canUpdateOrders()) return;
-    orderDocDraft = { orderId, attachments: JSON.parse(JSON.stringify(o.attachments || [])) };
-    showModal(`
-        <div style="padding:26px 28px;max-height:82vh;overflow-y:auto">
-            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Documents · ${esc(o.order_no)}</h3>
-            <p style="font-size:13px;color:#86868b;margin:0 0 16px;line-height:1.6">Add papers that arrive after confirmation, such as acceptance or delivery receipts. Changes are recorded in the Activity Log.</p>
-            ${ticketAttachmentDropZone('ord-doc-files', "onOrderDocFiles('orderDocDraft', this.files)")}
-            <div class="field-hint" style="margin-top:6px">${ORDER_DOC_HINT}</div>
-            <p id="ord-att-error" style="font-size:12px;font-weight:600;color:#dc2626;margin-top:6px"></p>
-            <div id="ord-attachments-list" style="display:flex;flex-direction:column;gap:8px;margin-top:8px">${orderDocRows('orderDocDraft')}</div>
-            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
-                <button onclick="orderDocDraft=null;showOrderDetail('${o.id}')" class="btn-secondary text-xs">Cancel</button>
-                <button onclick="saveOrderDocs()" class="btn-primary text-xs">Save documents</button>
-            </div>
-        </div>`, true);
-}
-
-function saveOrderDocs() {
-    const d = orderDocDraft;
-    const o = getOrderById(d.orderId);
-    const error = untypedDocError(d.attachments);
-    if (error) {
-        document.getElementById('ord-att-error').textContent = error;
-        return;
-    }
-    const before = new Map((o.attachments || []).map(a => [a.id, a]));
-    const after = new Set(d.attachments.map(a => a.id));
-    const changes = [
-        ...d.attachments.filter(a => !before.has(a.id)).map(a => `+ ${a.name} (${orderDocTypeLabel(a.doc_type)})`),
-        ...d.attachments.filter(a => before.has(a.id) && (before.get(a.id).doc_type || '') !== a.doc_type)
-            .map(a => `${a.name}: ${orderDocTypeLabel(before.get(a.id).doc_type)} → ${orderDocTypeLabel(a.doc_type)}`),
-        ...[...before.values()].filter(a => !after.has(a.id)).map(a => `− ${a.name}`),
-    ];
-    if (changes.length) {
-        const ok = commitPortalMutation(() => {
-            o.attachments = d.attachments;
-            o.updated_at = new Date().toISOString();
-            logActivity('Order documents updated', o.order_no, changes.join('; '));
-        });
-        if (!ok) return;
-        showToast(`Documents updated on ${o.order_no}`);
-    }
-    orderDocDraft = null;
-    showOrderDetail(o.id);
 }
 
 function showOrderAttachmentPreview(orderId, index) {
@@ -6625,8 +6663,7 @@ function validateOrderDraft(status) {
     if (!d.customer_org_id) errors.push(fieldErr('#ord-customer', 'Please select Customer.'));
     if (d.lines.some(l => l.scope === 'HW') && !d.hw_supplier_name) errors.push(fieldErr('#ord-hw-sup', 'HW Supplier is required because the order has HW lines.'));
     if (d.lines.some(l => l.scope === 'SW' && !l.supplier_name) && !d.sw_supplier_name) errors.push(fieldErr('#ord-sw-sup', 'SW Supplier is required because a SW line has no supplier of its own.'));
-    const docError = untypedDocError(d.attachments || []);
-    if (docError) errors.push(fieldErr('#ord-attachments-list', docError));
+    untypedDocErrors(d.attachments || []).forEach(msg => errors.push(fieldErr('#ord-attachments-list', msg)));
     if (!d.lines.length) errors.push(fieldErr('#ord-lines', 'At least one order line is required.'));
     d.lines.forEach((l, i) => {
         if (l.custom_product && !l.product_name) errors.push(fieldErr(at(i, 'product-name'), 'Please enter Product name.'));
@@ -6857,13 +6894,9 @@ function ordSerialKeydown(e, i, si) {
     next?.focus();
 }
 
-// License paste: shared by the order editor ('0', '1', … = draft line index)
-// and Adjust license ('adjust'). One column of keys, filled in order.
+// License paste in the order editor ('0', '1', … = draft line index).
+// One column of keys, filled in order.
 function licensePasteTarget(ref) {
-    if (ref === 'adjust') {
-        const line = ORDER_LINES.find(x => x.id === licenseDraft.lineId);
-        return { state: licenseDraft, qty: line?.qty || 1, lineId: licenseDraft.lineId, rerender: renderLicenseAdjustModal, apply: keys => { licenseDraft.license_keys = keys; } };
-    }
     const l = orderDraft.lines[Number(ref)];
     return { state: l, qty: l.qty, lineId: ticketedLine(l) ? l.id : null, rerender: renderOrderDraftLines, apply: keys => { l.license_keys = keys; } };
 }
@@ -6941,130 +6974,6 @@ function applyLicensePaste(ref) {
     showToast(`${plan.keys.length} key${plan.keys.length === 1 ? '' : 's'} applied`);
 }
 
-// ── Adjust license (confirmed orders) ──
-// Keys get reissued or renewed after an order is confirmed. Only the
-// SW line's license fields are editable here; the rest of the order stays
-// locked, and every change lands in the Activity Log with before → after.
-
-let licenseDraft = null;
-
-function showLicenseAdjustModal(lineId) {
-    const line = ORDER_LINES.find(l => l.id === lineId);
-    const order = line ? getOrderById(line.order_id) : null;
-    if (!line || line.scope !== 'SW' || order?.status !== 'CONFIRMED' || !canUpdateOrders()) return;
-    licenseDraft = {
-        lineId,
-        supplier_name: line.supplier_name || '', version: line.version || '',
-        license_start: line.license_start || '', license_end: line.license_end || '',
-        license_keys: (line.license_keys || []).map(lk => ({ key: lk.key })),
-        openedUpdatedAt: order.updated_at || '',
-    };
-    renderLicenseAdjustModal();
-}
-
-function renderLicenseAdjustModal() {
-    const d = licenseDraft;
-    const line = ORDER_LINES.find(l => l.id === d.lineId);
-    const order = getOrderById(line.order_id);
-    const text = (label, key, placeholder, max) => `
-        <div>
-            <label class="field-label">${label}</label>
-            ${ordInput({ attrs: `data-err="la-${key}" placeholder="${esc(placeholder)}"`, oninput: `licenseDraft.${key}=this.value`, value: d[key], max })}
-        </div>`;
-    const date = (label, key, anchor) => `
-        <div>
-            <label class="field-label">${label}</label>
-            <input type="date" class="input-field" data-err="la-${anchor}" value="${esc(d[key])}" oninput="licenseDraft.${key}=this.value">
-        </div>`;
-    showModal(`
-        <div style="padding:26px 28px;max-height:82vh;overflow-y:auto">
-            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Adjust license · ${esc(line.product_name)}</h3>
-            <p style="font-size:13px;color:#86868b;margin:0 0 18px;line-height:1.6">${esc(order.order_no)} · line ${line.line_no}. Every change is recorded in the Activity Log.</p>
-            <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px">
-                ${text('Supplier', 'supplier_name', order.sw_supplier_name || 'Order SW supplier', ORDER_TEXT_MAX)}
-                ${text('Version', 'version', 'e.g. 4.1.0', ORDER_VERSION_MAX)}
-                ${date('License Start', 'license_start', 'ls')}
-                ${date('License End', 'license_end', 'le')}
-            </div>
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:14px">
-                <label class="field-label" style="margin:0">License Keys (${d.license_keys.filter(k => k.key.trim()).length} of ${line.qty})</label>
-                ${d._kp?.open ? '' : `<button class="btn-link" style="font-size:12px" onclick="openLicensePaste('adjust')"><i class="ph ph-clipboard-text"></i> Paste keys</button>`}
-            </div>
-            ${licensePastePanel('adjust')}
-            <div data-err="la-keys" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
-                ${(d.license_keys.length > BULK_COLLAPSE_AT && !d._keysShowAll ? d.license_keys.slice(0, BULK_COLLAPSED_ROWS) : d.license_keys).map((lk, ki) => `
-                <div style="display:flex;align-items:flex-start;gap:10px">
-                    <span style="font-size:11.5px;font-weight:600;color:#86868b;width:48px;flex-shrink:0;padding-top:12px">Key ${ki + 1}</span>
-                    ${licenseKeyCell(line.id, lk, `data-key="la-${ki}"`, `licenseDraft.license_keys[${ki}].key=this.value`, `adjustRemoveKey(${ki})`)}
-                </div>`).join('')}
-                ${d.license_keys.length > BULK_COLLAPSE_AT && !d._keysShowAll ? bulkMoreButton(d.license_keys.length, BULK_COLLAPSED_ROWS, 'licenseDraft._keysShowAll=true;renderLicenseAdjustModal()') : ''}
-            </div>
-            <button onclick="licenseDraft.license_keys.push({ key: '' });renderLicenseAdjustModal()" class="btn-secondary text-xs" style="margin-top:10px" ${d.license_keys.length >= line.qty ? `disabled title="All ${line.qty} licenses have a key. Raise Qty from Edit to add more."` : ''}><i class="ph ph-plus"></i> Add Key</button>
-            <p id="la-error" style="display:none;font-size:12.5px;font-weight:600;color:#dc2626;margin-top:12px"></p>
-            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
-                <button onclick="licenseDraft=null;showOrderDetail('${order.id}')" class="btn-secondary text-xs">Cancel</button>
-                <button onclick="saveLicenseAdjustment()" class="btn-primary text-xs">Save changes</button>
-            </div>
-        </div>`, true);
-}
-
-// A key a ticket was opened on cannot be removed (SA V2 4.5.5 Adjust license 編號 6).
-function adjustRemoveKey(ki) {
-    const rest = licenseDraft.license_keys.filter((_, x) => x !== ki);
-    const blocked = removedTicketedKeys(licenseDraft.lineId, rest)[0];
-    if (blocked) { showToast(blocked, 'error'); return; }
-    licenseDraft.license_keys = rest;
-    renderLicenseAdjustModal();
-}
-
-function saveLicenseAdjustment() {
-    const d = licenseDraft;
-    const line = ORDER_LINES.find(l => l.id === d.lineId);
-    const order = getOrderById(line.order_id);
-    if (order.status !== 'CONFIRMED') {
-        showFormErrors([formErr(`${order.order_no} is now ${orderStatusWord(order.status)}. Reload to see the latest.`)], 'la-error');
-        return;
-    }
-    if (orderChangedByOther(order.id, d.openedUpdatedAt)) { showFormErrors([formErr(orderChangedMessage(order))], 'la-error'); return; }
-    const next = {
-        supplier_name: d.supplier_name.trim(), version: d.version.trim(),
-        license_start: d.license_start, license_end: d.license_end,
-        license_keys: d.license_keys.map(lk => ({ key: lk.key.trim() })).filter(lk => lk.key),
-    };
-    const errors = [];
-    if (!next.supplier_name && !order.sw_supplier_name) errors.push(fieldErr('[data-err="la-supplier_name"]', 'Supplier is required because the order has no SW supplier.'));
-    if (!next.license_start) errors.push(fieldErr('[data-err="la-ls"]', 'Please select License Start.'));
-    if (!next.license_end) errors.push(fieldErr('[data-err="la-le"]', 'Please select License End.'));
-    errors.push(...licenseLineErrors(next, 'la'));
-    errors.push(...licenseKeyDuplicateErrors(getOrderLines(order.id).map(l => l.id === line.id ? next : l), l => (l === next ? 'la' : null)));
-    if (showFormErrors(errors, 'la-error')) return;
-    const blocked = removedTicketedKeys(line.id, next.license_keys)[0];
-    if (blocked) { showToast(blocked, 'error'); return; }
-
-    const keyList = keys => keys.map(lk => lk.key).join(', ') || '—';
-    const changes = [
-        ['supplier', line.supplier_name || '', next.supplier_name],
-        ['version', line.version || '', next.version],
-        ['start', line.license_start || '', next.license_start],
-        ['end', line.license_end || '', next.license_end],
-        ['keys', keyList(line.license_keys || []), keyList(next.license_keys)],
-    ].filter(([, before, after]) => before !== after).map(([field, before, after]) => `${field} ${before || '—'} → ${after || '—'}`);
-    if (!changes.length) {
-        licenseDraft = null;
-        showOrderDetail(order.id);
-        return;
-    }
-    const ok = commitPortalMutation(() => {
-        Object.assign(line, next);
-        order.updated_at = new Date().toISOString();
-        logActivity('License adjusted', order.order_no, `Line ${line.line_no} ${line.product_name}: ${changes.join('; ')}`);
-    });
-    if (!ok) return;
-    licenseDraft = null;
-    showOrderDetail(order.id);
-    showToast(`License updated on ${order.order_no}`);
-}
-
 function saveOrder(status, { moveConfirmedFor = null } = {}) {
     const errEl = document.getElementById('ord-att-error');
     if (errEl) errEl.textContent = '';
@@ -7100,6 +7009,7 @@ function saveOrder(status, { moveConfirmedFor = null } = {}) {
 
     const now = new Date().toISOString();
     const customerOrg = getOrgById(d.customer_org_id);
+    const prevLines = prev ? getOrderLines(prev.id).map(l => ({ ...l })) : [];
     const ok = commitPortalMutation(() => {
         const record = {
             id: d.id || `ord-${Date.now()}`,
@@ -7149,9 +7059,13 @@ function saveOrder(status, { moveConfirmedFor = null } = {}) {
             });
         }
 
-        const moved = moving.length ? ` · Customer ${prev.customer_name} → ${record.customer_name} · ${moving.length} ticket${moving.length === 1 ? '' : 's'} moved` : '';
-        logActivity(isNew ? 'Order created' : 'Order updated', record.order_no,
-            `${record.customer_name} · ${d.lines.length} line${d.lines.length === 1 ? '' : 's'} · ${status}${moved}`);
+        if (isNew) {
+            logActivity('Order created', record.order_no, `${record.customer_name} · ${d.lines.length} line${d.lines.length === 1 ? '' : 's'} · ${ORDER_STATUS_NAME[status]}`);
+        } else {
+            // Field-level detail (SA V2 4.8.1); nothing changed, nothing logged.
+            const lines = orderChangeLines(prev, prevLines, record, ORDER_LINES.filter(l => l.order_id === record.id), moving.length);
+            if (lines.length) logActivity('Order updated', record.order_no, lines.join('\n'));
+        }
     });
     if (!ok) return;
 
@@ -7301,8 +7215,6 @@ function showOrderDetail(id) {
                 <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
                     ${l.license_keys.filter(lk => lk.key).map(lk => `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(lk.key)}</span>`).join('')}
                 </div>` : ''}
-                ${l.scope === 'SW' && o.status === 'CONFIRMED' && canUpdateOrders() ? `
-                <div style="margin-top:8px"><button onclick="showLicenseAdjustModal('${l.id}')" class="btn-secondary text-xs" style="padding:4px 10px"><i class="ph ph-key"></i> Adjust license</button></div>` : ''}
                 ${l.serial_nos.length ? `
                 <table style="width:100%;border-collapse:collapse;margin-top:8px">
                     <thead><tr>${['Unit', 'Serial', 'Delivered', 'Warranty'].map(t => `<th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 10px 4px 0">${t}</th>`).join('')}</tr></thead>
@@ -7315,8 +7227,7 @@ function showOrderDetail(id) {
                             <td style="font-size:12.5px;padding:3px 10px 3px 0">${esc(l.delivered_dates?.[u] || '—')}</td>
                             <td style="font-size:12.5px;padding:3px 0">${l.warranty_starts?.[u] ? `${esc(l.warranty_starts[u])} → ${unitWarrantyEnd(l, u) ? esc(unitWarrantyEnd(l, u)) : '<span style="color:#86868b">Not set</span>'}` : '<span style="color:#86868b">Not set</span>'}</td>
                         </tr>`).join('')}</tbody>
-                </table>
-                ${o.status === 'CONFIRMED' && canUpdateOrders() ? `<div style="margin-top:8px"><button onclick="showDeliveryModal('${l.id}')" class="btn-secondary text-xs" style="padding:4px 10px"><i class="ph ph-truck"></i> Delivery &amp; warranty</button></div>` : ''}` : ''}
+                </table>` : ''}
                 ${l.bom.length ? `
                 <div style="margin-top:10px;overflow-x:auto">
                     <table style="width:100%;border-collapse:collapse">
@@ -7347,68 +7258,6 @@ function showOrderDetail(id) {
             </div>
         </div>
     `, true);
-}
-
-// ── Delivery & warranty after confirmation (SA V2 4.4.5) ──
-// Delivery and warranty start arrive after the order is confirmed, so they
-// stay editable here while the rest of the order is locked.
-
-let deliveryDraft = null;
-
-function showDeliveryModal(lineId) {
-    const line = ORDER_LINES.find(l => l.id === lineId);
-    const order = line ? getOrderById(line.order_id) : null;
-    if (!line || line.scope !== 'HW' || order?.status !== 'CONFIRMED' || !canUpdateOrders()) return;
-    deliveryDraft = {
-        lineId, serial_nos: [...line.serial_nos], warranty_months: line.warranty_months,
-        delivered_dates: [...(line.delivered_dates || [])], warranty_starts: [...(line.warranty_starts || [])], _picked: [],
-        openedUpdatedAt: order.updated_at || '',
-    };
-    fitUnitArrays(deliveryDraft);
-    renderDeliveryModal();
-}
-
-function renderDeliveryModal() {
-    const d = deliveryDraft;
-    const line = ORDER_LINES.find(l => l.id === d.lineId);
-    const order = getOrderById(line.order_id);
-    showModal(`
-        <div style="padding:26px 28px;max-height:82vh;overflow-y:auto">
-            <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 6px">Delivery &amp; warranty · ${esc(line.product_name)}</h3>
-            <p style="font-size:13px;color:#86868b;margin:0 0 6px;line-height:1.6">${esc(order.order_no)} · line ${line.line_no} · Warranty ${line.warranty_months || '—'} months per unit. Changes are recorded in the Activity Log; tickets already opened keep the dates they were opened with.</p>
-            ${unitDatesSection(d, 'delivery')}
-            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:22px">
-                <button onclick="deliveryDraft=null;showOrderDetail('${order.id}')" class="btn-secondary text-xs">Cancel</button>
-                <button onclick="saveDelivery()" class="btn-primary text-xs">Save changes</button>
-            </div>
-        </div>`, true);
-}
-
-function saveDelivery() {
-    const d = deliveryDraft;
-    const line = ORDER_LINES.find(l => l.id === d.lineId);
-    const order = getOrderById(line.order_id);
-    if (!canUpdateOrders()) return;
-    if (order.status !== 'CONFIRMED') { showToast(`${order.order_no} is now ${orderStatusWord(order.status)}. Reload to see the latest.`, 'error'); return; }
-    if (orderChangedByOther(order.id, d.openedUpdatedAt)) { showToast(orderChangedMessage(order), 'error'); return; }
-    const changes = [];
-    line.serial_nos.forEach((sn, u) => {
-        const parts = [];
-        if ((line.delivered_dates?.[u] || '') !== d.delivered_dates[u]) parts.push(`delivered ${line.delivered_dates?.[u] || '—'} → ${d.delivered_dates[u] || '—'}`);
-        if ((line.warranty_starts?.[u] || '') !== d.warranty_starts[u]) parts.push(`warranty start ${line.warranty_starts?.[u] || '—'} → ${d.warranty_starts[u] || '—'}`);
-        if (parts.length) changes.push(`Unit ${u + 1} (${sn || 'serial pending'}): ${parts.join(', ')}`);
-    });
-    if (!changes.length) { deliveryDraft = null; showOrderDetail(order.id); return; }
-    const ok = commitPortalMutation(() => {
-        line.delivered_dates = [...d.delivered_dates];
-        line.warranty_starts = [...d.warranty_starts];
-        order.updated_at = new Date().toISOString();
-        logActivity('Delivery & warranty updated', order.order_no, `Line ${line.line_no} ${line.product_name}: ${changes.join('; ')}`);
-    });
-    if (!ok) return;
-    deliveryDraft = null;
-    showOrderDetail(order.id);
-    showToast(`Delivery & warranty updated on ${order.order_no}`);
 }
 
 // ── Cancel ──
@@ -7799,18 +7648,17 @@ function saveOrgTypes() {
     const next = orgTypeDraft.map(e => ({ ...e, label: e.label.trim(), ceiling: { ...e.ceiling } }));
     const ok = commitPortalMutation(() => {
         ORG_TYPE_REGISTRY = next;
-        changes.forEach(c => logActivity('Organization type updated', c.saved.label, [
-            c.label !== null ? `renamed to ${c.label}` : '',
-            c.removed.length ? `− ${c.removed.join(', ')}` : '',
-            c.added.length ? `+ ${c.added.join(', ')}` : '',
-        ].filter(Boolean).join(' · ')));
+        changes.forEach(c => logActivity('Organization type updated', c.label ?? c.saved.label, [
+            c.label !== null ? `Name: ${logValue(c.saved.label)} → ${logValue(c.label)}` : '',
+            c.added.length || c.removed.length ? `Permissions: ${[...c.added.map(x => `+ ${x}`), ...c.removed.map(x => `− ${x}`)].join(', ')}` : '',
+        ].filter(Boolean).join('\n')));
     });
     if (!ok) return;
     orgTypeDraft = null;
     closeModal();
     buildNav();
     renderOrganizations();
-    showToast('Organization types saved');
+    showToast('Organization types updated');
 }
 
 // ── Accounts ──
@@ -7838,7 +7686,15 @@ function accountOrgChips(held) {
         byOrg.get(h.org.id).roles.push(h.binding.status === 'suspended' ? `${h.role.name} (suspended)` : h.role.name);
     });
     return [...byOrg.values()].map(({ org, roles }) => {
-        const label = `${org.name} · ${roles.sort().join(', ')}`;
+        const label = `${org.name}${org.status !== 'active' ? ' (inactive)' : ''} · ${roles.sort().join(', ')}`;
+        return `<span class="badge ${orgHasType(org, 'OPERATOR') ? 'badge-blue' : 'badge-customer'}" style="display:inline-block;max-width:22rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left" title="${esc(label)}">${esc(label)}</span>`;
+    }).join('');
+}
+
+function accountInviteChips(invited) {
+    return invited.map(inv => {
+        const org = getOrgById(inv.org_id);
+        const label = `${org.name}${org.status !== 'active' ? ' (inactive)' : ''} · ${invitationRoleNames(inv)}${invitationStatus(inv) === 'EXPIRED' ? ' (expired)' : ''}`;
         return `<span class="badge ${orgHasType(org, 'OPERATOR') ? 'badge-blue' : 'badge-customer'}" style="display:inline-block;max-width:22rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left" title="${esc(label)}">${esc(label)}</span>`;
     }).join('');
 }
@@ -7858,7 +7714,8 @@ function renderAccounts() {
     document.getElementById('accounts-tbody').innerHTML = list.length ? list.map(user => {
         const held = getUserBindings(user.id);
         const disabled = user.status !== 'active';
-        const invitedTo = [...new Set(INVITATIONS.filter(inv => inv.user_id === user.id && isOpenInvitation(inv)).map(inv => getOrgById(inv.org_id)?.name).filter(Boolean))];
+        // No binding yet: Pending and Expired invitations stand in, one chip per organization (SA V2 4.3 編號 3).
+        const invited = INVITATIONS.filter(inv => inv.user_id === user.id && isOpenInvitation(inv) && getOrgById(inv.org_id));
         return `
         <tr>
             <td><div style="display:flex;align-items:center;gap:10px">
@@ -7870,8 +7727,8 @@ function renderAccounts() {
                 ? '<span class="badge badge-super">Super Admin</span> <span style="font-size:12px;color:#86868b">System account · belongs to no organization</span>'
                 : (held.length
                     ? `<span style="display:flex;gap:4px;flex-wrap:wrap">${accountOrgChips(held)}</span>`
-                    : invitedTo.length
-                        ? `<span style="font-size:12px;color:#86868b">Invited to ${esc(invitedTo.join(', '))}</span>`
+                    : invited.length
+                        ? `<span style="display:flex;gap:4px;flex-wrap:wrap">${accountInviteChips(invited)}</span>`
                         : '<span class="badge badge-amber" title="This account cannot sign in until it holds a role">No role</span>')}</td>
             <td>${accountStatusBadge(user)}</td>
             <td class="text-right" style="white-space:nowrap">
@@ -8053,6 +7910,7 @@ function saveOrg(orgId = null) {
     if (contact && formEmailError(contact, 'Contact email')) errors.push(fieldErr('#org-contact', formEmailError(contact, 'Contact email')));
     if (showFormErrors(errors, 'org-error')) return;
     const now = new Date().toISOString();
+    const orgBefore = org ? { name: org.name, contact_email: org.contact_email, note: org.note, status: org.status } : null;
     let renamed = 0;
     let createdId = null;
     const ok = commitPortalMutation(() => {
@@ -8097,7 +7955,12 @@ function saveOrg(orgId = null) {
                 createInvitation(record, findUserByEmail(personEmail) || newInvitee(personName, personEmail, now), [role.id], now);
             }
         }
-        if (org) logActivity('Organization updated', name, '');
+        if (org) {
+            const cap = v => (v ? v.charAt(0).toUpperCase() + v.slice(1) : v);
+            const lines = [fieldChange('Name', orgBefore.name, org.name), fieldChange('Contact email', orgBefore.contact_email, org.contact_email),
+                fieldChange('Note', orgBefore.note, org.note), fieldChange('Status', cap(orgBefore.status), cap(org.status))].filter(Boolean);
+            if (lines.length) logActivity('Organization updated', name, lines.join('\n'));
+        }
     });
     if (!ok) return;
     const backToOrder = orgModalFromOrderDraft;
@@ -8109,7 +7972,7 @@ function saveOrg(orgId = null) {
         orderDraft.customer_name = name;
         showOrderModal(orderDraft.id || null, { resume: true });
     } else closeModal();
-    showToast(`${name} ${org ? 'saved' : 'created'}`);
+    showToast(`${name} ${org ? 'updated' : 'created'}`);
 }
 
 // ── Detail ──
@@ -8134,7 +7997,6 @@ function showOrgDetail(orgId, tab = null) {
                     <div style="font-size:18px;font-weight:700;color:#1d1d1f">${esc(org.name)}</div>
                     <div style="display:flex;gap:6px;margin-top:6px">${orgTypeBadge(org)}${orgStatusBadge(org)}</div>
                 </div>
-                ${canEditOrgProfile() ? `<button onclick="showOrgModal('${org.id}')" class="btn-secondary text-xs"><i class="ph ph-pencil-simple"></i> Edit</button>` : ''}
             </div>
             <div class="filter-tabs" style="margin:18px 0 14px">
                 ${tabBtn('profile', 'Profile')}
@@ -8385,7 +8247,7 @@ function demoResetPassword(userId) {
 const ORG_NOTICE_STYLE = 'font-size:12.5px;color:#9a3412;background:#fff7ed;border-radius:10px;padding:10px 12px;margin-bottom:10px';
 function inviteBlockedReason(org, roles) {
     if (org.status !== 'active') return { tip: 'Reactivate the organization first.', notice: 'Reactivate the organization first.' };
-    if (!roles.length) return { tip: 'Create a role first', notice: 'This organization has no roles yet. Create one under the Roles tab before inviting members.' };
+    if (!roles.length) return { tip: '', notice: 'This organization has no roles yet. Create one under the Roles tab before inviting members.' };
     return null;
 }
 
@@ -8396,7 +8258,7 @@ function orgMembersTab(org, members, roles) {
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
             <div style="font-size:12.5px;color:#86868b">Each member holds one or more of this organization's roles.
                 <a href="docs/mockups/account-flows-mockup.html#members" target="_blank" rel="noopener" style="color:#1432E6;font-weight:600;text-decoration:none;white-space:nowrap">Invitation screens (preview) <i class="ph ph-arrow-square-out"></i></a></div>
-            ${canAddMembers() ? `<button onclick="showAddMemberModal('${org.id}')" class="btn-primary text-xs" style="white-space:nowrap" ${blocked ? `disabled title="${esc(blocked.tip)}"` : ''}><i class="ph ph-user-plus"></i> Invite member</button>` : ''}
+            ${canAddMembers() ? `<button onclick="showAddMemberModal('${org.id}')" class="btn-primary text-xs" style="white-space:nowrap" ${blocked ? 'disabled' : ''}><i class="ph ph-user-plus"></i> Invite member</button>` : ''}
         </div>
         ${blocked ? `<div style="${ORG_NOTICE_STYLE}">${esc(blocked.notice)}</div>` : ''}
         ${orgNeedsManager(org) ? `<div style="${ORG_NOTICE_STYLE}">Nobody here can manage members. Invite an admin from Members.</div>` : ''}
@@ -8473,8 +8335,7 @@ function orgRolesTab(org, roles) {
             ${canEditMembers() ? `<button onclick="showRoleModal('${org.id}', '${r.id}')" class="btn-ghost" title="Edit role"><i class="ph ph-pencil-simple"></i></button>` : ''}
             ${canRemoveMembers() ? `<button onclick="confirmDeleteRole('${org.id}', '${r.id}')" class="btn-ghost" title="Delete role"><i class="ph ph-trash"></i></button>` : ''}
         </div>`;
-    }).join('')}</div>` : `<div style="padding:20px 0">${emptyState('ph-identification-badge', 'No roles yet.',
-        canEditMembers() ? `<div class="flex items-center gap-2 justify-center mt-1"><button onclick="showRoleModal('${org.id}')" class="btn-primary text-xs"><i class="ph ph-plus"></i> New role</button></div>` : '')}</div>`}`;
+    }).join('')}</div>` : `<div style="padding:20px 0">${emptyState('ph-identification-badge', 'No matching data found.')}</div>`}`;
 }
 
 // ── Role editor (layer 2) ──
@@ -8557,7 +8418,7 @@ function saveRole(orgId, roleId = null) {
     const permissions = [...document.querySelectorAll('.role-perm:checked')].map(el => el.value).filter(p => ceiling.has(p));
     const errors = [];
     if (!name) errors.push(fieldErr('#role-name', 'Please enter Name.'));
-    else if (getOrgRoles(orgId).some(r => r.id !== roleId && r.name.toLowerCase() === name.toLowerCase())) errors.push(fieldErr('#role-name', `This organization already has a role named ${name}.`));
+    else if (getOrgRoles(orgId).some(r => r.id !== roleId && r.name.toLowerCase() === name.toLowerCase())) errors.push(fieldErr('#role-name', `This organization already has a role named ${getOrgRoles(orgId).find(r => r.id !== roleId && r.name.toLowerCase() === name.toLowerCase()).name}.`));
     else if (name.toLowerCase() === 'owner') errors.push(fieldErr('#role-name', 'Owner is reserved for individual customers. Pick another name.'));
     if (!permissions.length) errors.push(fieldErr('#role-perm-field', 'Please select Permissions.'));
     // Changing the role you are acting under would rewrite the floor beneath
@@ -8569,15 +8430,21 @@ function saveRole(orgId, roleId = null) {
     const lost = role ? confirmersLostBy(() => { ROLES.find(r => r.id === role.id).permissions = permissions; }) : [];
     if (lost.length) { showConfirmerBlock(lost, `showOrgDetail('${orgId}', 'roles')`); return; }
     const now = new Date().toISOString();
+    const roleBefore = role ? { name: role.name, description: role.description, permissions: [...role.permissions] } : null;
     const ok = commitPortalMutation(() => {
         if (role) Object.assign(role, { name, description, permissions, updated_at: now });
         else ROLES.push({ id: `r-${Date.now()}`, org_id: orgId, name, description, permissions, created_at: now, updated_at: now });
-        logActivity(role ? 'Role updated' : 'Role created', org.name, `${name} · ${permissions.length} permission${permissions.length === 1 ? '' : 's'}`);
+        if (!role) logActivity('Role created', org.name, `${name} · ${permissions.length} permission${permissions.length === 1 ? '' : 's'}`);
+        else {
+            const lines = [fieldChange('Name', roleBefore.name, name), fieldChange('Description', roleBefore.description, description),
+                listChange('Permissions', roleBefore.permissions, permissions)].filter(Boolean);
+            if (lines.length) logActivity('Role updated', org.name, [name, ...lines].join('\n'));
+        }
     });
     if (!ok) return;
     showOrgDetail(orgId, 'roles');
     renderOrganizations();
-    showToast(`${name} ${role ? 'saved' : 'created'}`);
+    showToast(`${name} ${role ? 'updated' : 'created'}`);
 }
 
 function confirmDeleteRole(orgId, roleId) {
@@ -8637,7 +8504,7 @@ function orgAccountTab(org, members) {
     if (!holder) {
         const blocked = inviteBlockedReason(org, getOrgRoles(org.id));
         const invite = isOperatorView() && canAddMembers()
-            ? `<div class="flex items-center gap-2 justify-center mt-1"><button onclick="showAddMemberModal('${org.id}')" class="btn-primary text-xs" ${blocked ? `disabled title="${esc(blocked.tip)}"` : ''}><i class="ph ph-user-plus"></i> Invite</button></div>`
+            ? `<div class="flex items-center gap-2 justify-center mt-1"><button onclick="showAddMemberModal('${org.id}')" class="btn-primary text-xs" ${blocked ? `disabled${blocked.tip ? ` title="${esc(blocked.tip)}"` : ''}` : ''}><i class="ph ph-user-plus"></i> Invite</button></div>`
             : '';
         return `<div style="padding:20px 0">${emptyState('ph-user', EMPTY_STATE_NO_DATA, invite)}</div>
         <div class="field-hint" style="margin-top:10px">${INDIVIDUAL_ACCOUNT_NOTE}</div>`;
@@ -8813,16 +8680,18 @@ function saveMemberRoles(orgId, userId) {
     const lost = dropped.length ? confirmersLostBy(() => { ROLE_BINDINGS = ROLE_BINDINGS.filter(b => !droppedSet.has(b.id)); }) : [];
     if (lost.length) { showConfirmerBlock(lost, `showOrgDetail('${org.id}', 'members')`); return; }
     const now = new Date().toISOString();
+    const roleNames = ids => ids.map(id => ROLES.find(r => r.id === id)?.name).filter(Boolean).join(', ');
+    const rolesBefore = roleNames(held.map(b => b.role_id));
     const ok = commitPortalMutation(() => {
         const droppedIds = new Set(dropped.map(b => b.id));
         ROLE_BINDINGS = ROLE_BINDINGS.filter(b => !droppedIds.has(b.id));
         addedRoleIds.forEach((roleId, i) => ROLE_BINDINGS.push({ id: `rb-${Date.now()}-${i}`, user_id: userId, role_id: roleId, status: 'active', created_at: now }));
-        logActivity('Member roles changed', org.name, `${user.email} · ${wanted.map(id => ROLES.find(r => r.id === id)?.name).join(', ')}`);
+        logActivity('Member roles changed', org.name, `${user.email}\nRoles: ${rolesBefore} → ${roleNames(wanted)}`);
     });
     if (!ok) return;
     if (userId === currentUser?.id) renderUserMenu();
     showOrgDetail(org.id, 'members');
-    showToast(`Roles updated for ${user.name}`);
+    showToast(`${user.name} roles updated`);
 }
 
 function confirmRemoveMember(orgId, userId) {
@@ -9098,7 +8967,7 @@ function setTicketAcceptance(ticketId, value) {
     if (!ok) return;
     renderServiceDesk();
     showTicketDetail(t.id);
-    showToast(`${t.ticket_no}: ${TICKET_ACCEPTANCE_LABEL[value]}`);
+    showToast(`${t.ticket_no} acceptance updated`);
 }
 
 // Who a referral goes to, read from the live order and falling back to the
