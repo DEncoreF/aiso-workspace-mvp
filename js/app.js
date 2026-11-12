@@ -3874,7 +3874,9 @@ async function saveProduct(pid) {
     editSwImages = []; editSwIcon = null; editHwImage = null;
     closeModal();
     showToast(wasPublished
-        ? `${p.name} updated — moved to Draft${strippedRefs ? `, removed from ${strippedRefs} software` : ''}`
+        ? (strippedRefs
+            ? `${p.name} Edited while live — moved to Draft and removed from ${strippedRefs} software. Re-publish to go live.`
+            : `${p.name} Edited while live — moved to Draft, re-publish to go live.`)
         : `${p.name} updated`, 'success');
     // Return to wherever Edit was opened from: stay on the list when opened
     // from the list, or re-open the detail page when opened from the detail.
