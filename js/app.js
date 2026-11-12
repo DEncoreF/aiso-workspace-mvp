@@ -6144,15 +6144,14 @@ function ordLineCard(l, i) {
             <div style="display:grid;grid-template-columns:100px 1fr 120px 80px;gap:12px">
                 <div>
                     <label class="field-label">Scope</label>
-                    <select class="input-field" onchange="ordSetScope(${i}, this.value)" ${locked ? 'disabled' : ''}>
+                    <select class="input-field" onchange="ordSetScope(${i}, this.value)" ${locked ? `disabled title="${ORDER_LINE_LOCKED}"` : ''}>
                         <option value="HW" ${l.scope === 'HW' ? 'selected' : ''}>HW</option>
                         <option value="SW" ${l.scope === 'SW' ? 'selected' : ''}>SW</option>
                     </select>
-                    ${locked ? `<div class="field-hint">${ORDER_LINE_LOCKED}</div>` : ''}
                 </div>
                 <div>
                     <label class="field-label">Product</label>
-                    ${locked ? `<input class="input-field" value="${esc(l.product_name)}" disabled><div class="field-hint">${ORDER_LINE_LOCKED}</div>` : `
+                    ${locked ? `<input class="input-field" value="${esc(l.product_name)}" disabled title="${ORDER_LINE_LOCKED}">` : `
                     <select class="input-field" data-err="${i}-product" onchange="ordSetProduct(${i}, this.value)">
                         <option value="">— Select a published product —</option>
                         ${products.map(p => `<option value="${p.id}" ${l.product_id === p.id ? 'selected' : ''}>${esc(p.name)}${p.model ? ` (${esc(p.model)})` : ''}</option>`).join('')}
@@ -6815,7 +6814,7 @@ function ordSerialPastePanel(l, i) {
 
 function ordSerialPreview(l, i) {
     const values = splitPastedValues(l._snText);
-    if (!values.length) return `<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn-secondary text-xs" onclick="orderDraft.lines[${i}]._snPaste=false;renderOrderDraftLines()">Cancel</button></div>`;
+    if (!values.length) return `<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn-secondary text-xs" onclick="orderDraft.lines[${i}]._snPaste=false;renderOrderDraftLines()">Cancel</button><button class="btn-primary text-xs" disabled style="opacity:.5;cursor:not-allowed">Apply 0 serials</button></div>`;
     const seen = new Set();
     const dupes = [...new Set(values.filter(v => { const k = v.toUpperCase(); if (seen.has(k)) return true; seen.add(k); return false; }))];
     const tooLong = values.filter(v => v.length > ORDER_TEXT_MAX);
@@ -6838,8 +6837,10 @@ function ordSerialPasteError(l, values, dupes) {
     if (dupes.length) return `Appears more than once: ${dupes.slice(0, 5).join(', ')}${dupes.length > 5 ? ` and ${dupes.length - 5} more` : ''}. Remove the duplicates to apply.`;
     if (ticketedLine(l)) {
         const have = new Set(values.map(v => v.toUpperCase()));
-        const lost = groupTicketsBy(l.id, 'serial_no').find(g => !have.has(g.value.toUpperCase()));
-        if (lost) return `Serial ${lost.value} is used by ${ticketNos(lost.tickets)}. Keep it in the list to apply.`;
+        const unitOf = g => l.serial_nos.findIndex(sn => sn.trim().toUpperCase() === g.value.toUpperCase());
+        const lost = groupTicketsBy(l.id, 'serial_no').filter(g => !have.has(g.value.toUpperCase())).sort((a, b) => unitOf(a) - unitOf(b));
+        if (lost.length === 1) return `Serial ${lost[0].value} is used by ${ticketNos(lost[0].tickets)}. Keep it in the list to apply.`;
+        if (lost.length) return `Serials used by tickets: ${lost.slice(0, 5).map(g => `${g.value} (${ticketNos(g.tickets)})`).join(', ')}${lost.length > 5 ? ` and ${lost.length - 5} more` : ''}. Keep them in the list to apply.`;
     }
     return '';
 }
