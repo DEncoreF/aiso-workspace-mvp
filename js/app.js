@@ -81,7 +81,7 @@ function orderChangeLines(prev, prevLines, rec, newLines, moved) {
             fieldChange('Warranty (months)', o.warranty_months, l.warranty_months, p),
             listChange('Serial Numbers', o.serial_nos, l.serial_nos, p));
         (l.serial_nos || []).forEach((sn, u) => {
-            const up = `${p}Unit ${u + 1} (${String(sn).trim() || 'serial pending'}) · `;
+            const up = `${p}Unit ${u + 1} (${String(sn).trim() || '—'}) · `;
             out.push(fieldChange('Delivered', o.delivered_dates?.[u], l.delivered_dates?.[u], up),
                 fieldChange('Warranty start', o.warranty_starts?.[u], l.warranty_starts?.[u], up));
         });
@@ -336,7 +336,10 @@ function canUpdateOrders() { return hasPermission(PORTAL_PERMISSIONS.ORDER_UPDAT
 function productModule(type) { return type === 'software' ? 'sw_product' : 'hw_product'; }
 function canCreateProduct(type) { return hasPermission(`${productModule(type)}.c`); }
 function canManageProduct(p) { return hasPermission(`${productModule(p?.product_type)}.u`); }
-function canDeleteProduct(p) { return hasPermission(`${productModule(p?.product_type)}.d`); }
+// Permanent delete is hidden for now: order lines keep pointing at their
+// product, and a soft delete will replace this later (SA V2 2.4).
+const PRODUCT_HARD_DELETE_ENABLED = false;
+function canDeleteProduct(p) { return PRODUCT_HARD_DELETE_ENABLED && hasPermission(`${productModule(p?.product_type)}.d`); }
 function getSwCategories(p) { return p.categories?.length ? p.categories : (p.sub_category ? [p.sub_category] : []); }
 function findCompatRefs(hwId) { return PRODUCTS.filter(p => p.product_type === 'software' && p.status !== 'archived' && (p.compatible_hardware || []).includes(hwId)); }
 function getVisibleProducts(type) { return PRODUCTS.filter(p => p.product_type === type && p.status !== 'archived'); }
@@ -5033,7 +5036,7 @@ function renderActivityLogRows() {
                 <div style="font-size:13.5px;font-weight:600;color:#1d1d1f"><span style="color:${a.label}">${esc(log.action)}</span> · ${esc(log.productName)}
                     <span class="badge badge-zinc" style="margin-left:6px">${esc(log.module || activityModule(log.action))}</span></div>
                 ${log.detail ? activityDetailHtml(log.detail, i) : ''}
-                <div style="font-size:11.5px;color:#86868b;margin-top:3px"><i class="ph ph-user"></i> ${esc(log.user || 'System')}${log.actor_role ? ` · ${esc(log.actor_role)}` : ''}</div>
+                <div style="font-size:11.5px;color:#86868b;margin-top:3px"><i class="ph ph-user"></i> ${esc(log.user || 'System')}${` · ${esc(log.actor_role || '—')}`}</div>
             </div>
             <div style="font-size:11px;color:#86868b;font-weight:500;flex-shrink:0;font-variant-numeric:tabular-nums;white-space:nowrap">${stamp}</div>
         </div>`;
@@ -6129,6 +6132,8 @@ function renderOrderDraftLines() {
 function ordLineCard(l, i) {
     const lines = orderDraft.lines;
     const products = getVisibleProducts(l.scope === 'HW' ? 'hardware' : 'software').filter(p => p.status === 'published');
+    // The line's original product stays listed (with a suffix) until another one is picked (SA V2 4.5.3 編號 15).
+    const kept = l._keptProductId && l.product_id === l._keptProductId ? PRODUCTS.find(p => p.id === l._keptProductId) : null;
     const removable = lines.length > 1;
     const locked = ticketedLine(l);
     const mono = 'font-family:ui-monospace,SFMono-Regular,Menlo,monospace';
@@ -6154,6 +6159,7 @@ function ordLineCard(l, i) {
                     ${locked ? `<input class="input-field" value="${esc(l.product_name)}" disabled title="${ORDER_LINE_LOCKED}">` : `
                     <select class="input-field" data-err="${i}-product" onchange="ordSetProduct(${i}, this.value)">
                         <option value="">— Select a published product —</option>
+                        ${kept ? `<option value="${kept.id}" selected>${esc(kept.name)}${kept.model ? ` (${esc(kept.model)})` : ''} (Not published)</option>` : ''}
                         ${products.map(p => `<option value="${p.id}" ${l.product_id === p.id ? 'selected' : ''}>${esc(p.name)}${p.model ? ` (${esc(p.model)})` : ''}</option>`).join('')}
                         <option value="__custom" ${l.custom_product ? 'selected' : ''}>Other (type a name)</option>
                     </select>
@@ -6328,22 +6334,21 @@ function ordSetScope(i, scope) {
 function ordSetProduct(i, value) {
     const l = orderDraft.lines[i];
     const p = value && value !== '__custom' ? PRODUCTS.find(x => x.id === value) : null;
+    if (value !== l._keptProductId) l._keptProductId = null;
     l.product_id = p ? value : '';
     l.product_name = p ? p.name : '';
     l.custom_product = value === '__custom';
     renderOrderDraftLines();
 }
 
-// A draft line reopens on "Other" when it was typed by hand, or when the
-// product it picked is no longer published; the old name stays editable.
+// A line reopens on "Other" only when its name was typed by hand. A picked
+// product that is no longer published stays selected, marked "(Not published)",
+// the way an inactive customer does (SA V2 4.5.3 編號 15).
 function markCustomProductLines(lines) {
     lines.forEach(l => {
-        const published = l.product_id && getVisibleProducts(l.scope === 'HW' ? 'hardware' : 'software')
-            .some(p => p.id === l.product_id && p.status === 'published');
-        // A line with tickets keeps its product even once it is unpublished.
-        if (getLineTickets(l.id).length) { l.custom_product = false; return; }
-        l.custom_product = !published && !!l.product_name;
-        if (l.custom_product) l.product_id = '';
+        const p = l.product_id && PRODUCTS.find(x => x.id === l.product_id);
+        l.custom_product = !l.product_id && !!l.product_name;
+        l._keptProductId = p && p.status !== 'published' ? p.id : null;
     });
     return lines;
 }
@@ -6411,7 +6416,7 @@ function licenseKeyCell(lineId, lk, dataAttr, oninput, onremove) {
 // ── Delivery & warranty per unit (SA V2 D39) ──
 // Each HW unit has its own delivery date and warranty start, parallel to
 // serial_nos; the term stays on the line. Nothing defaults (D19): an empty
-// start reads "Not set" and the ticket shows coverage as unknown.
+// start reads "—" and the ticket shows coverage as unknown.
 function unitWarrantyEnd(line, u) {
     const months = parseInt(line.warranty_months, 10);
     const start = line.warranty_starts?.[u];
@@ -6446,10 +6451,10 @@ function unitDatesSection(l, ns) {
         <tr>
             <td style="padding:3px 6px 3px 0;width:28px"><input type="checkbox" ${picked.includes(u) ? 'checked' : ''} onchange="unitDatesPick('${ns}', ${u}, this.checked)" aria-label="Select unit ${u + 1}"></td>
             <td style="font-size:11.5px;font-weight:600;color:#86868b;padding:3px 8px 3px 0;white-space:nowrap">Unit ${u + 1}</td>
-            <td style="padding:3px 8px 3px 0"><span class="tk-mono" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px">${esc(l.serial_nos[u].trim() || 'serial pending')}</span></td>
+            <td style="padding:3px 8px 3px 0"><span class="tk-mono" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px">${esc(l.serial_nos[u].trim() || '—')}</span></td>
             <td style="padding:3px 8px 3px 0"><input type="date" class="input-field" value="${esc(l.delivered_dates[u])}" oninput="unitDatesTarget('${ns}').delivered_dates[${u}]=this.value" aria-label="Delivered, unit ${u + 1}"></td>
             <td style="padding:3px 8px 3px 0"><input type="date" class="input-field" value="${esc(l.warranty_starts[u])}" oninput="unitDatesTarget('${ns}').warranty_starts[${u}]=this.value;unitDatesRefreshEnds('${ns}')" aria-label="Warranty start, unit ${u + 1}"></td>
-            <td style="font-size:12.5px;padding:3px 0;white-space:nowrap" id="ud-end-${ns}-${u}">${unitWarrantyEnd(l, u) ? esc(unitWarrantyEnd(l, u)) : '<span style="color:#86868b">Not set</span>'}</td>
+            <td style="font-size:12.5px;padding:3px 0;white-space:nowrap" id="ud-end-${ns}-${u}">${unitWarrantyEnd(l, u) ? esc(unitWarrantyEnd(l, u)) : '—'}</td>
         </tr>`).join('');
     const head = t => `<th style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#86868b;text-align:left;padding:0 8px 6px 0">${t}</th>`;
     return `
@@ -6461,10 +6466,10 @@ function unitDatesSection(l, ns) {
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--bg-subtle);border-radius:8px;padding:8px 10px;margin-bottom:8px">
                     <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer"><input type="checkbox" ${n && picked.length === n ? 'checked' : ''} onchange="unitDatesPickAll('${ns}', this.checked)"> All</label>
                     <span style="font-size:12px;color:#86868b">${picked.length} selected · Delivered</span>
-                    <input type="date" id="ud-batch-del-${ns}" class="input-field" style="width:150px">
+                    <input type="date" id="ud-batch-del-${ns}" class="input-field" style="width:150px" value="${esc(l._batchDel || '')}" ${picked.length ? '' : 'disabled'} oninput="unitDatesBatchInput('${ns}', '_batchDel', this.value)">
                     <span style="font-size:12px;color:#86868b">Warranty start</span>
-                    <input type="date" id="ud-batch-ws-${ns}" class="input-field" style="width:150px">
-                    <button onclick="unitDatesApply('${ns}')" class="btn-secondary text-xs" ${picked.length ? '' : 'disabled'}>Apply to selected</button>
+                    <input type="date" id="ud-batch-ws-${ns}" class="input-field" style="width:150px" value="${esc(l._batchWs || '')}" ${picked.length ? '' : 'disabled'} oninput="unitDatesBatchInput('${ns}', '_batchWs', this.value)">
+                    <button id="ud-batch-apply-${ns}" onclick="unitDatesApply('${ns}')" class="btn-secondary text-xs" ${picked.length && (l._batchDel || l._batchWs) ? '' : 'disabled'}>Apply to selected</button>
                 </div>
                 <table style="width:100%;border-collapse:collapse">
                     <thead><tr>${head('')}${head('Unit')}${head('Serial')}${head('Delivered')}${head('Warranty start')}${head('Warranty end')}</tr></thead>
@@ -6478,31 +6483,37 @@ function unitDatesPick(ns, u, on) {
     const set = new Set(l._picked || []);
     if (on) set.add(u); else set.delete(u);
     l._picked = [...set].sort((a, b) => a - b);
+    if (!l._picked.length) l._batchDel = l._batchWs = '';
     unitDatesRerender(ns);
 }
 function unitDatesPickAll(ns, on) {
     const l = unitDatesTarget(ns);
     l._picked = on ? l.serial_nos.map((_, u) => u) : [];
+    if (!on) l._batchDel = l._batchWs = '';
     unitDatesRerender(ns);
+}
+// Batch dates live on the line so a re-render keeps them; Apply waits for
+// at least one (SA V2 4.5.4 編號 2–4).
+function unitDatesBatchInput(ns, key, value) {
+    const l = unitDatesTarget(ns);
+    l[key] = value;
+    const btn = document.getElementById(`ud-batch-apply-${ns}`);
+    if (btn) btn.disabled = !((l._picked || []).length && (l._batchDel || l._batchWs));
 }
 // Only the dates filled in the batch bar are applied; a blank one leaves
 // the selected units' existing dates alone.
 function unitDatesApply(ns) {
     const l = unitDatesTarget(ns);
-    const delivered = document.getElementById(`ud-batch-del-${ns}`)?.value || '';
-    const start = document.getElementById(`ud-batch-ws-${ns}`)?.value || '';
-    if (!(l._picked || []).length) return;
-    if (!delivered && !start) {
-        showFormErrors([fieldErr(`#ud-batch-ws-${ns}`, 'Pick a delivery date or a warranty start to apply.')]);
-        document.getElementById(`ud-batch-del-${ns}`)?.classList.add('field-error');
-        return;
-    }
+    const delivered = l._batchDel || '';
+    const start = l._batchWs || '';
+    if (!(l._picked || []).length || (!delivered && !start)) return;
     l._picked.forEach(u => {
         if (delivered) l.delivered_dates[u] = delivered;
         if (start) l.warranty_starts[u] = start;
     });
     const count = l._picked.length;
     l._picked = [];
+    l._batchDel = l._batchWs = '';
     unitDatesRerender(ns);
     showToast(`Dates set on ${count} unit${count === 1 ? '' : 's'}`);
 }
@@ -6511,7 +6522,7 @@ function unitDatesRefreshEnds(ns) {
     if (!l) return;
     l.serial_nos.forEach((_, u) => {
         const el = document.getElementById(`ud-end-${ns}-${u}`);
-        if (el) el.innerHTML = unitWarrantyEnd(l, u) ? esc(unitWarrantyEnd(l, u)) : '<span style="color:#86868b">Not set</span>';
+        if (el) el.innerHTML = unitWarrantyEnd(l, u) ? esc(unitWarrantyEnd(l, u)) : '—';
     });
 }
 
@@ -7210,10 +7221,10 @@ function showOrderDetail(id) {
                     </span>
                 </div>
                 ${lineTickets.length ? `<div style="font-size:12px;color:#86868b;margin-top:6px"><i class="ph ph-ticket"></i> ${lineTickets.length} ticket${lineTickets.length === 1 ? '' : 's'} on this line · <a href="#" onclick="event.preventDefault();closeModal();openServiceDeskForOrder('${o.id}', '${l.id}')" style="color:#1432E6;font-weight:600">view</a></div>` : ''}
-                ${l.scope === 'SW' && (l.license_start || l.license_end || (l.supplier_name && !isCustomerView())) ? `
-                <div style="font-size:12.5px;color:#86868b;margin-top:6px">${l.license_start || l.license_end ? `License ${esc(l.license_start || '?')} → ${esc(l.license_end || '?')}` : ''}${l.supplier_name && !isCustomerView() ? `${l.license_start || l.license_end ? ' · ' : ''}Supplier ${esc(l.supplier_name)}` : ''}</div>` : ''}
-                ${l.scope === 'HW' && l.warranty_months ? `
-                <div style="font-size:12.5px;color:#86868b;margin-top:6px">Warranty ${l.warranty_months} months per unit</div>` : ''}
+                ${l.scope === 'SW' ? `
+                <div style="font-size:12.5px;color:#86868b;margin-top:6px">License ${l.license_start || l.license_end ? `${esc(l.license_start || '—')} → ${esc(l.license_end || '—')}` : '—'}${isCustomerView() ? '' : ` · Supplier ${esc(l.supplier_name || '—')}`}</div>` : ''}
+                ${l.scope === 'HW' ? `
+                <div style="font-size:12.5px;color:#86868b;margin-top:6px">${l.warranty_months ? `Warranty ${l.warranty_months} months per unit` : 'Warranty —'}</div>` : ''}
                 ${(l.license_keys || []).some(lk => lk.key) ? `
                 <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
                     ${l.license_keys.filter(lk => lk.key).map(lk => `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(lk.key)}</span>`).join('')}
@@ -7226,9 +7237,9 @@ function showOrderDetail(id) {
                             <td style="font-size:11.5px;color:#86868b;padding:3px 10px 3px 0;white-space:nowrap">Unit ${u + 1}</td>
                             <td style="padding:3px 10px 3px 0">${sn.trim()
                                 ? `<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f5f5f7;border-radius:6px;padding:3px 8px;color:#1d1d1f">${esc(sn)}</span>`
-                                : '<span class="badge badge-amber">Serial missing</span>'}</td>
+                                : '—'}</td>
                             <td style="font-size:12.5px;padding:3px 10px 3px 0">${esc(l.delivered_dates?.[u] || '—')}</td>
-                            <td style="font-size:12.5px;padding:3px 0">${l.warranty_starts?.[u] ? `${esc(l.warranty_starts[u])} → ${unitWarrantyEnd(l, u) ? esc(unitWarrantyEnd(l, u)) : '<span style="color:#86868b">Not set</span>'}` : '<span style="color:#86868b">Not set</span>'}</td>
+                            <td style="font-size:12.5px;padding:3px 0">${l.warranty_starts?.[u] ? `${esc(l.warranty_starts[u])} → ${unitWarrantyEnd(l, u) ? esc(unitWarrantyEnd(l, u)) : '—'}` : '—'}</td>
                         </tr>`).join('')}</tbody>
                 </table>` : ''}
                 ${l.bom.length ? `
@@ -7291,8 +7302,8 @@ function confirmCancelOrder(id) {
             <h3 style="font-size:1.05rem;font-weight:700;margin:0 0 8px">${esc(o.order_no)} cannot be cancelled yet</h3>
             <p style="font-size:13px;color:#86868b;line-height:1.6;margin:0 0 18px">
                 ${open.length} ticket${open.length === 1 ? ' is' : 's are'} still open (${esc(ticketNos(open))}).
-                ${initiator && !orderCreatorCanCancel(o) ? 'While tickets are open, only a Super Admin can cancel it.'
-                    : `While tickets are open, only the person who created this order${initiator ? `, ${esc(initiator)},` : ''} can cancel it.`}
+                ${!orderCreatorCanCancel(o) ? 'While tickets are open, only a Super Admin can cancel it.'
+                    : `While tickets are open, only the person who created this order, ${esc(initiator)}, can cancel it.`}
             </p>
             <div style="display:flex;justify-content:flex-end"><button onclick="showOrderDetail('${o.id}')" class="btn-primary text-xs">Back to order</button></div>
         </div>`);
@@ -7732,7 +7743,7 @@ function renderAccounts() {
                     ? `<span style="display:flex;gap:4px;flex-wrap:wrap">${accountOrgChips(held)}</span>`
                     : invited.length
                         ? `<span style="display:flex;gap:4px;flex-wrap:wrap">${accountInviteChips(invited)}</span>`
-                        : '<span class="badge badge-amber" title="This account cannot sign in until it holds a role">No role</span>')}</td>
+                        : '—')}</td>
             <td>${accountStatusBadge(user)}</td>
             <td class="text-right" style="white-space:nowrap">
                 ${user.is_super_admin || disabled || isNotActivated(user) ? ''
@@ -9583,7 +9594,7 @@ function ticketDeviceLabel(t) {
     return Number.isInteger(t.unit_index) ? (line?.serial_nos?.[t.unit_index] || '').trim() : '';
 }
 function lineUnitLabel(line, u) {
-    return `Unit ${u + 1} · ${(line.serial_nos[u] || '').trim() || 'serial pending'}`;
+    return `Unit ${u + 1} · ${(line.serial_nos[u] || '').trim() || '—'}`;
 }
 
 // ── Create ──
